@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# No job needs a live Home Assistant: every bridge call is mocked.
+jobs:
+  backend:
+    name: Backend (lint + tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bobi_control_center/backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: bobi_control_center/backend/requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check .
+        working-directory: .
+
+      - name: Tests
+        run: pytest -q
+
+  frontend:
+    name: Frontend (lint + typecheck + tests + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bobi_control_center/frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: bobi_control_center/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+  docker:
+    name: App image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Built from the app directory alone, exactly as the Supervisor does.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./bobi_control_center
+          push: false
+          load: true
+          tags: bobi-control-center:ci
+
+      - name: Container serves the API and the UI
+        run: |
+          docker run -d --name bobi-ci -p 8099:8099 bobi-control-center:ci
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8099/health >/dev/null && break
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:8099/health | tee /dev/stderr | grep -q '"ok":true'
+          # Without a token the app must fall back to mock data, not crash.
+          curl -sf http://127.0.0.1:8099/health | grep -q '"adapter":"mock"'
+          curl -sf http://127.0.0.1:8099/health | grep -q '"writes_enabled":false'
+          curl -sf http://127.0.0.1:8099/api/bobi/status >/dev/null
+          curl -sf http://127.0.0.1:8099/ | grep -q '<div id="root">'
+          docker rm -f bobi-ci
+
+  secrets:
+    name: No secrets committed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan for secrets and personal data
+        run: |
+          set -e
+          fail() { echo "::error::$1"; exit 1; }
+
+          git ls-files | grep -E '(^|/)\.env$' && fail "a .env file is committed" || true
+
+          # A token *value* assigned to a Home Assistant credential.
+          if git grep -nEI "(SUPERVISOR_TOKEN|HA_TOKEN|api_key|webhook_secret|password)[[:space:]]*[:=][[:space:]]*['\"][^'\"]{8,}" -- . ':!*.md' ':!.github/*'; then
+            fail "a credential value appears to be committed"
+          fi
+
+          # Dialable phone numbers.
+          if git grep -nEI "(\+[0-9]{9,15})|(\b0[0-9]{1,2}-?[0-9]{7}\b)" -- . ':!*.md' ':!package-lock.json'; then
+            fail "a phone number appears to be committed"
+          fi
+
+          # WhatsApp identifiers. Tests are excluded: the suite names these
+          # patterns in order to assert they never appear in a response.
+          if git grep -nEI "@(c\.us|s\.whatsapp\.net|lid)" -- . ':!*.md' ':!*/tests/*' ':!*.test.*'; then
+            fail "a WhatsApp identifier appears to be committed"
+          fi
+
+          echo "No secrets found."

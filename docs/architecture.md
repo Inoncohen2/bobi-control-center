@@ -1,268 +1,185 @@
 # Bobi Control Center — Architecture
 
-> Phase 1 status: **mock only**. No real Home Assistant instance is contacted, no
-> device is controlled, and no credentials are required.
+> **Phase 2: read-only.** The app calls only Bobi's `script.bobi_cc_*` bridge
+> services. It cannot control a device, change a schedule, or write anything.
 
 ## 1. Purpose
 
-Bobi Control Center is the management surface for **Bobi**, a Home Assistant based
-household assistant. Today, managing Bobi means hand-editing Home Assistant
-scripts, helpers, automations and WhatsApp glue logic. This application replaces
-that with a calm, Hebrew-first, mobile-first product.
+Bobi Control Center is the management surface for **Bobi**, a Home Assistant
+based household assistant. It runs as a Home Assistant App behind Ingress.
 
 The guiding product rule:
 
 > A household member should be able to manage Bobi without ever learning what an
 > `entity_id` is.
 
-Raw Home Assistant identifiers exist in the data model, but they live behind an
-explicit **"מתקדם"** (Advanced) disclosure on every screen.
+Technical identifiers exist in the data model but live behind an explicit
+**"מתקדם / פרטים טכניים"** disclosure on every screen.
 
 ## 2. High-level architecture
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  React UI  (TypeScript, Vite, Tailwind, RTL)             │
+│  React UI  (TypeScript, Vite, Tailwind, RTL, HashRouter) │
 │  pages → features → components                           │
 │  data access only via src/api/*  (TanStack Query)        │
 └───────────────────────────┬──────────────────────────────┘
-                            │  HTTP/JSON — Bobi vocabulary only
+                            │  HTTP/JSON, relative to the Ingress prefix
                             ▼
 ┌──────────────────────────────────────────────────────────┐
-│  Bobi Management API  (FastAPI routers, app/api/*)        │
-│  typed Pydantic request/response models                   │
-│  structured errors, no stack traces                       │
+│  FastAPI  (app/api/*)                                     │
+│  typed responses, structured errors, no stack traces      │
 └───────────────────────────┬──────────────────────────────┘
-                            │  domain objects
+                            │  bridge contract models
                             ▼
 ┌──────────────────────────────────────────────────────────┐
-│  Bobi service layer  (app/services/*)                     │
-│  business rules: drafts, previews, cross-midnight logic,  │
-│  probe pipeline, audit records, safety model              │
-└───────────────────────────┬──────────────────────────────┘
-                            │  adapter interface
-                            ▼
-┌──────────────────────────────────────────────────────────┐
-│  HomeAssistantAdapter (abstract, app/adapters/base.py)    │
+│  HomeAssistantAdapter (abstract — no write method)        │
 ├──────────────────────────────────────────────────────────┤
-│  Phase 1: MockHomeAssistantAdapter    ← active today      │
-│  Phase 2: RealHomeAssistantAdapter    ← not implemented   │
+│  RealHomeAssistantAdapter  ← SUPERVISOR_TOKEN present     │
+│  MockHomeAssistantAdapter  ← everywhere else              │
 └───────────────────────────┬──────────────────────────────┘
-                            │  (Phase 2 only)
+                            │  POST …/services/script/bobi_cc_*?return_response
+                            │  Authorization: Bearer $SUPERVISOR_TOKEN
                             ▼
-                    Home Assistant Core
+              Home Assistant Core (via the Supervisor proxy)
+                            │
+                            ▼
+              Bobi's bridge scripts (read-only + probe)
 ```
 
-### The architectural rule
+### Two rules the design rests on
 
-**The frontend must never know how Bobi is implemented inside Home Assistant.**
+**1. The browser never talks to Home Assistant.** React calls FastAPI; FastAPI
+calls the Supervisor. The token stays in the backend process. A test fails the
+build if the frontend references `supervisor/core`, `SUPERVISOR_TOKEN`,
+`hassio_ingress` or a `Bearer ` header.
 
-Strings such as `script.bobi_local_schedule_parse`, `input_text.*` or
-`automation.bobi_*` must not appear anywhere under `frontend/src`, except as
-opaque values rendered inside an Advanced panel. There is an automated guard for
-this: `backend/tests/test_architecture.py` scans the frontend source tree and
-fails the build if a Home Assistant domain prefix is hard-coded in frontend
-logic.
-
-The API speaks **Bobi vocabulary** — capabilities, devices, rooms, schedules,
-notification rules — never Home Assistant vocabulary.
+**2. Only the bridge is called.** The app does not enumerate entities or inspect
+Bobi's internals. The nine `bobi_cc_*` services are the contract, enforced by an
+allow-list checked before any request is issued.
 
 ## 3. Folder structure
 
 ```
 bobi-control-center/
-├── frontend/
-│   ├── src/
-│   │   ├── api/              # HTTP client + one module per resource
-│   │   │   ├── client.ts     # fetch wrapper, structured error mapping
-│   │   │   ├── status.ts  devices.ts  capabilities.ts  automations.ts
-│   │   │   ├── shabbat.ts  notifications.ts  users.ts  tasks.ts
-│   │   │   └── probe.ts  diagnostics.ts  tests.ts  audit.ts  settings.ts
-│   │   ├── components/       # dumb, reusable UI primitives
-│   │   │   ├── ui/           # Card, Button, Badge, Toggle, Modal, Drawer…
-│   │   │   └── state/        # Loading / Empty / Error / QueryBoundary
-│   │   ├── features/         # domain logic per area (no HTTP, no JSX-only)
-│   │   │   ├── automations/  # wizard state machine, preview builder
-│   │   │   ├── shabbat/      # draft reducer, cross-midnight maths
-│   │   │   ├── devices/      # filtering + grouping logic
-│   │   │   └── probe/        # pipeline step derivation
-│   │   ├── hooks/            # useTheme, useDebounce, useConfirm…
-│   │   ├── layouts/          # AppLayout, Sidebar, BottomNav, TopBar
-│   │   ├── pages/            # one file per route, thin
-│   │   ├── types/            # TS mirrors of the API's Pydantic models
-│   │   ├── utils/            # time, format, cn
-│   │   └── App.tsx           # routes only
-│   ├── public/
-│   ├── index.html
-│   ├── package.json
-│   ├── tailwind.config.js
-│   ├── vite.config.ts
-│   └── vitest.setup.ts
-│
-├── backend/
-│   ├── app/
-│   │   ├── api/              # FastAPI routers, one per resource
-│   │   ├── adapters/
-│   │   │   ├── base.py       # HomeAssistantAdapter ABC
-│   │   │   ├── mock.py       # MockHomeAssistantAdapter
-│   │   │   └── real.py       # RealHomeAssistantAdapter (Phase 2 stub)
-│   │   ├── models/           # Pydantic domain + response models
-│   │   ├── services/         # BobiService, ProbeService, AuditService…
-│   │   ├── mock/             # Hebrew fixture data
-│   │   ├── errors.py         # structured error envelope
-│   │   ├── config.py         # pydantic-settings
-│   │   └── main.py           # app factory, static serving, security headers
-│   ├── tests/
-│   └── requirements.txt
-│
-├── addon/                    # Home Assistant Add-on skeleton
-│   ├── config.yaml  Dockerfile  run.sh  DOCS.md
-│
-├── docs/
-│   ├── architecture.md  api.md  home-assistant-integration.md
-│
-├── .env.example  .gitignore  docker-compose.yml  Dockerfile
-├── package.json              # root dev orchestration
-├── README.md  LICENSE
+├── repository.yaml               # Home Assistant custom apps repository
+├── bobi_control_center/          # the app — self-contained build context
+│   ├── config.yaml               # ingress 8099, homeassistant_api, watchdog
+│   ├── Dockerfile                # stage 1: Vite build · stage 2: FastAPI
+│   ├── run.sh                    # entrypoint; reads options via bashio
+│   ├── DOCS.md                   # shown inside Home Assistant
+│   ├── frontend/src/
+│   │   ├── api/                  # client.ts (Ingress-safe URLs) + bobi.ts
+│   │   ├── components/ui/        # Card, Button, Badge, Modal, ReadOnly, Advanced
+│   │   ├── components/state/     # QueryBoundary: loading/disconnected/error/empty
+│   │   ├── features/             # devices/filter.ts, probe/pipeline.ts
+│   │   ├── hooks/                # queries.ts, useTheme.ts
+│   │   ├── layouts/              # AppLayout, navigation
+│   │   ├── pages/                # one per screen, thin
+│   │   ├── types/api.ts          # mirrors the bridge models
+│   │   └── utils/                # cn, format
+│   └── backend/app/
+│       ├── adapters/             # base.py (ABC) · real.py · mock.py
+│       ├── api/                  # routes.py · deps.py
+│       ├── models/bridge.py      # the bridge contract
+│       ├── mock/bridge_data.py   # fixtures in the same shape
+│       ├── config.py errors.py main.py
+└── docs/
 ```
 
-## 4. Data flow
+## 4. The bridge contract
 
-### Read path (e.g. the devices page)
+`models/bridge.py` defines one model per service. Two deliberate properties:
 
-1. `DevicesPage` calls `useDevices()`.
-2. The hook calls `fetchDevices()` in `src/api/devices.ts` through TanStack Query.
-3. `GET /api/bobi/devices` hits `app/api/devices.py`.
-4. The router asks `BobiService.list_devices()`.
-5. The service calls `adapter.get_entities()` and maps HA-shaped records into the
-   **Bobi device model**: `display_name`, `room`, `category`, `aliases`,
-   `capabilities`, plus an `advanced.entity_id` field.
-6. FastAPI serialises the typed model; the frontend renders friendly objects.
+- **`extra="allow"` everywhere.** The Capability Registry and device catalog are
+  Bobi's, and grow independently of this app. Unknown keys are preserved and
+  surfaced in the Advanced panel rather than dropped.
+- **Almost every field optional.** A partially-populated response must produce a
+  usable screen, not a 500.
 
-Filtering (search / room / category / availability) happens client-side in
-`features/devices/filter.ts` because the dataset is household-sized.
+Both adapters return these models, so the frontend renders one shape regardless
+of which is active — which is what makes mock-mode development faithful.
 
-### Write path (Phase 1: drafts only)
+## 5. Data flow
 
-Every impactful change follows the **Preview → Confirm → Execute** model:
+### Read path (the devices page)
 
-```
-user edits a draft   →  POST …/preview   →  human-readable summary
-                                          ↓
-                              user confirms in the UI
-                                          ↓
-                        POST …/confirm  →  execute + audit record + result
-```
+1. `DevicesPage` calls `useDevices(scope, includeUnavailable)`.
+2. The hook calls `fetchDevices()` in `src/api/bobi.ts`.
+3. `client.ts` prefixes the path with the Ingress base derived from
+   `location.pathname`.
+4. `GET /api/bobi/devices?scope=…` reaches `app/api/routes.py`, which validates
+   the scope against the bridge's list.
+5. `RealHomeAssistantAdapter.get_devices()` POSTs to
+   `…/services/script/bobi_cc_devices?return_response`.
+6. The response is unwrapped, validated into `BridgeDevices`, and returned.
 
-In Phase 1 the "execute" step writes to an in-memory store only and returns
-`applied: false, dry_run: true`. Nothing leaves the process. The service layer
-already emits an audit record for every write so the audit trail is complete on
-day one of Phase 2.
+Scope is a **bridge** parameter, so changing it refetches. Search, area and
+availability filters are client-side over the returned set.
 
-Actions that require explicit confirmation: delete automation, delete a Shabbat
-configuration, bulk disable, change user permissions, remove a capability,
-restore a backup. Simple reads and navigation never prompt.
+### The probe path
 
-### The probe pipeline (Test Center)
+`POST /api/bobi/probe` → `script.bobi_cc_probe`, which Home Assistant runs with
+`probe_only=true`. `features/probe/pipeline.ts` derives the visual stages from
+the flat result, as a pure function so every branch is testable without React.
 
-`POST /api/bobi/probe` is deliberately **probe-only**: it models Bobi's natural
-language pipeline and always returns `would_execute: false`.
+## 6. Ingress
 
-```
-text → normalise → classify family → resolve target → resolve schedule
-     → select skill → safety check → ProbeResult
-```
+Home Assistant serves the app from a generated prefix that changes between
+sessions and cannot be known at build time. Three things make that work:
 
-`ProbeService` implements each stage as a separate pure function so the UI can
-render the pipeline as discrete, inspectable steps and so each stage is unit
-testable. Resolution of a spoken target ("המזגן בסלון") to a device uses the
-device `aliases` list, which is why aliases are a first-class field.
+| Concern | Solution |
+| --- | --- |
+| Router touching the path | **HashRouter** — routes live in the fragment |
+| Asset URLs | Vite `base: './'` — every asset is relative |
+| API URLs | Derived at runtime from `location.pathname` |
 
-## 5. Adapter contract
+This is verified end-to-end by a test that serves the app through a simulated
+`/api/hassio_ingress/<token>/` prefix and asserts that every API call stays
+inside it, across direct load, internal navigation and browser refresh.
 
-`app/adapters/base.py` defines the only seam between Bobi's domain logic and Home
-Assistant:
+## 7. Read-only, structurally
 
-```python
-class HomeAssistantAdapter(ABC):
-    async def get_system_status(self) -> SystemStatus: ...
-    async def get_entities(self) -> list[RawEntity]: ...
-    async def get_automations(self) -> list[Automation]: ...
-    async def get_capabilities(self) -> list[Capability]: ...
-    async def preview_text(self, text: str) -> ProbeResult: ...
-    async def get_shabbat_config(self) -> ShabbatConfig: ...
-    async def save_shabbat_config(self, cfg: ShabbatConfig) -> ShabbatConfig: ...
-    async def get_users(self) -> list[User]: ...
-    async def get_diagnostics(self) -> list[DiagnosticIssue]: ...
-    # …plus notifications, tasks, calendar, tests, settings
-```
+| Guarantee | How it is enforced |
+| --- | --- |
+| No write method exists | `HomeAssistantAdapter` declares none |
+| Only the bridge is reachable | `ALLOWED_SERVICES` checked before the request |
+| One non-GET route | A test enumerates the router |
+| The probe cannot execute | `would_execute = False` hard-coded in both adapters |
+| The UI offers no write control | Disabled controls labelled *"עריכה תהיה זמינה בשלב הבא"* |
 
-Selection happens once, in `config.py` / the app factory:
+## 8. Error handling
 
-```python
-adapter = (
-    RealHomeAssistantAdapter(settings)      # BOBI_ADAPTER=real
-    if settings.adapter == "real"
-    else MockHomeAssistantAdapter()          # default
-)
-```
-
-It is injected into `BobiService` and reached in routers via a FastAPI
-dependency. **No router, service or test imports a concrete adapter directly.**
-
-### Replacing Mock with Real
-
-Because the adapter returns **domain models, not HA payloads**, Phase 2 is
-additive:
-
-| Concern | Phase 1 (Mock) | Phase 2 (Real) |
-| --- | --- | --- |
-| Source of truth | Hebrew fixtures in `app/mock/` | HA REST + WebSocket API |
-| Auth | none | `SUPERVISOR_TOKEN` (add-on) or a long-lived token, **server-side only** |
-| Entity → device | fixture table | HA entity/device/area registries + a Bobi mapping file |
-| Writes | in-memory, `dry_run: true` | real service calls, still behind Preview → Confirm |
-| Live updates | none | HA WebSocket `state_changed` → `/api/bobi/ws` fan-out |
-
-The steps are:
-
-1. Implement `RealHomeAssistantAdapter` against the same ABC.
-2. Set `BOBI_ADAPTER=real` plus connection settings.
-3. Run the identical adapter conformance test suite
-   (`backend/tests/test_adapter_contract.py`) against it — it is written against
-   the ABC, not the mock, so it applies to both implementations unchanged.
-
-**The frontend requires zero changes.** That is the point of the seam.
-
-## 6. Error handling
-
-The backend never leaks a traceback. Exception handlers convert everything into:
+The backend never leaks a traceback. Everything becomes:
 
 ```json
-{ "code": "automations_unavailable", "message": "לא הצלחתי לטעון את האוטומציות", "details": {} }
+{ "code": "bridge_service_missing", "message": "…", "details": {} }
 ```
 
-The frontend's `ApiError` carries `code`, a Hebrew `message` for the user, and
-`details` rendered only under **"פרטים טכניים"**.
+The frontend's `ApiError.isDisconnected` separates *Home Assistant is
+unreachable* from *this is a bug*, so a missing bridge script reads as
+"לא הצלחתי לקבל נתונים מ-Home Assistant" rather than an error page. The code and
+status live under **פרטים טכניים**.
 
-Every page implements four states: loading, empty, error, normal — provided
-centrally by the `QueryBoundary` component so the behaviour is consistent.
+Every screen implements loading, disconnected, error, empty and normal states
+via the shared `QueryBoundary`.
 
-## 7. Security posture
+## 9. Security
 
-- No secret is ever sent to the browser; settings endpoints return `"••••••••"`
-  for masked fields and the raw values never leave the process.
-- No Home Assistant token in `localStorage` or any browser storage.
-- All future Home Assistant traffic is server-side only.
-- `.env.example` is committed; `.env` is git-ignored.
-- Security headers (`X-Content-Type-Options`, `X-Frame-Options` relaxed for
-  Ingress, `Referrer-Policy`, CSP) are applied by middleware.
-- Mock data contains only invented names and reserved-range phone numbers.
+- `SUPERVISOR_TOKEN` is a property reading the environment, not a settings
+  field, so `model_dump()` cannot serialise it.
+- It appears only in an outgoing `Authorization` header; no logging call in the
+  adapter touches headers or the token.
+- Response bodies are logged only when `debug_http` is explicitly enabled.
+- No long-lived access token is created or requested.
+- No phone numbers or LIDs: the bridge withholds them and the UI shows only
+  connection status.
 
-## 8. Deployment
+## 10. Deployment
 
-- **Development**: Vite dev server on `:5173` proxies `/api` to uvicorn on `:8000`.
-- **Production**: `npm run build` emits static files; FastAPI mounts them and
-  serves an SPA fallback. One process, one container.
-- **Home Assistant Add-on**: the same image, started by `run.sh`, exposed through
-  Ingress. `GET /health` is the health endpoint. See
-  `docs/home-assistant-integration.md`.
+- **Development**: Vite on `:5173` proxies `/api` to uvicorn on `:8099`; no
+  token means mock data.
+- **Production**: one container. Stage 1 builds the frontend, stage 2 runs
+  FastAPI serving both the API and the compiled SPA on `0.0.0.0:8099`.
+- **Home Assistant**: the Supervisor builds the same Dockerfile with
+  `--build-arg BUILD_FROM=<arch base>` and reaches it through Ingress.

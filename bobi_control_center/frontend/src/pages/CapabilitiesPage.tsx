@@ -117,16 +117,18 @@ function ToggleRow({ toggle }: { toggle: CapabilityToggle }) {
   const on = toggle.enabled ?? (toggle.state ?? '').toLowerCase() === 'on';
 
   return (
-    <li className="flex items-center justify-between gap-3 px-4 py-3">
-      <div className="min-w-0">
-        <p className="font-medium text-slate-900 dark:text-slate-100">{label}</p>
-        <p className="text-xs text-slate-500 dark:text-slate-400">
-          {on ? 'מופעל' : 'כבוי'}
-        </p>
-      </div>
-      <div className="flex shrink-0 items-center gap-2">
-        <NextPhaseBadge />
+    <li className="px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <p className="min-w-0 font-medium text-slate-900 dark:text-slate-100">{label}</p>
         <ReadOnlyToggle on={on} label={label} />
+      </div>
+      {/* The badge sits on its own line: side by side it crowds the label on a
+          narrow screen. */}
+      <div className="mt-1 flex flex-wrap items-center gap-2">
+        <span className="text-xs text-slate-500 dark:text-slate-400">
+          {on ? 'מופעל' : 'כבוי'}
+        </span>
+        <NextPhaseBadge />
       </div>
     </li>
   );

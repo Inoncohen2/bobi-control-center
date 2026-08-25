@@ -1,59 +1,86 @@
-# Bobi Control Center — Add-on
+# Bobi Control Center
 
-> **Status: skeleton.** These files describe how the add-on *will* be packaged.
-> It is not published to an add-on repository yet, and in Phase 1 the
-> application cannot read from or write to Home Assistant.
+מרכז הניהול של בובי — מכשירים, יכולות, שעון שבת, כללים חכמים ומרכז בדיקות,
+בעברית ומותאם לנייד, דרך Ingress של Home Assistant.
 
-## What it does
+> ## 🔒 שלב 2: קריאה בלבד
+>
+> היישום קורא נתונים בלבד. הוא **אינו** מדליק או מכבה מכשירים, אינו משנה
+> תזמונים, אינו מסמן משימות ואינו שומר הגדרות שבת. כפתורי עריכה מוצגים מושבתים
+> עם הכיתוב *"עריכה תהיה זמינה בשלב הבא"*.
 
-Runs the Bobi Control Center web app inside Home Assistant and exposes it
-through **Ingress**, so it appears in the sidebar and is protected by Home
-Assistant's own authentication. No port is published to your network.
+## התקנה
 
-## Options
+1. הוסיפו את המאגר: **הגדרות → תוספות → חנות התוספות → ⋮ → מאגרים** והדביקו
+   `https://github.com/Inoncohen2/bobi-control-center`
+2. רעננו את החנות, פתחו את **Bobi Control Center** ולחצו **התקנה**.
+3. הפעילו את התוספת.
+4. לחצו **Open Web UI**.
+5. אפשר להפעיל **Show in sidebar** כדי לקבל כניסת **Bobi** בסרגל הצד.
 
-| Option | Values | Default | Meaning |
+אין צורך להזין טוקן. Home Assistant מזריק `SUPERVISOR_TOKEN` אוטומטית, והוא
+נשאר בצד השרת בלבד.
+
+## דרישות
+
+התוספת משתמשת אך ורק בסקריפטי הגשר של בובי:
+
+| שירות | למה משמש |
+| --- | --- |
+| `script.bobi_cc_status` | מצב המערכת |
+| `script.bobi_cc_devices` | קטלוג המכשירים |
+| `script.bobi_cc_capabilities` | רישום היכולות |
+| `script.bobi_cc_users` | משתמשי הבית |
+| `script.bobi_cc_shabbat` | הגדרות שעון שבת |
+| `script.bobi_cc_rules` | כללים חכמים |
+| `script.bobi_cc_tasks` | משימות |
+| `script.bobi_cc_diagnostics` | תקלות |
+| `script.bobi_cc_probe` | מרכז הבדיקות (probe_only) |
+
+אם סקריפט חסר, המסך המתאים יציג הודעה ברורה במקום להיכשל.
+
+## אפשרויות
+
+| אפשרות | ערכים | ברירת מחדל | משמעות |
 | --- | --- | --- | --- |
-| `log_level` | `debug` \| `info` \| `warning` \| `error` | `info` | Verbosity of the add-on log. |
-| `adapter` | `mock` \| `real` | `mock` | Data source. `mock` serves demo data; `real` is Phase 2 and not implemented. |
+| `log_level` | `debug` / `info` / `warning` / `error` | `info` | רמת הפירוט ביומן התוספת. |
+| `debug_http` | `true` / `false` | `false` | רישום גוף הבקשות והתשובות מול הגשר. כבוי כברירת מחדל כדי שנתוני הבית לא ייכתבו ליומן. |
 
-## Safety
+## מרכז הבדיקות
 
-While `adapter` is `mock`:
+אפשר לכתוב לבובי כל משפט וללחוץ **"בדוק בלי לבצע"**. הגשר מריץ את מנוע ההבנה
+האמיתי של בובי עם `probe_only=true`, והתוצאה מוצגת כשרשרת שלבים:
 
-- the process contains no HTTP client for Home Assistant at all;
-- every write returns `dry_run: true` and changes only in-memory state;
-- `POST /api/bobi/probe` always answers `would_execute: false`.
+```
+טקסט → הבנה → יעד → תזמון → Skill → בדיקת בטיחות
+```
 
-Setting `adapter: real` before Phase 2 lands does not enable anything — the
-backend returns a clear "not implemented" error rather than half-working.
+בראש התוצאה מוצגת ההודעה **בדיקה בלבד — לא בוצעה שום פעולה**.
 
-## Health
+## פרטיות
 
-The Supervisor watchdog polls `GET /health`, which answers:
+- הטוקן של Home Assistant אינו נשלח לדפדפן ואינו נרשם ביומן.
+- מסך המשתמשים מציג רק אם המשתמש מחובר ל-WhatsApp — לא מספרי טלפון ולא LID.
+- מזהים טכניים (`entity_id`, `handler`) מוצגים רק בתוך המקטע המכווץ
+  **"מתקדם / פרטים טכניים"**.
+
+## בריאות
+
+התוספת חושפת `GET /health`:
 
 ```json
-{ "status": "ok", "adapter": "mock", "version": "1.0.0" }
+{ "ok": true, "app": "bobi-control-center", "adapter": "home_assistant", "writes_enabled": false }
 ```
 
-## Persistent data
+ה-watchdog של Home Assistant מנטר את הנתיב הזה.
 
-`/data` is mapped for persistent configuration and is set as `BOBI_DATA_DIR`.
+## פתרון תקלות
 
-## Building locally
+**המסך מציג "לא הצלחתי לקבל נתונים מ-Home Assistant"** —
+פתחו את **פרטים טכניים** בהודעה. אם מופיע `bridge_service_missing`, הסקריפט
+המתאים חסר. אם מופיע `ha_unauthorized`, הפעילו מחדש את התוספת.
 
-The add-on image expects the frontend to be built first:
+**המסך מציג "מצב הדגמה"** — התוספת לא קיבלה `SUPERVISOR_TOKEN`. זה קורה כשמריצים
+את הקונטיינר מחוץ ל-Home Assistant, וזו התנהגות תקינה.
 
-```bash
-cd frontend && npm ci && npm run build && cd ..
-docker build -f addon/Dockerfile -t bobi-addon:dev .
-```
-
-For ordinary local use prefer the root `Dockerfile`, which builds the frontend
-itself in a separate stage.
-
-## Phase 2
-
-See `docs/home-assistant-integration.md` for the plan to connect a real
-installation, including what permissions are needed and why every write stays
-behind the Preview → Confirm model.
+לפרטים על החיבור ראו `docs/home-assistant-integration.md` במאגר.

@@ -4,233 +4,211 @@
 
 </div>
 
-**Bobi Control Center** — the management interface for *Bobi*, a Home Assistant
-based household assistant. Hebrew-first, RTL, mobile-first.
+**Bobi Control Center** — a Home Assistant App that gives *Bobi*, a Hebrew
+household assistant, a management interface. Hebrew-first, RTL, mobile-first,
+served through Home Assistant Ingress.
 
-> ### ⚠️ Phase 1: mock data only
+> ### 🔒 Phase 2 is **read-only**
 >
-> This application **cannot** reach a real Home Assistant. It controls no
-> devices, creates no automations or calendar events, touches no tasks, sends no
-> WhatsApp messages, and needs no credentials. Every write is a dry run against
-> in-memory state, and `POST /api/bobi/probe` always answers
-> `would_execute: false`.
->
-> The seam that makes this true — and that makes Phase 2 a one-line change — is
-> described in [`docs/architecture.md`](docs/architecture.md).
+> The app calls only Bobi's `script.bobi_cc_*` bridge services, every one of
+> which is a read or a probe. It cannot turn on a light, change a schedule,
+> complete a task, or save a Shabbat configuration. The adapter interface has
+> no write method to implement, so this is structural rather than a matter of
+> discipline.
 
 ---
 
-## Quick start
+## Install in Home Assistant
 
-Requires **Node 20+** and **Python 3.11+**.
+1. **Add this repository.**
+   Settings → Add-ons → Add-on Store → ⋮ (top right) → **Repositories**, then
+   paste:
 
-```bash
-git clone https://github.com/inoncohen2/bobi-control-center.git
-cd bobi-control-center
+   ```
+   https://github.com/Inoncohen2/bobi-control-center
+   ```
 
-# Install frontend deps, create a venv, install backend deps
-npm run setup
+2. **Install.** Refresh the store, open **Bobi Control Center**, click
+   **Install**. The image builds on first install, which takes a few minutes.
 
-# Backend on :8000 and frontend on :5173, together
-npm install          # root dev orchestration
-npm run dev
-```
+3. **Start** the app.
 
-Open **http://localhost:5173**. The Vite dev server proxies `/api` to the
-backend, so the frontend calls same-origin paths in every mode.
+4. **Open Web UI.** The app appears in the store page as *Open Web UI*.
 
-No `.env` is needed. To customise anything, `cp .env.example .env` — it is
-git-ignored.
+5. *(Optional)* Toggle **Show in sidebar** to get a **Bobi** entry in the Home
+   Assistant sidebar.
 
-### Running the two halves separately
+There is **no token to paste**. The Supervisor injects `SUPERVISOR_TOKEN`
+because the app declares `homeassistant_api: true`, and the backend uses it
+server-side only.
 
-```bash
-# Backend — http://localhost:8000  (API docs at /api/docs)
-cd backend && ../.venv/bin/python -m uvicorn app.main:app --reload --port 8000
+### Requirements
 
-# Frontend — http://localhost:5173
-cd frontend && npm install && npm run dev
-```
+Bobi's bridge scripts must exist in your Home Assistant:
 
----
+`script.bobi_cc_status` · `bobi_cc_devices` · `bobi_cc_capabilities` ·
+`bobi_cc_users` · `bobi_cc_shabbat` · `bobi_cc_rules` · `bobi_cc_tasks` ·
+`bobi_cc_diagnostics` · `bobi_cc_probe`
 
-## Commands
+If one is missing, the affected screen says so plainly rather than failing:
+*"שירות הגשר … לא נמצא ב-Home Assistant"*.
 
-Every command below is runnable from the repository root.
+### Options
 
-| Command | What it does |
-| --- | --- |
-| `npm run setup` | Install frontend deps, create `.venv`, install backend deps |
-| `npm run dev` | Backend and frontend together, both with reload |
-| `npm run dev:backend` | Backend only, on `:8000` |
-| `npm run dev:frontend` | Frontend only, on `:5173` |
-| `npm run build` | Compile the frontend to `frontend/dist` |
-| `npm test` | Backend (pytest) then frontend (Vitest) |
-| `npm run test:backend` | `pytest` — 118 tests |
-| `npm run test:frontend` | `vitest run` — 65 tests |
-| `npm run lint` | `ruff` on the backend, `eslint` on the frontend |
-| `npm run typecheck` | `tsc -b --noEmit` |
-| `npm run check` | Lint, typecheck and test — run this before committing |
-| `npm run docker:build` | Build the single production image |
-| `npm run docker:run` | Run it on `:8000` |
-
-Backend equivalents without the npm wrapper:
-
-```bash
-cd backend
-../.venv/bin/python -m pytest -q                 # tests
-../.venv/bin/python -m uvicorn app.main:app --reload
-cd .. && .venv/bin/ruff check backend/           # lint
-```
+| Option | Values | Default | Meaning |
+| --- | --- | --- | --- |
+| `log_level` | `debug` / `info` / `warning` / `error` | `info` | Add-on log verbosity. |
+| `debug_http` | `true` / `false` | `false` | Log bridge request/response bodies. Off by default so household data never lands in the log. |
 
 ---
 
-## Production
+## Screens
 
-One process serves both the API and the compiled UI.
+All Hebrew and RTL, each with loading, disconnected, error, empty and normal
+states, in light and dark mode.
 
-```bash
-npm run build                          # emits frontend/dist
-cp -r frontend/dist backend/app/static # FastAPI serves this
-cd backend && ../.venv/bin/python -m uvicorn app.main:app --port 8000
-```
-
-### Docker
-
-```bash
-docker build -t bobi-control-center:latest .
-docker run --rm -p 8000:8000 bobi-control-center:latest
-```
-
-or:
-
-```bash
-docker compose up --build
-```
-
-Then open **http://localhost:8000**. The image builds the frontend in a
-separate stage, runs as a non-root user, and exposes `GET /health` for the
-Docker healthcheck and the Home Assistant watchdog.
-
----
-
-## Pages
-
-All Hebrew, all RTL, each with loading / empty / error / normal states, in light
-and dark mode.
-
-| Route | Page | What it shows |
+| Screen | Bridge service | Shows |
 | --- | --- | --- |
-| `/` | **בית** | Health cards (בובי · WhatsApp · AI · Home Assistant), five statistics, a "מה קורה עכשיו" activity timeline, and "דורש תשומת לב" warnings phrased for a person, with technical detail collapsed |
-| `/capabilities` | **יכולות** | What Bobi can do, grouped, each toggleable with a settings drawer |
-| `/devices` | **מכשירים** | Friendly devices grouped by room, with search (name, room, or spoken alias) and room/category/availability filters |
-| `/automations` | **אוטומציות** | Bobi-shaped automation cards with edit / disable / duplicate / delete, and a 7-step creation wizard |
-| `/shabbat` | **שעון שבת** | Candle-lighting times, templates, per-device schedules with multiple ranges, and an explicit **+ יום הבא** badge on windows that cross midnight |
-| `/notifications` | **הודעות חכמות** | Smart notification rules: recipients, lead time, quiet hours, conditions, cooldown |
-| `/tasks` | **משימות ויומן** | Open and completed tasks, upcoming events, and which Bobi features react to each |
-| `/users` | **משתמשים** | Household profiles and an interactive permissions matrix |
-| `/test-center` | **בדיקות** | Write anything to Bobi and watch it be parsed — **without executing** |
-| `/tests` | Automated suites | Regression suites with pass counts and a re-run button |
-| `/diagnostics` | **תקלות** | Issues grouped as תקין / אזהרות / שגיאות, each with a suggested action |
-| `/audit` | Audit log | Every change: who, what, before/after, and from where |
-| `/settings` | **הגדרות** | Nine sections. Secrets always render as `••••••••` |
-
-On desktop the navigation is a sidebar on the right; on mobile it is a bottom
-bar with five destinations plus **עוד**, with safe-area padding for iPhone.
+| **בית** | `bobi_cc_status` + `bobi_cc_diagnostics` | Component health, counts, and what needs attention |
+| **מכשירים** | `bobi_cc_devices` | Bobi's canonical catalog by room, with the 11 semantic scopes, alias search and availability filters |
+| **יכולות** | `bobi_cc_capabilities` | The Capability Registry rendered dynamically — label, example, risk — plus read-only master toggles |
+| **כללים חכמים** | `bobi_cc_rules` | Bobi's canonical smart rules |
+| **שעון שבת** | `bobi_cc_shabbat` | Candle lighting, havdalah, the four profiles, AC temperatures |
+| **משימות** | `bobi_cc_tasks` | Open and completed tasks |
+| **משתמשים** | `bobi_cc_users` | Household profiles and a read-only permissions matrix |
+| **בדיקות** | `bobi_cc_probe` | Type anything and watch Bobi parse it — **without executing** |
+| **תקלות** | `bobi_cc_diagnostics` | Issues grouped by severity, with the checks that ran |
+| **הגדרות** | — | Connection state, versions, theme |
 
 ### The Test Center
 
 The most important safety surface. Type something you would send Bobi, press
-**"בדוק בלי לבצע"**, and the response is rendered as a pipeline:
+**"בדוק בלי לבצע"**, and the bridge runs Bobi's real Skill Dispatcher with
+`probe_only=true`. The response is drawn as a pipeline:
 
 ```
-טקסט → נרמול → הבנה → יעד → זמן → Skill → בדיקת בטיחות
+טקסט → הבנה → יעד → תזמון → Skill → בדיקת בטיחות
 ```
 
-with a prominent **✅ בדיקה בלבד — לא בוצעה שום פעולה** banner, any warnings,
-and the raw JSON available to copy. `would_execute` is `false` by construction,
-not by configuration.
+built from the bridge's own `handled`, `status`, `terminal`, `skill`,
+`understanding` and `schedule_*` fields, under a prominent
+**בדיקה בלבד — לא בוצעה שום פעולה** banner.
+
+### Technical detail stays hidden
+
+`entity_id`, `handler`, `domain` and raw tokens appear **only** inside a
+collapsed **"מתקדם / פרטים טכניים"** disclosure. An automated test fails the
+build if an entity id is hard-coded in frontend logic.
 
 ---
 
 ## Architecture
 
 ```
-React UI  →  Bobi Management API  →  BobiService  →  HomeAssistantAdapter
-                                                      ├── MockHomeAssistantAdapter  (active)
-                                                      └── RealHomeAssistantAdapter  (Phase 2)
+React (HashRouter)  →  FastAPI  →  http://supervisor/core/api  →  script.bobi_cc_*
+                                   Authorization: Bearer $SUPERVISOR_TOKEN
 ```
 
-The rule the whole project rests on:
+The browser never talks to the Supervisor. All Home Assistant traffic is
+server-side, and the token never leaves the backend process.
 
-> **The frontend never knows how Bobi is implemented inside Home Assistant.**
+```
+HomeAssistantAdapter (abstract, read-only)
+├── RealHomeAssistantAdapter   ← used when SUPERVISOR_TOKEN is present
+└── MockHomeAssistantAdapter   ← used everywhere else, same bridge shapes
+```
 
-No `entity_id`, `input_text.*` or `script.*` appears in frontend logic. Such
-values exist in the data model under an `advanced` block, shown only behind a
-**"מתקדם"** disclosure. Two tests in
-`backend/tests/test_architecture.py` enforce this on every run.
+The adapter is selected automatically. Both return identical models, so local
+development exercises the same UI paths as production.
 
-- [`docs/architecture.md`](docs/architecture.md) — layers, data flow, folder layout
+- [`docs/architecture.md`](docs/architecture.md) — layers, data flow, adapters
 - [`docs/api.md`](docs/api.md) — every endpoint with examples
-- [`docs/home-assistant-integration.md`](docs/home-assistant-integration.md) — the Phase 2 plan
-
-### Preview → Confirm
-
-Impactful changes are always two calls. `preview` returns a human-readable
-summary plus an opaque token; `confirm` requires that token *and* an identical
-payload. A client cannot skip the preview or confirm something other than what
-the user saw on screen.
+- [`docs/home-assistant-integration.md`](docs/home-assistant-integration.md) — the bridge contract
 
 ---
 
-## Testing
+## Local development
+
+Requires **Node 20+** and **Python 3.11+**. No Home Assistant needed — without
+`SUPERVISOR_TOKEN` the app serves mock data in the exact bridge shape.
 
 ```bash
-npm test          # 118 backend + 65 frontend
+git clone https://github.com/Inoncohen2/bobi-control-center.git
+cd bobi-control-center
+
+npm run setup     # frontend deps + venv + backend deps
+npm install       # root dev orchestration
+npm run dev       # backend :8099, frontend :5173
 ```
 
-Backend (`pytest`) covers the status, capability, device, automation,
-serialization, probe, Shabbat and diagnostic endpoints; the adapter conformance
-contract; and the architectural guards. Frontend (`Vitest` + Testing Library)
-covers dashboard rendering, device filtering, the capability toggle, the
-automation preview gate, the Shabbat cross-midnight indicator and the Test
-Center pipeline.
+Open **http://localhost:5173**.
+
+### Commands
+
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Backend and frontend together, both with reload |
+| `npm run build` | Compile the frontend |
+| `npm test` | Backend (pytest) then frontend (Vitest) |
+| `npm run lint` | ruff + eslint |
+| `npm run typecheck` | `tsc -b --noEmit` |
+| `npm run check` | Lint, typecheck and test — run before committing |
+| `npm run docker:build` | Build the app image |
+| `npm run docker:run` | Run it on `:8099` |
+
+### Running the container directly
+
+```bash
+docker build -t bobi-control-center:latest bobi_control_center/
+docker run --rm -p 8099:8099 bobi-control-center:latest
+```
+
+Then open **http://localhost:8099**. Without a token it starts in mock mode and
+says so on the dashboard.
+
+---
+
+## Repository layout
+
+```
+bobi-control-center/
+├── repository.yaml              # marks this a Home Assistant apps repository
+├── bobi_control_center/         # the app — a self-contained build context
+│   ├── config.yaml              # app manifest (ingress 8099, homeassistant_api)
+│   ├── Dockerfile               # multi-stage: Vite build → FastAPI runtime
+│   ├── run.sh                   # entrypoint, reads options via bashio
+│   ├── frontend/                # React + TypeScript + Tailwind
+│   ├── backend/                 # FastAPI + adapters + tests
+│   └── DOCS.md                  # shown inside Home Assistant
+├── docs/
+└── .github/workflows/           # lint, typecheck, tests, Docker build
+```
+
+The Dockerfile references nothing outside `bobi_control_center/`, which is what
+lets the Supervisor build it.
 
 ---
 
 ## Security
 
-- No secret is ever sent to the browser; masked as `••••••••` server-side.
-- No Home Assistant token in `localStorage` or any browser storage — the only
-  thing stored locally is the light/dark theme preference.
-- All future Home Assistant traffic is server-side only.
-- `.env` is git-ignored; only `.env.example` is committed, with empty values.
-- Security headers (CSP, `X-Content-Type-Options`, `Referrer-Policy`,
-  `Permissions-Policy`) are applied by middleware.
-- Mock data uses invented names and masked phone hints only. A test fails the
-  build if anything resembling a real phone number appears in the fixtures.
+- `SUPERVISOR_TOKEN` is read from the environment, used only in an
+  `Authorization` header, and never serialised, logged or sent to the browser.
+- No long-lived access token is created, and none is ever requested from you.
+- The real adapter can call **only** the nine bridge services — anything else is
+  refused before a request is made.
+- Response bodies are logged only when `debug_http` is explicitly enabled.
+- Users show WhatsApp *connection status* only: no phone numbers, no LIDs.
+- Mock fixtures contain invented data only; a test fails the build if anything
+  resembling a phone number appears.
 
 ---
 
-## Home Assistant Add-on
+## Phase 3
 
-`addon/` contains the skeleton: `config.yaml` (Ingress, permissions, options
-schema, `/health` watchdog), `Dockerfile` and `run.sh`. It is **not published
-yet** — see [`addon/DOCS.md`](addon/DOCS.md).
-
----
-
-## Project layout
-
-```
-bobi-control-center/
-├── frontend/src/{api,components,features,hooks,layouts,pages,types,utils}
-├── backend/app/{api,adapters,models,services,mock}
-├── backend/tests/
-├── addon/{config.yaml,Dockerfile,run.sh,DOCS.md}
-├── docs/{architecture.md,api.md,home-assistant-integration.md}
-└── Dockerfile · docker-compose.yml · .env.example
-```
+Writes. The UI already renders every write control disabled and labelled
+*"עריכה תהיה זמינה בשלב הבא"*, so enabling them is a matter of adding write
+methods to the adapter interface and wiring the existing controls — the shape
+of the product does not change.
 
 ## License
 

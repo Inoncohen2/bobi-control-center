@@ -6,6 +6,12 @@
 # standalone (`docker build bobi_control_center/`) exactly the way the
 # Supervisor builds it.
 
+# The Supervisor passes `--build-arg BUILD_FROM=<arch base image>` when it
+# builds an app. It must be declared *before* the first FROM to be visible to
+# the later one; declared after, it would be scoped to that stage only.
+# The default keeps a plain `docker build` working outside Home Assistant.
+ARG BUILD_FROM=python:3.11-slim
+
 # --- stage 1: compile the React frontend -----------------------------------
 FROM node:22-alpine AS frontend
 
@@ -20,7 +26,6 @@ RUN npm run build
 
 
 # --- stage 2: Python runtime -----------------------------------------------
-ARG BUILD_FROM=python:3.11-slim
 FROM ${BUILD_FROM}
 
 ENV PYTHONUNBUFFERED=1 \
