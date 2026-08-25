@@ -1,0 +1,9 @@
+# Home Assistant custom repository manifest.
+#
+# Adding this repository's GitHub URL under
+# Settings → Add-ons → Add-on Store → ⋮ → Repositories
+# makes every app directory below the repository root installable.
+
+name: Bobi Control Center
+url: https://github.com/Inoncohen2/bobi-control-center
+maintainer: Inon Cohen <inoncohen98@gmail.com>
