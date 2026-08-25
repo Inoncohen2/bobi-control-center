@@ -11,8 +11,9 @@ import type { ShabbatProfile } from '@/types/api';
 
 /**
  * Profiles are rendered from the list the bridge defines, not a fixed four, so
- * a new profile kind appears without a frontend change. Device tokens are
- * already resolved to friendly names by the backend.
+ * a new profile kind appears without a frontend change. Each device arrives as
+ * an id + label pair, already resolved from the bridge's own tokens by the
+ * backend: the label is shown, and the token stays in the technical view.
  */
 function ProfileCard({ profile }: { profile: ShabbatProfile }) {
   return (
@@ -50,8 +51,8 @@ function ProfileCard({ profile }: { profile: ShabbatProfile }) {
           <p className="mb-1.5 text-sm text-slate-500 dark:text-slate-400">מכשירים</p>
           <div className="flex flex-wrap gap-1.5">
             {profile.devices.map((device) => (
-              <Badge key={device} tone="info">
-                {device}
+              <Badge key={device.id} tone="info">
+                {device.label}
               </Badge>
             ))}
           </div>
@@ -65,7 +66,11 @@ function ProfileCard({ profile }: { profile: ShabbatProfile }) {
             ['kind', 'סוג פרופיל'],
             ['id', 'מזהה'],
           ]}
-          extra={profile.extra}
+          extra={{
+            ...profile.extra,
+            // The bridge's own device tokens, which Phase 3 will write back.
+            tokens: profile.devices.map((device) => device.id),
+          }}
         />
       </AdvancedDisclosure>
     </Card>
@@ -162,19 +167,21 @@ export function ShabbatPage() {
               <SectionTitle>
                 <span id="ac-heading">טמפרטורות מזגנים</span>
               </SectionTitle>
-              {Object.keys(config.ac_temperatures).length === 0 ? (
+              {config.ac_temperatures.length === 0 ? (
                 <EmptyState title="לא הוגדרו טמפרטורות למזגנים" />
               ) : (
                 <Card className="p-0">
                   <dl className="divide-y divide-slate-100 dark:divide-slate-700/60">
-                    {Object.entries(config.ac_temperatures).map(([device, value]) => (
+                    {config.ac_temperatures.map((entry) => (
                       <div
-                        key={device}
+                        key={entry.id}
                         className="flex items-baseline justify-between gap-4 px-4 py-3"
                       >
-                        <dt className="text-sm text-slate-700 dark:text-slate-200">{device}</dt>
+                        <dt className="text-sm text-slate-700 dark:text-slate-200">
+                          {entry.label}
+                        </dt>
                         <dd className="text-sm font-medium tabular-nums text-slate-900 dark:text-slate-100">
-                          {value}°
+                          {entry.temperature}°
                         </dd>
                       </div>
                     ))}

@@ -39,6 +39,7 @@ from app.models.bridge import (
     ConnectionInfo,
 )
 from app.services import normalize
+from app.version import APP_VERSION
 
 logger = logging.getLogger("bobi.ha")
 
@@ -222,12 +223,14 @@ class RealHomeAssistantAdapter(HomeAssistantAdapter):
         except BobiError as exc:
             return ConnectionInfo(
                 adapter=self.name,
+                app_version=APP_VERSION,
                 connected=False,
                 writes_enabled=False,
                 detail=exc.message,
             )
         return ConnectionInfo(
             adapter=self.name,
+            app_version=APP_VERSION,
             connected=True,
             writes_enabled=False,
             detail="מחובר לגשר של בובי",

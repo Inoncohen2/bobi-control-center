@@ -123,10 +123,78 @@ export const COUNT_LABELS: Record<string, string> = {
   automations: 'אוטומציות',
   schedules: 'תזמונים',
   users: 'משתמשים',
+  // Counters the real bridge sends.
+  catalog_count: 'מכשירים בקטלוג',
+  catalog_controllable: 'ניתנים לשליטה',
+  rules_count: 'כללים חכמים',
+  issue_count: 'בעיות פתוחות',
+  users_count: 'משתמשים',
 };
 
 export function countLabel(key: string): string {
   return COUNT_LABELS[key] ?? key.replace(/_/g, ' ');
+}
+
+/**
+ * Device limit labels.
+ *
+ * The backend keeps every domain-specific limit the bridge sends, so the
+ * Advanced panel can name them instead of printing snake_case keys.
+ */
+export const LIMIT_LABELS: Record<string, string> = {
+  min_temp: 'טמפרטורה מינימלית',
+  max_temp: 'טמפרטורה מקסימלית',
+  temp_step: 'קפיצת טמפרטורה',
+  hvac_modes: 'מצבי הפעלה',
+  preset_modes: 'מצבים מוגדרים',
+  fan_modes: 'עוצמות מאוורר',
+  swing_modes: 'מצבי הפניית אוויר',
+  min_kelvin: 'גוון חם ביותר (K)',
+  max_kelvin: 'גוון קר ביותר (K)',
+  min_brightness: 'בהירות מינימלית',
+  max_brightness: 'בהירות מקסימלית',
+  intensity_min: 'עוצמה מינימלית',
+  intensity_max: 'עוצמה מקסימלית',
+  scent_slots: 'תאי ריח',
+  timer_max_seconds: 'טיימר מקסימלי (שניות)',
+  min: 'מינימום',
+  max: 'מקסימום',
+  step: 'קפיצה',
+};
+
+export function limitLabel(key: string): string {
+  return LIMIT_LABELS[key] ?? key.replace(/_/g, ' ');
+}
+
+/**
+ * The limits worth showing, in reading order, skipping empty ones.
+ *
+ * `min`/`max`/`step` are the backend's generic view of whichever domain range
+ * applies, so they are left out when the domain fields themselves are present —
+ * showing both would just repeat the same numbers.
+ */
+export function limitEntries(
+  limits: Record<string, unknown> | null | undefined,
+): Array<[string, string]> {
+  if (!limits) return [];
+  const domainKeys = Object.keys(LIMIT_LABELS).filter(
+    (key) => key !== 'min' && key !== 'max' && key !== 'step',
+  );
+  const hasDomainValue = domainKeys.some((key) => !isEmptyLimit(limits[key]));
+  const keys = hasDomainValue ? domainKeys : ['min', 'max', 'step'];
+
+  return keys
+    .filter((key) => !isEmptyLimit(limits[key]))
+    .map((key) => [limitLabel(key), formatLimit(limits[key])] as [string, string]);
+}
+
+function isEmptyLimit(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  return Array.isArray(value) && value.length === 0;
+}
+
+function formatLimit(value: unknown): string {
+  return Array.isArray(value) ? value.join(' · ') : displayValue(value);
 }
 
 /** Probe status → Hebrew. Unknown statuses fall through readably. */

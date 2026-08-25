@@ -58,6 +58,95 @@ def test_status_survives_an_empty_payload() -> None:
     result = normalize.normalize_status({})
     assert result.components == []
     assert result.counts == {}
+    assert result.whatsapp is None
+    assert result.ai is None
+    assert result.features == []
+
+
+# The sections the real bridge sends instead of a `components` array.
+REAL_STATUS = {
+    "api_version": "1",
+    "ok": True,
+    "version": "2.4.0",
+    "whatsapp": {"connected": True, "status": "WORKING"},
+    "ai": {"enabled": True, "fast_paths": ["lighting", "climate", "shabbat"]},
+    "users": {"total": 3, "active": 2, "admins": 1},
+    "config": {"ok": True, "status": "OK"},
+    "features": {"shabbat": True, "vision": False},
+    "catalog_count": 19,
+}
+
+
+def test_status_exposes_the_real_sections_rather_than_details_rows() -> None:
+    """The observed bug: real Bobi status was reduced mostly to `details` text."""
+    result = normalize.normalize_status(REAL_STATUS)
+
+    assert result.whatsapp is not None
+    assert result.whatsapp.connected is True
+    assert result.whatsapp.status == "WORKING"
+
+    assert result.ai is not None
+    assert result.ai.enabled is True
+    assert result.ai.fast_paths_count == 3
+    assert result.ai.fast_paths == ["lighting", "climate", "shabbat"]
+
+    assert result.users is not None
+    assert (result.users.total, result.users.active, result.users.admins) == (3, 2, 1)
+
+    assert result.config is not None and result.config.ok is True
+
+    assert {f.id: f.enabled for f in result.features} == {"shabbat": True, "vision": False}
+    assert result.features[0].label == "שעון שבת"
+
+    # None of it is duplicated as a details row.
+    assert result.details == {}
+
+
+def test_status_builds_the_health_row_from_the_sections() -> None:
+    """The real bridge sends no `components`, so the dashboard needs derived ones."""
+    result = normalize.normalize_status(REAL_STATUS)
+
+    assert [c.id for c in result.components] == ["bobi", "whatsapp", "ai", "config"]
+    whatsapp = result.components[1]
+    assert whatsapp.ok is True
+    assert whatsapp.label == "תקין"
+
+
+def test_status_prefers_a_component_list_the_bridge_actually_sends() -> None:
+    result = normalize.normalize_status(
+        {"ok": True, "components": [{"id": "bridge", "name": "גשר", "status": "WORKING"}]}
+    )
+    assert [c.id for c in result.components] == ["bridge"]
+
+
+def test_status_accepts_flat_section_fields() -> None:
+    """Some fields may arrive prefixed rather than nested."""
+    result = normalize.normalize_status(
+        {"whatsapp_connected": True, "ai_enabled": False, "fast_paths": 4,
+         "active_users": 2}
+    )
+
+    assert result.whatsapp is not None and result.whatsapp.connected is True
+    assert result.ai is not None and result.ai.enabled is False
+    assert result.ai.fast_paths_count == 4
+    assert result.users is not None and result.users.active == 2
+    # Consumed, so they are not repeated as counts or details.
+    assert result.counts == {}
+    assert result.details == {}
+
+
+def test_status_reads_a_bare_section_value() -> None:
+    result = normalize.normalize_status({"whatsapp": "WORKING", "config": "OK"})
+
+    assert result.whatsapp is not None and result.whatsapp.connected is True
+    assert result.config is not None and result.config.ok is True
+
+
+def test_status_keeps_an_unmapped_section_field() -> None:
+    result = normalize.normalize_status({"whatsapp": {"connected": True, "session": "main"}})
+
+    assert result.whatsapp is not None
+    assert result.whatsapp.extra == {"session": "main"}
 
 
 # --- devices ----------------------------------------------------------------
@@ -137,6 +226,68 @@ def test_devices_prefer_canonical_over_entity_id_for_display() -> None:
     )
     assert result.devices[0].name == "אור מטבח"
     assert result.devices[0].entity_id == "light.kitchen_main"
+
+
+# --- device limits ----------------------------------------------------------
+def _limits_of(limits: dict) -> object:
+    device = normalize.normalize_devices({"entries": [{"id": "d", "limits": limits}]}).devices[0]
+    assert device.limits is not None
+    return device.limits
+
+
+def test_climate_limits_are_kept_in_full() -> None:
+    """The observed bug: rich limits collapsed to min/max/step nulls."""
+    limits = _limits_of(
+        {
+            "min_temp": 16,
+            "max_temp": 30,
+            "temp_step": 0.5,
+            "preset_modes": ["eco", "boost"],
+            "fan_modes": ["low", "high"],
+            "swing_modes": ["off", "vertical"],
+        }
+    )
+
+    assert (limits.min_temp, limits.max_temp, limits.temp_step) == (16, 30, 0.5)
+    assert limits.preset_modes == ["eco", "boost"]
+    assert limits.fan_modes == ["low", "high"]
+    assert limits.swing_modes == ["off", "vertical"]
+    # The generic view still works for a plain slider.
+    assert (limits.min, limits.max, limits.step) == (16, 30, 0.5)
+
+
+def test_light_and_scent_limits_are_kept_in_full() -> None:
+    light = _limits_of({"min_kelvin": 2200, "max_kelvin": 6500})
+    assert (light.min_kelvin, light.max_kelvin) == (2200, 6500)
+
+    scent = _limits_of(
+        {
+            "intensity_min": 1,
+            "intensity_max": 10,
+            "scent_slots": ["לבנדר", "וניל"],
+            "timer_max_seconds": 7200,
+        }
+    )
+    assert (scent.intensity_min, scent.intensity_max) == (1, 10)
+    assert scent.scent_slots == ["לבנדר", "וניל"]
+    assert scent.timer_max_seconds == 7200
+    assert (scent.min, scent.max) == (1, 10)
+
+
+def test_unrecognised_limits_are_kept_rather_than_dropped() -> None:
+    limits = _limits_of({"min_temp": 16, "humidity_max": 80})
+    assert limits.extra == {"humidity_max": 80}
+
+
+def test_a_limit_list_of_objects_is_not_silently_lost() -> None:
+    limits = _limits_of({"scent_slots": [{"slot": 1, "name": "לבנדר"}]})
+    assert limits.scent_slots == []
+    assert limits.extra["scent_slots"] == [{"slot": 1, "name": "לבנדר"}]
+
+
+def test_a_device_without_limits_reports_none() -> None:
+    device = normalize.normalize_devices({"entries": [{"id": "d"}]}).devices[0]
+    assert device.limits is None
 
 
 # --- capabilities -----------------------------------------------------------
@@ -336,9 +487,56 @@ def test_shabbat_resolves_device_tokens_to_friendly_names() -> None:
     result = normalize.normalize_shabbat(REAL_SHABBAT)
 
     profile = next(p for p in result.profiles if p.kind == "pre_off")
-    assert profile.devices == ["אור מטבח"]
-    # Including the temperature map's keys.
-    assert result.ac_temperatures == {"מזגן סלון": "24"}
+    assert [d.label for d in profile.devices] == ["אור מטבח"]
+    # The bridge's own token travels with the label: it is what Phase 3 will
+    # have to send back to change the profile.
+    assert [d.id for d in profile.devices] == ["kitchen_light"]
+
+
+def test_shabbat_reads_device_tokens_the_bridge_calls_tokens() -> None:
+    """The observed bug: real profiles carry `tokens`, so `devices` came back empty."""
+    result = normalize.normalize_shabbat(
+        {
+            "profiles": {
+                "pre_off": {
+                    "active": True,
+                    "tokens": ["dining", "kitchen", "led_salon", "ac_salon"],
+                }
+            },
+            "device_labels": {
+                "dining": "פינת אוכל",
+                "kitchen": "מטבח",
+                "led_salon": "LED סלון",
+                "ac_salon": "מזגן סלון",
+            },
+        }
+    )
+
+    profile = result.profiles[0]
+    assert [d.model_dump() for d in profile.devices] == [
+        {"id": "dining", "label": "פינת אוכל"},
+        {"id": "kitchen", "label": "מטבח"},
+        {"id": "led_salon", "label": "LED סלון"},
+        {"id": "ac_salon", "label": "מזגן סלון"},
+    ]
+    # And the raw tokens no longer sit in the Advanced panel as the only copy.
+    assert "tokens" not in profile.extra
+
+
+def test_shabbat_reads_the_pre_offset_from_upcoming() -> None:
+    """The observed bug: the offset lives in `upcoming.pre_offset_minutes`."""
+    result = normalize.normalize_shabbat(
+        {"upcoming": {"candle_lighting": "18:52", "pre_offset_minutes": 30}}
+    )
+    assert result.pre_shabbat_offset_minutes == 30
+
+
+def test_shabbat_keeps_each_temperature_tied_to_its_air_conditioner() -> None:
+    result = normalize.normalize_shabbat(REAL_SHABBAT)
+
+    assert [t.model_dump() for t in result.ac_temperatures] == [
+        {"id": "living_room_ac", "label": "מזגן סלון", "temperature": "24"}
+    ]
 
 
 def test_shabbat_reports_who_has_a_draft() -> None:

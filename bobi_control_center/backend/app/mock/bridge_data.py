@@ -22,21 +22,33 @@ def _iso(value) -> str:
 
 
 def status_payload() -> dict[str, Any]:
+    """Sections rather than a health list, as the real bridge sends it.
+
+    The real `bobi_cc_status` sends no `components` array: it reports WhatsApp,
+    the AI fallback and its fast paths, the household, feature toggles and the
+    health of its own configuration as separate sections, and the normalizer
+    builds the dashboard's health row out of those.
+    """
     return {
         "api_version": "1",
         "ok": True,
         "version": "bobi-demo-2.0",
         "uptime": "4 ימים",
-        "components": [
-            {"id": "bobi", "name": "בובי", "status": "online", "label": "פעיל", "ok": True,
-             "detail": "מגיב לפקודות כרגיל"},
-            {"id": "whatsapp", "name": "WhatsApp", "status": "WORKING", "ok": True,
-             "detail": "החיבור יציב מאז אתמול"},
-            {"id": "ai", "name": "AI", "status": "online", "label": "פעיל", "ok": True},
-            {"id": "home_assistant", "name": "Home Assistant", "status": "degraded",
-             "label": "מצב הדגמה", "ok": False,
-             "detail": "אין חיבור אמיתי — הנתונים מדומים"},
-        ],
+        "whatsapp": {"connected": True, "status": "WORKING",
+                     "detail": "החיבור יציב מאז אתמול"},
+        "ai": {
+            "enabled": True,
+            "fast_paths": ["lighting", "climate", "state_query", "shabbat"],
+        },
+        "users": {"total": 2, "active": 2, "admins": 1},
+        "config": {"ok": True, "status": "OK"},
+        "features": {
+            "shabbat": True,
+            "tasks": True,
+            "calendar": True,
+            "notifications": True,
+            "vision": False,
+        },
         # Bare integers alongside the documented fields become count cards.
         "catalog_count": 18,
         "catalog_controllable": 13,
@@ -86,7 +98,9 @@ def _entry(
 _ENTRIES: list[dict[str, Any]] = [
     _entry("light.demo_living_room", "אור סלון", "light", "סלון", "on",
            group="תאורה", scopes=["lighting"], aliases=["אור סלון", "האור בסלון"],
-           capabilities=["turn_on", "turn_off", "set_brightness"], handler="lighting_handler"),
+           capabilities=["turn_on", "turn_off", "set_brightness"], handler="lighting_handler",
+           limits={"min_brightness": 1, "max_brightness": 255,
+                   "min_kelvin": 2200, "max_kelvin": 6500}),
     _entry("light.demo_kitchen", "אור מטבח", "light", "מטבח", "off",
            group="תאורה", scopes=["lighting"], aliases=["אור מטבח", "האור במטבח"],
            capabilities=["turn_on", "turn_off"], handler="lighting_handler", minutes=95),
@@ -97,17 +111,29 @@ _ENTRIES: list[dict[str, Any]] = [
            group="מיזוג", scopes=["climate", "temperature"],
            aliases=["מזגן סלון", "המזגן בסלון"],
            capabilities=["turn_on", "turn_off", "set_temperature"], handler="climate_handler",
-           limits={"min": 16, "max": 30, "step": 1}, minutes=140),
+           limits={"min_temp": 16, "max_temp": 30, "temp_step": 1,
+                   "hvac_modes": ["off", "cool", "heat", "fan_only"],
+                   "preset_modes": ["eco", "boost"],
+                   "fan_modes": ["low", "medium", "high", "auto"],
+                   "swing_modes": ["off", "vertical"]}, minutes=140),
     _entry("climate.demo_parents", "מזגן הורים", "climate", "חדר הורים", "off",
            group="מיזוג", scopes=["climate", "temperature"],
            aliases=["מזגן הורים", "המזגן בחדר הורים"],
            capabilities=["turn_on", "turn_off", "set_temperature"], handler="climate_handler",
-           limits={"min": 16, "max": 30, "step": 1}, minutes=620),
+           limits={"min_temp": 16, "max_temp": 30, "temp_step": 1,
+                   "hvac_modes": ["off", "cool", "heat", "fan_only"],
+                   "preset_modes": ["eco", "boost"],
+                   "fan_modes": ["low", "medium", "high", "auto"],
+                   "swing_modes": ["off", "vertical"]}, minutes=620),
     _entry("climate.demo_girls", "מזגן חדר בנות", "climate", "חדר בנות", "cool",
            group="מיזוג", scopes=["climate", "temperature"],
            aliases=["מזגן בנות", "המזגן בחדר בנות"],
            capabilities=["turn_on", "turn_off", "set_temperature"], handler="climate_handler",
-           limits={"min": 16, "max": 30, "step": 1}, minutes=300),
+           limits={"min_temp": 16, "max_temp": 30, "temp_step": 1,
+                   "hvac_modes": ["off", "cool", "heat", "fan_only"],
+                   "preset_modes": ["eco", "boost"],
+                   "fan_modes": ["low", "medium", "high", "auto"],
+                   "swing_modes": ["off", "vertical"]}, minutes=300),
     _entry("camera.demo_entrance", "מצלמת כניסה", "camera", "חוץ", "recording",
            group="מצלמות", scopes=["cameras"], aliases=["מצלמת כניסה"],
            capabilities=["snapshot"], handler="camera_handler", controllable=False, minutes=5),
@@ -125,7 +151,11 @@ _ENTRIES: list[dict[str, Any]] = [
            capabilities=["turn_on", "turn_off"], handler="switch_handler", minutes=180),
     _entry("switch.demo_scent", "מפיץ ריח", "switch", "סלון", "off",
            group="ריח", scopes=["scent", "switches"], aliases=["מפיץ ריח", "הריח"],
-           capabilities=["turn_on", "turn_off"], handler="scent_handler", minutes=400),
+           capabilities=["turn_on", "turn_off", "set_intensity"], handler="scent_handler",
+           limits={"intensity_min": 1, "intensity_max": 10,
+                   "scent_slots": ["לבנדר", "וניל", "הדרים"],
+                   "timer_max_seconds": 7200},
+           minutes=400),
     _entry("vacuum.demo_robot", "רובי", "vacuum", "מטבח", "docked",
            group="ניקיון", scopes=["vacuum"], aliases=["רובי", "השואב"],
            capabilities=["start", "stop", "return_to_base"], handler="vacuum_handler",
@@ -256,24 +286,29 @@ def users_payload() -> dict[str, Any]:
 
 
 def shabbat_payload() -> dict[str, Any]:
-    """Grouped under `upcoming`, `profiles` and `drafts`, as the bridge sends it."""
+    """Grouped under `upcoming`, `profiles` and `drafts`, as the bridge sends it.
+
+    Two details mirror the real bridge exactly: the pre-Shabbat offset lives
+    inside `upcoming` under a shorter name, and a profile lists its devices as
+    `tokens` that only `device_labels` can translate.
+    """
     return {
         "api_version": "1",
         "upcoming": {
             "parasha": "פרשת ראה",
             "candle_lighting": "18:52",
             "havdalah": "19:51",
+            "pre_offset_minutes": 20,
         },
-        "pre_shabbat_offset_minutes": 20,
         "profiles": {
             "pre_off": {"label": "כיבוי לפני שבת", "active": True, "offset_minutes": 20,
-                        "devices": ["kitchen_light", "living_room_ac"]},
+                        "tokens": ["kitchen_light", "living_room_ac"]},
             "pre_on": {"label": "הדלקה לפני שבת", "active": True, "offset_minutes": 10,
-                       "devices": ["living_room_light", "garden_light"]},
+                       "tokens": ["living_room_light", "garden_light"]},
             "night_off": {"label": "כיבוי לילה", "active": True, "time": "23:30",
-                          "devices": ["living_room_light", "living_room_ac"]},
+                          "tokens": ["living_room_light", "living_room_ac"]},
             "morning_on": {"label": "הדלקת בוקר", "active": True, "time": "06:30",
-                           "devices": ["kitchen_light", "boiler"]},
+                           "tokens": ["kitchen_light", "boiler"]},
         },
         "drafts": {"user_a": {"has_draft": False}, "user_b": {"has_draft": False}},
         "ac_temperatures": {"living_room_ac": 24, "parents_ac": 23, "girls_ac": 24},

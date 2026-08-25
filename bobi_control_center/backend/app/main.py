@@ -21,11 +21,9 @@ from app.api import router as bobi_router
 from app.api.deps import build_adapter
 from app.config import Settings, get_settings
 from app.errors import INTERNAL, BobiError
+from app.version import APP_NAME, APP_VERSION
 
 logger = logging.getLogger("bobi")
-
-APP_NAME = "bobi-control-center"
-APP_VERSION = "2.0.0"
 
 #: Where the compiled SPA is copied during the Docker build.
 STATIC_DIR = Path(__file__).parent / "static"

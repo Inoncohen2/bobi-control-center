@@ -27,6 +27,7 @@ import logging
 from typing import Any
 
 from app.models.bridge import (
+    AiStatus,
     BridgeCapabilities,
     BridgeCapability,
     BridgeDevice,
@@ -43,10 +44,16 @@ from app.models.bridge import (
     BridgeUser,
     BridgeUsers,
     CapabilityToggle,
+    ConfigStatus,
     DeviceLimits,
     DiagnosticCheck,
+    FeatureFlag,
+    ProfileDevice,
+    ShabbatAcTemperature,
     ShabbatProfile,
     StatusComponent,
+    UsersSummary,
+    WhatsAppStatus,
 )
 
 logger = logging.getLogger("bobi.normalize")
@@ -138,6 +145,18 @@ def _humanize(key: str) -> str:
     return key.replace("_", " ").strip().capitalize()
 
 
+def _count(value: Any) -> int | None:
+    """A figure, from a number or from the length of a collection.
+
+    A boolean is not a figure: `active: true` means "yes", not "one".
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (list, dict)):
+        return len(value)
+    return _int(value)
+
+
 def _container(payload: Payload, *keys: str) -> tuple[Any, str | None]:
     """Find the collection a response carries, and report which key held it."""
     for key in keys:
@@ -158,15 +177,40 @@ _STATUS_MAPPED = {
 def normalize_status(payload: Payload) -> BridgeStatus:
     """`script.bobi_cc_status`.
 
-    Beyond the documented fields, any remaining scalar becomes a `details` row
-    and any remaining integer becomes a `counts` entry, so real Bobi status
-    fields are displayed rather than dropped on the floor.
+    The real bridge reports rather more than a health list: WhatsApp
+    connectivity, the AI fallback and its fast paths, how many household members
+    are active, feature toggles and the health of Bobi's own configuration.
+    Those are read into first-class sections rather than being flattened into
+    `details`, where the dashboard could only print them as text.
+
+    Each section is accepted nested (`{"whatsapp": {"connected": true}}`), bare
+    (`{"whatsapp": "WORKING"}`) or flat-prefixed (`{"whatsapp_connected": true}`),
+    because only the bridge decides which it sends. Whatever is left over still
+    becomes a `details` row or a `counts` entry, so nothing is dropped.
     """
+    used: set[str] = set()
+
+    whatsapp, keys = _whatsapp_status(payload)
+    used |= keys
+    ai, keys = _ai_status(payload)
+    used |= keys
+    users, keys = _users_summary(payload)
+    used |= keys
+    config, keys = _config_status(payload)
+    used |= keys
+    features, keys = _feature_flags(payload)
+    used |= keys
+
+    ok = _bool(payload.get("ok"))
     components = [
         component
         for item in _as_items(payload.get("components"))
         if (component := _status_component(item))
     ]
+    if not components:
+        # The real bridge sends no component list, so build the dashboard's top
+        # row out of the sections it does send.
+        components = _derived_components(ok, whatsapp, ai, config)
 
     counts: dict[str, int] = {}
     raw_counts = payload.get("counts")
@@ -177,7 +221,7 @@ def normalize_status(payload: Payload) -> BridgeStatus:
                 counts[key] = number
 
     details: dict[str, str] = {}
-    for key, value in _leftover(payload, _STATUS_MAPPED).items():
+    for key, value in _leftover(payload, _STATUS_MAPPED | used).items():
         number = _int(value) if not isinstance(value, bool) else None
         if number is not None and isinstance(value, (int, float)):
             # A bare integer beside the documented fields reads as a headline
@@ -189,14 +233,339 @@ def normalize_status(payload: Payload) -> BridgeStatus:
             details[key] = text
 
     return BridgeStatus(
-        ok=_bool(payload.get("ok")),
+        ok=ok,
         version=_text(_first(payload, "version", "bobi_version", "api_version")),
         uptime=_text(_first(payload, "uptime", "up_since", "started_at")),
+        whatsapp=whatsapp,
+        ai=ai,
+        users=users,
+        config=config,
+        features=features,
         components=components,
         counts=counts,
         details=details,
         writes_enabled=False,
     )
+
+
+def _section(payload: Payload, *names: str) -> tuple[Payload, set[str]]:
+    """Gather one status section, however the bridge chose to spell it.
+
+    Returns the section's fields plus every top-level key consumed, so the
+    caller can keep those out of the leftover `details` map.
+    """
+    section: Payload = {}
+    used: set[str] = set()
+
+    for name in names:
+        if name not in payload:
+            continue
+        value = payload[name]
+        if value is None:
+            continue
+        used.add(name)
+        if isinstance(value, dict):
+            for key, item in value.items():
+                section.setdefault(key, item)
+        elif isinstance(value, list):
+            section.setdefault("items", value)
+        else:
+            # A bare scalar, e.g. {"whatsapp": "WORKING"}.
+            section.setdefault("value", value)
+
+    for key, value in payload.items():
+        for name in names:
+            if key.startswith(f"{name}_"):
+                section.setdefault(key[len(name) + 1:], value)
+                used.add(key)
+                break
+
+    return {key: value for key, value in section.items() if value is not None}, used
+
+
+_WHATSAPP_MAPPED = {
+    "value", "status", "state", "connected", "online", "linked", "label",
+    "detail", "description", "message",
+}
+
+
+def _whatsapp_status(payload: Payload) -> tuple[WhatsAppStatus | None, set[str]]:
+    section, used = _section(payload, "whatsapp", "whats_app")
+    if not section:
+        return None, used
+
+    status = _text(_first(section, "status", "state", "value"))
+    connected = _bool(_first(section, "connected", "online", "linked"))
+    if connected is None:
+        connected = _bool(status)
+
+    return WhatsAppStatus(
+        connected=connected,
+        status=status,
+        label=_text(section.get("label")) or _state_label(
+            status, connected, yes="מחובר", no="מנותק"
+        ),
+        detail=_text(_first(section, "detail", "description", "message")),
+        extra=_leftover(section, _WHATSAPP_MAPPED),
+    ), used
+
+
+_AI_MAPPED = {
+    "value", "enabled", "active", "on", "status", "state", "fast_paths",
+    "fastpaths", "fast_path", "fast_paths_enabled", "fast_paths_count",
+    "fast_path_count", "label", "detail", "description", "message",
+}
+
+#: Fast-path keys the bridge may send at the top level rather than under `ai`.
+_FAST_PATH_KEYS = (
+    "fast_paths", "fastpaths", "fast_paths_enabled", "fast_paths_count",
+    "fast_path_count",
+)
+
+
+def _ai_status(payload: Payload) -> tuple[AiStatus | None, set[str]]:
+    section, used = _section(payload, "ai")
+    for key in _FAST_PATH_KEYS:
+        if key in payload and key not in used and payload[key] is not None:
+            section.setdefault(key, payload[key])
+            used.add(key)
+    if not section:
+        return None, used
+
+    enabled = _bool(_first(section, "enabled", "active", "on", "value", "status", "state"))
+    fast_enabled, fast_count, fast_names = _fast_paths(section)
+
+    detail = _text(_first(section, "detail", "description", "message"))
+    if detail is None and fast_count:
+        detail = f"{fast_count} מסלולים מהירים"
+
+    return AiStatus(
+        enabled=enabled,
+        fast_paths_enabled=fast_enabled,
+        fast_paths_count=fast_count,
+        fast_paths=fast_names,
+        label=_text(section.get("label")) or _state_label(
+            _text(_first(section, "status", "state")), enabled, yes="פעיל", no="כבוי"
+        ),
+        detail=detail,
+        extra=_leftover(section, _AI_MAPPED),
+    ), used
+
+
+def _fast_paths(section: Payload) -> tuple[bool | None, int | None, list[str]]:
+    """Read fast paths from a flag, a count, or a list of path names."""
+    raw = _first(section, "fast_paths", "fastpaths", "fast_path")
+
+    enabled: bool | None = None
+    count: int | None = None
+    names: list[str] = []
+
+    if isinstance(raw, bool):
+        enabled = raw
+    elif isinstance(raw, (int, float)):
+        count = int(raw)
+    elif isinstance(raw, list):
+        names = _str_list(raw)
+        count = len(raw)
+    elif isinstance(raw, dict):
+        enabled = _bool(_first(raw, "enabled", "active"))
+        count = _count(_first(raw, "count", "total"))
+        names = _str_list(_first(raw, "paths", "names", "items", "list"))
+        if count is None and names:
+            count = len(names)
+    elif raw is not None:
+        enabled = _bool(raw)
+
+    explicit_enabled = _bool(_first(section, "fast_paths_enabled"))
+    if explicit_enabled is not None:
+        enabled = explicit_enabled
+    explicit_count = _count(_first(section, "fast_paths_count", "fast_path_count"))
+    if explicit_count is not None:
+        count = explicit_count
+
+    if enabled is None and count is not None:
+        enabled = count > 0
+    return enabled, count, names
+
+
+_USERS_MAPPED = {
+    "items", "value", "names", "total", "count", "active", "active_count",
+    "active_users", "admins", "admin", "admin_count", "admin_users",
+}
+
+
+def _users_summary(payload: Payload) -> tuple[UsersSummary | None, set[str]]:
+    section, used = _section(payload, "users")
+    for key in ("active_users", "admin_users", "admins"):
+        if key in payload and key not in used and payload[key] is not None:
+            section.setdefault(key.removesuffix("_users"), payload[key])
+            used.add(key)
+    if not section:
+        return None, used
+
+    names = _user_names(_first(section, "items", "names", "list"))
+    total = _count(_first(section, "total", "count", "value"))
+    if total is None and names:
+        total = len(names)
+
+    return UsersSummary(
+        total=total,
+        active=_count(_first(section, "active", "active_count", "active_users")),
+        admins=_count(_first(section, "admins", "admin", "admin_count", "admin_users")),
+        names=names,
+        extra=_leftover(section, _USERS_MAPPED),
+    ), used
+
+
+def _user_names(raw: Any) -> list[str]:
+    """Names out of a list of strings or a list of user objects."""
+    if isinstance(raw, dict):
+        raw = list(raw.values())
+    if not isinstance(raw, list):
+        return []
+    names: list[str] = []
+    for item in raw:
+        name = (
+            _text(_first(item, "name", "display_name", "id"))
+            if isinstance(item, dict)
+            else _text(item)
+        )
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+_CONFIG_MAPPED = {
+    "value", "ok", "valid", "healthy", "status", "state", "label", "detail",
+    "description", "message",
+}
+
+
+def _config_status(payload: Payload) -> tuple[ConfigStatus | None, set[str]]:
+    section, used = _section(payload, "config", "configuration")
+    if not section:
+        return None, used
+
+    status = _text(_first(section, "status", "state", "value"))
+    ok = _bool(_first(section, "ok", "valid", "healthy"))
+    if ok is None:
+        ok = _bool(status)
+
+    return ConfigStatus(
+        ok=ok,
+        status=status,
+        label=_text(section.get("label")) or _state_label(
+            status, ok, yes="תקינה", no="דורשת טיפול"
+        ),
+        detail=_text(_first(section, "detail", "description", "message")),
+        extra=_leftover(section, _CONFIG_MAPPED),
+    ), used
+
+
+#: Hebrew names for the feature toggles Bobi is known to report. An unknown
+#: feature still renders, under a humanised version of its key.
+_FEATURE_LABELS = {
+    "whatsapp": "WhatsApp",
+    "ai": "בינה מלאכותית",
+    "ai_fallback": "AI fallback",
+    "fast_paths": "מסלולים מהירים",
+    "shabbat": "שעון שבת",
+    "tasks": "משימות",
+    "calendar": "יומן",
+    "notifications": "התראות יזומות",
+    "vision": "עיבוד תמונות",
+    "cameras": "מצלמות",
+    "scent": "מפיץ ריח",
+    "vacuum": "שואב",
+    "schedules": "תזמונים",
+}
+
+
+def _feature_flags(payload: Payload) -> tuple[list[FeatureFlag], set[str]]:
+    """`features` as a map of name → flag, or a list of feature objects."""
+    raw, key = _container(payload, "features", "feature_flags", "flags")
+    used = {key} if key else set()
+
+    flags: list[FeatureFlag] = []
+    for item in _as_items(raw, id_key="id"):
+        identifier = _text(_first(item, "id", "key", "name"))
+        if identifier is None:
+            continue
+        flags.append(
+            FeatureFlag(
+                id=identifier,
+                label=_text(_first(item, "label", "title"))
+                or _FEATURE_LABELS.get(identifier, _humanize(identifier)),
+                enabled=_bool(_first(item, "enabled", "value", "state", "active", "status")),
+                detail=_text(_first(item, "detail", "description")),
+            )
+        )
+    return flags, used
+
+
+def _state_label(status: str | None, ok: bool | None, *, yes: str, no: str) -> str:
+    """A readable label: the bridge's own word translated, or a yes/no."""
+    if status is not None:
+        return _STATE_WORDS.get(status.lower(), status)
+    if ok is True:
+        return yes
+    if ok is False:
+        return no
+    return "לא ידוע"
+
+
+def _derived_components(
+    ok: bool | None,
+    whatsapp: WhatsAppStatus | None,
+    ai: AiStatus | None,
+    config: ConfigStatus | None,
+) -> list[StatusComponent]:
+    """The dashboard's health row, built from the sections the bridge sent."""
+    components: list[StatusComponent] = []
+    if ok is not None:
+        components.append(
+            StatusComponent(
+                id="bobi",
+                name="בובי",
+                label="פעיל" if ok else "לא תקין",
+                state="ok" if ok else "error",
+                ok=ok,
+            )
+        )
+    if whatsapp is not None:
+        components.append(
+            StatusComponent(
+                id="whatsapp",
+                name="WhatsApp",
+                label=whatsapp.label or "לא ידוע",
+                state=whatsapp.status,
+                ok=whatsapp.connected,
+                detail=whatsapp.detail,
+            )
+        )
+    if ai is not None:
+        components.append(
+            StatusComponent(
+                id="ai",
+                name="בינה מלאכותית",
+                label=ai.label or "לא ידוע",
+                state=None,
+                ok=ai.enabled,
+                detail=ai.detail,
+            )
+        )
+    if config is not None:
+        components.append(
+            StatusComponent(
+                id="config",
+                name="תצורה",
+                label=config.label or "לא ידוע",
+                state=config.status,
+                ok=config.ok,
+                detail=config.detail,
+            )
+        )
+    return components
 
 
 #: Machine status words the bridge may use in place of a human label.
@@ -283,16 +652,6 @@ def _device(item: Payload) -> BridgeDevice | None:
         return None
 
     state = _text(item.get("state"))
-    limits_raw = item.get("limits")
-    limits = (
-        DeviceLimits(
-            min=_number(limits_raw.get("min")),
-            max=_number(limits_raw.get("max")),
-            step=_number(limits_raw.get("step")),
-        )
-        if isinstance(limits_raw, dict)
-        else None
-    )
 
     return BridgeDevice(
         id=identifier,
@@ -311,7 +670,7 @@ def _device(item: Payload) -> BridgeDevice | None:
         logical_controllable=_bool(item.get("logical_controllable")),
         entity_id=entity_id,
         handler=_text(item.get("handler")),
-        limits=limits,
+        limits=_limits(item.get("limits")),
         last_changed=_text(item.get("last_changed")),
         extra=_leftover(item, _DEVICE_MAPPED),
     )
@@ -322,6 +681,98 @@ def _number(value: Any) -> float | None:
         return float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
+
+
+_LIMIT_MAPPED = {
+    "min", "max", "step",
+    "min_temp", "max_temp", "min_temperature", "max_temperature",
+    "temp_step", "target_temp_step", "temperature_step",
+    "preset_modes", "fan_modes", "swing_modes", "hvac_modes", "modes",
+    "min_kelvin", "max_kelvin", "min_color_temp_kelvin", "max_color_temp_kelvin",
+    "min_brightness", "max_brightness",
+    "intensity_min", "intensity_max", "min_intensity", "max_intensity",
+    "scent_slots", "slots", "timer_max_seconds", "max_timer_seconds",
+}
+
+#: The list-valued limits, and where each is read from.
+_LIMIT_LISTS = (
+    ("preset_modes", ("preset_modes",)),
+    ("fan_modes", ("fan_modes",)),
+    ("swing_modes", ("swing_modes",)),
+    ("hvac_modes", ("hvac_modes", "modes")),
+    ("scent_slots", ("scent_slots", "slots")),
+)
+
+
+def _limits(raw: Any) -> DeviceLimits | None:
+    """A device's constraints, kept whole.
+
+    Bobi's catalog carries domain-specific limits — temperature ranges and mode
+    lists for climate, colour temperature for lights, intensity, slots and a
+    timer for the scent diffuser. Collapsing all of that into a bare
+    min/max/step threw away exactly what Phase 3's editing controls will need,
+    so every field is preserved and anything unrecognised lands in `extra`.
+
+    `min`/`max`/`step` are still filled, from whichever domain range is the one
+    a person would actually edit, so a generic slider keeps working.
+    """
+    if not isinstance(raw, dict) or not raw:
+        return None
+
+    min_temp = _number(_first(raw, "min_temp", "min_temperature"))
+    max_temp = _number(_first(raw, "max_temp", "max_temperature"))
+    temp_step = _number(_first(raw, "temp_step", "target_temp_step", "temperature_step"))
+    min_kelvin = _number(_first(raw, "min_kelvin", "min_color_temp_kelvin"))
+    max_kelvin = _number(_first(raw, "max_kelvin", "max_color_temp_kelvin"))
+    min_brightness = _number(raw.get("min_brightness"))
+    max_brightness = _number(raw.get("max_brightness"))
+    intensity_min = _number(_first(raw, "intensity_min", "min_intensity"))
+    intensity_max = _number(_first(raw, "intensity_max", "max_intensity"))
+
+    generic_min = _number(raw.get("min"))
+    generic_max = _number(raw.get("max"))
+    generic_step = _number(raw.get("step"))
+    if generic_min is None and generic_max is None:
+        for low, high in (
+            (min_temp, max_temp),
+            (intensity_min, intensity_max),
+            (min_brightness, max_brightness),
+            (min_kelvin, max_kelvin),
+        ):
+            if low is not None or high is not None:
+                generic_min, generic_max = low, high
+                break
+    if generic_step is None:
+        generic_step = temp_step
+
+    lists = {name: _str_list(_first(raw, *keys)) for name, keys in _LIMIT_LISTS}
+
+    extra = _leftover(raw, _LIMIT_MAPPED)
+    # A list of objects rather than of names is not something this contract can
+    # represent, so keep the original instead of silently reporting none.
+    for name, keys in _LIMIT_LISTS:
+        if not lists[name]:
+            for key in keys:
+                if raw.get(key):
+                    extra[key] = raw[key]
+
+    return DeviceLimits(
+        min=generic_min,
+        max=generic_max,
+        step=generic_step,
+        min_temp=min_temp,
+        max_temp=max_temp,
+        temp_step=temp_step,
+        min_kelvin=min_kelvin,
+        max_kelvin=max_kelvin,
+        min_brightness=min_brightness,
+        max_brightness=max_brightness,
+        intensity_min=intensity_min,
+        intensity_max=intensity_max,
+        timer_max_seconds=_int(_first(raw, "timer_max_seconds", "max_timer_seconds")),
+        extra=extra,
+        **lists,
+    )
 
 
 # --- capabilities -----------------------------------------------------------
@@ -500,14 +951,16 @@ def normalize_probe(payload: Payload, text: str) -> BridgeProbe:
 # --- shabbat ----------------------------------------------------------------
 _SHABBAT_MAPPED = {
     "upcoming", "times", "profiles", "drafts", "candle_lighting", "havdalah",
-    "parasha", "pre_shabbat_offset_minutes", "offset_minutes", "ac_temperatures",
+    "parasha", "pre_shabbat_offset_minutes", "pre_offset_minutes",
+    "offset_minutes", "ac_temperatures",
     "device_labels", "labels", "has_draft", "writes_enabled",
     "pre_off_profile", "pre_on_profile", "night_off_profile", "morning_on_profile",
 }
 
 _PROFILE_MAPPED = {
     "id", "key", "kind", "name", "label", "title", "active", "enabled",
-    "time", "at", "offset_minutes", "offset", "devices", "targets",
+    "time", "at", "offset_minutes", "offset", "devices", "targets", "tokens",
+    "device_tokens",
 }
 
 #: Labels for the profile kinds Bobi is known to define. An unknown kind falls
@@ -554,24 +1007,20 @@ def normalize_shabbat(payload: Payload) -> BridgeShabbat:
     drafts = payload.get("drafts")
     draft_owners = _draft_owners(drafts)
 
-    ac_raw = payload.get("ac_temperatures")
-    ac_temperatures: dict[str, str] = {}
-    if isinstance(ac_raw, dict):
-        for token, value in ac_raw.items():
-            text = _text(value)
-            if text is not None:
-                # Resolve the token so the UI never shows a raw device token.
-                ac_temperatures[labels.get(token, token)] = text
+    # The real bridge carries the pre-Shabbat offset inside `upcoming`, under a
+    # shorter name than the canonical one.
+    offset_keys = ("pre_offset_minutes", "pre_shabbat_offset_minutes", "offset_minutes")
+    pre_offset = _int(_first(upcoming, *offset_keys))
+    if pre_offset is None:
+        pre_offset = _int(_first(payload, *offset_keys))
 
     return BridgeShabbat(
         candle_lighting=time_of("candle_lighting", "candles", "shabbat_start", "start"),
         havdalah=time_of("havdalah", "shabbat_end", "end"),
         parasha=time_of("parasha", "parsha"),
-        pre_shabbat_offset_minutes=_int(
-            _first(payload, "pre_shabbat_offset_minutes", "offset_minutes")
-        ),
+        pre_shabbat_offset_minutes=pre_offset,
         profiles=profiles,
-        ac_temperatures=ac_temperatures,
+        ac_temperatures=_ac_temperatures(payload.get("ac_temperatures"), labels),
         has_draft=bool(draft_owners) or bool(_bool(payload.get("has_draft"))),
         draft_owners=draft_owners,
         writes_enabled=False,
@@ -598,12 +1047,82 @@ def _shabbat_profile(item: Payload, labels: dict[str, str]) -> ShabbatProfile | 
         active=_bool(_first(item, "active", "enabled")),
         time=_text(_first(item, "time", "at")),
         offset_minutes=_int(_first(item, "offset_minutes", "offset")),
-        devices=[
-            labels.get(token, token)
-            for token in _str_list(_first(item, "devices", "targets"))
-        ],
+        devices=_profile_devices(
+            _first(item, "devices", "targets", "tokens", "device_tokens"), labels
+        ),
         extra=_leftover(item, _PROFILE_MAPPED),
     )
+
+
+def _profile_devices(raw: Any, labels: dict[str, str]) -> list[ProfileDevice]:
+    """Resolve a profile's device tokens into id + label pairs.
+
+    The bridge lists a profile's devices as its own short tokens (`led_salon`),
+    which mean nothing to a household member, and supplies a `device_labels` map
+    to translate them. Both halves are kept: the label is what the screen shows,
+    and the token is what Phase 3 will have to send back to change the profile.
+    """
+    entries: list[Any]
+    if isinstance(raw, dict):
+        entries = [{"id": key, "label": value} for key, value in raw.items()]
+    elif isinstance(raw, list):
+        entries = raw
+    elif raw is None:
+        entries = []
+    else:
+        entries = [raw]
+
+    devices: list[ProfileDevice] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if isinstance(entry, dict):
+            token = _text(_first(entry, "id", "token", "key", "device", "entity_id"))
+            label = _text(_first(entry, "label", "name"))
+        else:
+            token = _text(entry)
+            label = None
+        if token is None or token in seen:
+            continue
+        seen.add(token)
+        devices.append(
+            ProfileDevice(id=token, label=label or labels.get(token) or _humanize(token))
+        )
+    return devices
+
+
+def _ac_temperatures(raw: Any, labels: dict[str, str]) -> list[ShabbatAcTemperature]:
+    """Keep each temperature tied to the air conditioner it belongs to.
+
+    A bare `{token: degrees}` map loses the device as soon as the token is
+    translated for display, so both the token and its label travel with the
+    temperature.
+    """
+    pairs: list[tuple[str | None, Any]] = []
+    if isinstance(raw, dict):
+        pairs = list(raw.items())
+    elif isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                pairs.append((
+                    _text(_first(item, "id", "token", "device", "key", "entity_id")),
+                    _first(item, "temperature", "temp", "value", "degrees"),
+                ))
+
+    temperatures: list[ShabbatAcTemperature] = []
+    seen: set[str] = set()
+    for token, value in pairs:
+        text = _text(value)
+        if token is None or text is None or token in seen:
+            continue
+        seen.add(token)
+        temperatures.append(
+            ShabbatAcTemperature(
+                id=token,
+                label=labels.get(token) or _humanize(token),
+                temperature=text,
+            )
+        )
+    return temperatures
 
 
 def _draft_owners(drafts: Any) -> list[str]:

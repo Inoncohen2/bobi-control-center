@@ -6,7 +6,7 @@ import { Card, SectionTitle } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { EmptyState, ErrorState, LoadingState } from '@/components/state/QueryBoundary';
 import { useConnection, useDiagnostics, useStatus } from '@/hooks/queries';
-import type { BridgeIssue, StatusComponent } from '@/types/api';
+import type { AiStatus, BridgeIssue, FeatureFlag, StatusComponent, UsersSummary } from '@/types/api';
 import { countLabel } from '@/utils/format';
 import { cn } from '@/utils/cn';
 
@@ -49,6 +49,92 @@ function StatCard({ label, value, warn }: { label: string; value: number; warn?:
         {value}
       </p>
       <p className="mt-1 text-sm font-medium text-slate-600 dark:text-slate-300">{label}</p>
+    </Card>
+  );
+}
+
+/**
+ * The AI fallback's fast paths.
+ *
+ * The bridge may report them as a count or as the path names themselves, and
+ * the backend normalizes both into a count plus a (possibly empty) list.
+ */
+function FastPathsCard({ ai }: { ai: AiStatus }) {
+  const headline =
+    ai.fast_paths_count !== null
+      ? String(ai.fast_paths_count)
+      : ai.fast_paths_enabled === true
+        ? 'פעיל'
+        : ai.fast_paths_enabled === false
+          ? 'כבוי'
+          : '—';
+
+  return (
+    <Card className="p-4">
+      <p className="text-sm font-medium text-slate-600 dark:text-slate-300">מסלולים מהירים</p>
+      <p className="mt-1 text-3xl font-bold tabular-nums text-slate-900 dark:text-slate-50">
+        {headline}
+      </p>
+      <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+        פקודות שבובי מזהה בעצמו, בלי לפנות ל-AI
+      </p>
+      {ai.fast_paths.length > 0 ? (
+        <div className="mt-2.5 flex flex-wrap gap-1.5">
+          {ai.fast_paths.map((path) => (
+            <Badge key={path} tone="neutral">
+              <span dir="ltr">{path}</span>
+            </Badge>
+          ))}
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
+function UsersCard({ users }: { users: UsersSummary }) {
+  const rows: Array<[string, number]> = [
+    ['פעילים', users.active],
+    ['סה״כ', users.total],
+    ['מנהלים', users.admins],
+  ].filter((row): row is [string, number] => typeof row[1] === 'number');
+
+  return (
+    <Card className="p-4">
+      <p className="text-sm font-medium text-slate-600 dark:text-slate-300">משתמשי הבית</p>
+      <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-2">
+        {rows.map(([label, value]) => (
+          <div key={label}>
+            <dd className="text-2xl font-bold tabular-nums text-slate-900 dark:text-slate-50">
+              {value}
+            </dd>
+            <dt className="text-xs text-slate-500 dark:text-slate-400">{label}</dt>
+          </div>
+        ))}
+      </dl>
+      {users.names.length > 0 ? (
+        <p className="mt-2 text-xs text-slate-400 dark:text-slate-500">{users.names.join(' · ')}</p>
+      ) : null}
+    </Card>
+  );
+}
+
+/** Bobi's feature toggles. READ-ONLY in Phase 2. */
+function FeaturesCard({ features }: { features: FeatureFlag[] }) {
+  return (
+    <Card className="p-4">
+      <p className="text-sm font-medium text-slate-600 dark:text-slate-300">תכונות</p>
+      <ul className="mt-2.5 flex flex-wrap gap-1.5">
+        {features.map((feature) => (
+          <li key={feature.id}>
+            <Badge tone={feature.enabled === false ? 'muted' : 'ok'} dot>
+              {feature.label}
+            </Badge>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2.5 text-xs text-slate-400 dark:text-slate-500">
+        עריכה תהיה זמינה בשלב הבא
+      </p>
     </Card>
   );
 }
@@ -124,6 +210,10 @@ export function DashboardPage() {
 
   const counts = Object.entries(status.data?.counts ?? {});
   const issues = diagnostics.data?.issues ?? [];
+  // Sections the bridge reports beyond the health row.
+  const ai = status.data?.ai ?? null;
+  const users = status.data?.users ?? null;
+  const features = status.data?.features ?? [];
 
   return (
     <>
@@ -162,6 +252,19 @@ export function DashboardPage() {
               </div>
             )}
           </section>
+
+          {ai || users || features.length > 0 ? (
+            <section aria-labelledby="bobi-heading">
+              <SectionTitle>
+                <span id="bobi-heading">בובי בקצרה</span>
+              </SectionTitle>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {ai ? <FastPathsCard ai={ai} /> : null}
+                {users ? <UsersCard users={users} /> : null}
+                {features.length > 0 ? <FeaturesCard features={features} /> : null}
+              </div>
+            </section>
+          ) : null}
 
           {counts.length > 0 ? (
             <section aria-labelledby="stats-heading">

@@ -20,7 +20,7 @@ import {
   type DeviceFilters,
 } from '@/features/devices/filter';
 import { DEVICE_SCOPES, type BridgeDevice, type DeviceScope } from '@/types/api';
-import { SCOPE_LABELS, stateLabel, timeAgo } from '@/utils/format';
+import { SCOPE_LABELS, limitEntries, stateLabel, timeAgo } from '@/utils/format';
 
 const AVAILABILITY_OPTIONS: Array<{ value: AvailabilityFilter; label: string }> = [
   { value: 'all', label: 'הכול' },
@@ -41,6 +41,8 @@ const TECHNICAL_FIELDS: Array<[string, string]> = [
 ];
 
 function DeviceDetail({ device, onClose }: { device: BridgeDevice; onClose: () => void }) {
+  const limits = limitEntries(device.limits as unknown as Record<string, unknown> | null);
+
   return (
     <Modal open onClose={onClose} title={device.name}>
       <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-900/40">
@@ -94,11 +96,25 @@ function DeviceDetail({ device, onClose }: { device: BridgeDevice; onClose: () =
           </div>
         ) : null}
 
-        {device.limits && (device.limits.min !== null || device.limits.max !== null) ? (
+        {/*
+          The bridge's own limits, kept whole by the backend rather than
+          collapsed into a single range — a climate device has its mode lists,
+          a light its colour temperature, the diffuser its slots and timer.
+        */}
+        {limits.length > 0 ? (
           <div>
-            <dt className="text-sm text-slate-500 dark:text-slate-400">טווח מותר</dt>
-            <dd className="font-medium text-slate-900 dark:text-slate-100">
-              {device.limits.min ?? '—'}–{device.limits.max ?? '—'}
+            <dt className="mb-1 text-sm text-slate-500 dark:text-slate-400">טווחים ואפשרויות</dt>
+            <dd>
+              <ul className="divide-y divide-slate-100 text-sm dark:divide-slate-700/60">
+                {limits.map(([label, value]) => (
+                  <li key={label} className="flex items-baseline justify-between gap-4 py-1.5">
+                    <span className="text-slate-500 dark:text-slate-400">{label}</span>
+                    <span className="text-left font-medium text-slate-900 dark:text-slate-100">
+                      {value}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </dd>
           </div>
         ) : null}

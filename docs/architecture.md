@@ -107,7 +107,11 @@ above it — routes, and therefore React — sees one clean schema.
 | --- | --- |
 | `entries` | `devices` (plus derived `areas`, `groups`, `available`) |
 | `registry` (map or list) | `capabilities` |
+| status sections (`whatsapp`, `ai`, `users`, `config`, `features`) | first-class fields + a derived `components` health row |
+| domain limits (`min_temp`, `preset_modes`, `min_kelvin`, `scent_slots`, …) | one `limits` model keeping all of them, plus a generic `min`/`max`/`step` |
 | `upcoming` + `profiles` + `drafts` | flat times + one `profiles` list + `has_draft` |
+| profile `tokens` + `device_labels` | `devices: [{id, label}]` |
+| `ac_temperatures` map | a list, each temperature tied to its air conditioner |
 | per-user `users` | one flat `tasks` list with `owner` and `list_name` |
 | `{"result": {...}}` | flattened probe fields |
 | `checks` as a **map** | `checks` as a list |
@@ -119,6 +123,9 @@ Three properties make it safe:
   bug this layer was written to fix.
 - **Nothing dropped.** Unmapped fields land in a per-item `extra` map, surfaced
   in the Advanced panel, so a growing registry shows up rather than vanishing.
+  This extends to values the contract *could* have flattened away: a climate
+  device's mode lists and a profile's device tokens are kept, because Phase 3's
+  editing controls will need exactly those.
 - **Tolerant.** A collection may arrive as a map or a list; a field may be
   missing or oddly typed. A partial response produces an empty screen, not a
   502. `checks` arriving as a map is exactly what used to 502 the diagnostics

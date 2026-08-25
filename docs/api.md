@@ -58,7 +58,7 @@ Stack traces never leave the process.
 ### `GET /health`
 
 ```json
-{ "ok": true, "app": "bobi-control-center", "version": "2.0.0",
+{ "ok": true, "app": "bobi-control-center", "version": "2.0.1",
   "adapter": "home_assistant", "writes_enabled": false }
 ```
 
@@ -67,8 +67,8 @@ Stack traces never leave the process.
 Whether the app is showing real or demo data. Contains no secret.
 
 ```json
-{ "adapter": "home_assistant", "connected": true,
-  "writes_enabled": false, "phase": 2, "detail": "מחובר לגשר של בובי" }
+{ "adapter": "home_assistant", "connected": true, "writes_enabled": false,
+  "phase": 2, "app_version": "2.0.1", "detail": "מחובר לגשר של בובי" }
 ```
 
 ---
@@ -82,15 +82,35 @@ Whether the app is showing real or demo data. Contains no secret.
   "ok": true,
   "version": "…",
   "uptime": "…",
-  "components": [{ "id": "whatsapp", "name": "WhatsApp", "state": "online",
-                   "label": "מחובר", "ok": true, "detail": null }],
-  "counts": { "devices": 18, "rules": 6, "issues": 3 },
+  "whatsapp": { "connected": true, "status": "WORKING", "label": "תקין",
+                "detail": null, "extra": {} },
+  "ai": { "enabled": true, "fast_paths_enabled": true, "fast_paths_count": 3,
+          "fast_paths": ["lighting", "climate", "shabbat"],
+          "label": "פעיל", "detail": "3 מסלולים מהירים", "extra": {} },
+  "users": { "total": 3, "active": 2, "admins": 1, "names": [], "extra": {} },
+  "config": { "ok": true, "status": "OK", "label": "תקין", "detail": null, "extra": {} },
+  "features": [{ "id": "shabbat", "label": "שעון שבת", "enabled": true, "detail": null }],
+  "components": [{ "id": "whatsapp", "name": "WhatsApp", "state": "WORKING",
+                   "label": "תקין", "ok": true, "detail": null }],
+  "counts": { "catalog_count": 19, "rules_count": 6, "issue_count": 3 },
+  "details": {},
   "writes_enabled": false
 }
 ```
 
-`counts` is rendered dynamically, so a new counter appears without a frontend
-change. `writes_enabled` is forced to `false` whatever the bridge says.
+The bridge reports WhatsApp, the AI fallback, the household, feature toggles and
+its own configuration health as separate sections, so they are **first-class
+fields** rather than text rows in `details`. Each is accepted nested
+(`{"whatsapp": {"connected": true}}`), bare (`{"whatsapp": "WORKING"}`) or
+flat-prefixed (`{"whatsapp_connected": true}`).
+
+`components` is the dashboard's health row. The real bridge sends no such list,
+so it is derived from the sections above; a list the bridge *does* send wins.
+`fast_paths` is normalized from a flag, a count or a list of names into all
+three. `counts` is rendered dynamically, so a new counter appears without a
+frontend change, and any remaining scalar still becomes a `details` row rather
+than being dropped. `writes_enabled` is forced to `false` whatever the bridge
+says. Feature toggles are **read-only** in Phase 2.
 
 ---
 
@@ -128,7 +148,14 @@ Scopes: `all`, `lighting`, `climate`, `cameras`, `battery`, `temperature`,
     "logical_controllable": true,
     "entity_id": "climate.example",
     "handler": "climate_handler",
-    "limits": { "min": 16, "max": 30, "step": 1 },
+    "limits": { "min": 16, "max": 30, "step": 1,
+                "min_temp": 16, "max_temp": 30, "temp_step": 1,
+                "preset_modes": ["eco"], "fan_modes": ["low", "high"],
+                "swing_modes": [], "hvac_modes": ["off", "cool"],
+                "min_kelvin": null, "max_kelvin": null,
+                "min_brightness": null, "max_brightness": null,
+                "intensity_min": null, "intensity_max": null,
+                "scent_slots": [], "timer_max_seconds": null, "extra": {} },
     "last_changed": "2026-08-25T11:00:00+03:00",
     "extra": {}
   }]
@@ -139,6 +166,12 @@ Read out of the bridge's `entries`. `name` is the canonical display name and
 `available` is derived from the state, both server-side. The UI shows `name`,
 `area`, `state`, `capabilities` and `aliases`; `entity_id`, `handler` and
 `extra` appear only under **מתקדם / פרטים טכניים**.
+
+`limits` keeps the bridge's domain-specific constraints in full — temperature
+range and mode lists for climate, colour temperature and brightness for lights,
+intensity, slots and timer for the scent diffuser — because Phase 3's editing
+controls need them. `min`/`max`/`step` remain as a generic view, filled from
+whichever domain range applies; anything unrecognised lands in `limits.extra`.
 
 ---
 
@@ -193,13 +226,15 @@ shows only whether WhatsApp is connected.
   "candle_lighting": "18:52",
   "havdalah": "19:51",
   "parasha": "פרשת ראה",
-  "pre_shabbat_offset_minutes": 20,
+  "pre_shabbat_offset_minutes": 30,
   "profiles": [{
     "id": "pre_off", "kind": "pre_off", "label": "כיבוי לפני שבת",
     "active": true, "time": null, "offset_minutes": 20,
-    "devices": ["אור מטבח"], "extra": {}
+    "devices": [{ "id": "dining", "label": "פינת אוכל" },
+                { "id": "led_salon", "label": "LED סלון" }],
+    "extra": {}
   }],
-  "ac_temperatures": { "מזגן סלון": "24" },
+  "ac_temperatures": [{ "id": "ac_salon", "label": "מזגן סלון", "temperature": "24" }],
   "has_draft": false,
   "draft_owners": [],
   "writes_enabled": false,
@@ -207,12 +242,17 @@ shows only whether WhatsApp is connected.
 }
 ```
 
-Times are read out of the bridge's `upcoming`. Profiles come from `profiles` as
-**one list** — `kind` carries the bridge's own key, so a profile the app has
-never seen still renders. Device tokens are resolved to friendly names
-server-side, including the keys of `ac_temperatures`; the UI never receives a
-raw token. `has_draft` is derived from `drafts`. `writes_enabled` is forced to
-`false`.
+Times are read out of the bridge's `upcoming`, including
+`upcoming.pre_offset_minutes` — which is where the real bridge keeps the
+pre-Shabbat offset. Profiles come from `profiles` as **one list**; `kind`
+carries the bridge's own key, so a profile the app has never seen still renders.
+
+A profile lists its devices as the bridge's own short `tokens`, which
+`device_labels` translates. Both halves are kept: `label` is what the screen
+shows, `id` is the token Phase 3 must send back to change the profile. The same
+applies to `ac_temperatures`, so each temperature stays tied to its air
+conditioner rather than to a translated string. `has_draft` is derived from
+`drafts`. `writes_enabled` is forced to `false`.
 
 ---
 

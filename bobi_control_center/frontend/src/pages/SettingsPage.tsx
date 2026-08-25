@@ -109,7 +109,10 @@ export function SettingsPage() {
                 <Row label="גרסת בובי" value={status.data.version} />
               ) : null}
               {status.data.uptime ? <Row label="פעיל" value={status.data.uptime} /> : null}
-              <Row label="גרסת ממשק" value="2.0.0" />
+              {/* Reported by the backend, so it can never drift from what is running. */}
+              {connection.data?.app_version ? (
+                <Row label="גרסת ממשק" value={connection.data.app_version} />
+              ) : null}
             </dl>
           </Card>
         ) : null}

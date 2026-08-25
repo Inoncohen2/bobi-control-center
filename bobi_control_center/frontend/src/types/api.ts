@@ -22,6 +22,8 @@ export interface ConnectionInfo {
   /** Always false in Phase 2. */
   writes_enabled: boolean;
   phase: number;
+  /** The running app version, so the UI never hard-codes it. */
+  app_version: string;
   detail: string | null;
 }
 
@@ -35,10 +37,63 @@ export interface StatusComponent {
   detail: string | null;
 }
 
+/** Bobi's messaging channel. */
+export interface WhatsAppStatus {
+  connected: boolean | null;
+  status: string | null;
+  label: string | null;
+  detail: string | null;
+  extra: Extra;
+}
+
+/** The language-model fallback and its fast paths. */
+export interface AiStatus {
+  enabled: boolean | null;
+  fast_paths_enabled: boolean | null;
+  fast_paths_count: number | null;
+  fast_paths: string[];
+  label: string | null;
+  detail: string | null;
+  extra: Extra;
+}
+
+/** How many household members Bobi is serving. */
+export interface UsersSummary {
+  total: number | null;
+  active: number | null;
+  admins: number | null;
+  names: string[];
+  extra: Extra;
+}
+
+/** One feature toggle Bobi reports. READ-ONLY in Phase 2. */
+export interface FeatureFlag {
+  id: string;
+  label: string;
+  enabled: boolean | null;
+  detail: string | null;
+}
+
+/** Health of Bobi's own configuration. */
+export interface ConfigStatus {
+  ok: boolean | null;
+  status: string | null;
+  label: string | null;
+  detail: string | null;
+  extra: Extra;
+}
+
 export interface BridgeStatus {
   ok: boolean | null;
   version: string | null;
   uptime: string | null;
+  /** Structured sections, rendered directly rather than as text rows. */
+  whatsapp: WhatsAppStatus | null;
+  ai: AiStatus | null;
+  users: UsersSummary | null;
+  config: ConfigStatus | null;
+  features: FeatureFlag[];
+  /** Health cards, derived server-side when the bridge sends no list. */
   components: StatusComponent[];
   /** Numeric headline figures, rendered dynamically. */
   counts: Record<string, number>;
@@ -48,10 +103,37 @@ export interface BridgeStatus {
 }
 
 // --- devices ---------------------------------------------------------------
+/**
+ * A device's constraints, preserved in full.
+ *
+ * `min`/`max`/`step` are a generic view the backend fills from whichever
+ * domain-specific range applies; the domain fields below are the real ones and
+ * are what Phase 3's editing controls will use.
+ */
 export interface DeviceLimits {
   min: number | null;
   max: number | null;
   step: number | null;
+  // Climate.
+  min_temp: number | null;
+  max_temp: number | null;
+  temp_step: number | null;
+  preset_modes: string[];
+  fan_modes: string[];
+  swing_modes: string[];
+  hvac_modes: string[];
+  // Lights.
+  min_kelvin: number | null;
+  max_kelvin: number | null;
+  min_brightness: number | null;
+  max_brightness: number | null;
+  // Scent diffuser.
+  intensity_min: number | null;
+  intensity_max: number | null;
+  scent_slots: string[];
+  timer_max_seconds: number | null;
+  /** Anything the bridge sends that is not listed above. */
+  extra: Extra;
 }
 
 export interface BridgeDevice {
@@ -171,6 +253,24 @@ export interface BridgeProbe {
 }
 
 // --- shabbat ---------------------------------------------------------------
+/**
+ * A device inside a Shabbat profile.
+ *
+ * `id` is the bridge's own token — kept because Phase 3 must send it back to
+ * change the profile — and `label` is what a person reads.
+ */
+export interface ProfileDevice {
+  id: string;
+  label: string;
+}
+
+/** A temperature tied to the air conditioner it belongs to. */
+export interface ShabbatAcTemperature {
+  id: string;
+  label: string;
+  temperature: string;
+}
+
 export interface ShabbatProfile {
   id: string;
   /** The bridge's own profile key, e.g. `pre_off`. */
@@ -179,8 +279,8 @@ export interface ShabbatProfile {
   active: boolean | null;
   time: string | null;
   offset_minutes: number | null;
-  /** Friendly device names, already resolved from tokens by the backend. */
-  devices: string[];
+  /** Resolved from the bridge's tokens by the backend, id and label both. */
+  devices: ProfileDevice[];
   extra: Extra;
 }
 
@@ -190,8 +290,8 @@ export interface BridgeShabbat {
   parasha: string | null;
   pre_shabbat_offset_minutes: number | null;
   profiles: ShabbatProfile[];
-  /** Friendly device name → temperature, already resolved. */
-  ac_temperatures: Record<string, string>;
+  /** Each temperature stays tied to its air conditioner. */
+  ac_temperatures: ShabbatAcTemperature[];
   has_draft: boolean;
   draft_owners: string[];
   /** False for the whole of Phase 2. */

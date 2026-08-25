@@ -25,6 +25,7 @@ from app.models.bridge import (
     ConnectionInfo,
 )
 from app.services import normalize
+from app.version import APP_VERSION
 
 
 class MockHomeAssistantAdapter(HomeAssistantAdapter):
@@ -36,6 +37,7 @@ class MockHomeAssistantAdapter(HomeAssistantAdapter):
     async def connection_info(self) -> ConnectionInfo:
         return ConnectionInfo(
             adapter=self.name,
+            app_version=APP_VERSION,
             connected=True,
             writes_enabled=False,
             detail="מצב הדגמה — הנתונים מדומים ואין חיבור למערכת אמיתית",

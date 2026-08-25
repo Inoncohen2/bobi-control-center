@@ -54,6 +54,34 @@ describe('DashboardPage', () => {
     expect(await screen.findByText('מצלמת ליה אינה זמינה')).toBeInTheDocument();
   });
 
+  it('shows the sections the bridge reports beyond the health row', async () => {
+    vi.stubGlobal('fetch', mockApi(ALL_ROUTES));
+    renderWithProviders(<DashboardPage />);
+
+    // WhatsApp, AI and configuration health, derived server-side.
+    expect(await screen.findByText('WhatsApp')).toBeInTheDocument();
+    expect(screen.getByText('בינה מלאכותית')).toBeInTheDocument();
+    expect(screen.getByText('תצורה')).toBeInTheDocument();
+
+    // Fast paths, active users and the feature toggles.
+    expect(screen.getByText('מסלולים מהירים')).toBeInTheDocument();
+    expect(screen.getByText('lighting')).toBeInTheDocument();
+    expect(screen.getByText('משתמשי הבית')).toBeInTheDocument();
+    expect(screen.getByText('פעילים')).toBeInTheDocument();
+    expect(screen.getByText('שעון שבת')).toBeInTheDocument();
+    expect(screen.getByText('עיבוד תמונות')).toBeInTheDocument();
+  });
+
+  it('offers no way to change a feature toggle', async () => {
+    vi.stubGlobal('fetch', mockApi(ALL_ROUTES));
+    renderWithProviders(<DashboardPage />);
+
+    await screen.findByText('שעון שבת');
+    expect(screen.getByText('עריכה תהיה זמינה בשלב הבא')).toBeInTheDocument();
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+  });
+
   it('keeps entity ids behind the technical disclosure', async () => {
     vi.stubGlobal('fetch', mockApi(ALL_ROUTES));
     renderWithProviders(<DashboardPage />);
@@ -115,6 +143,20 @@ describe('DevicesPage', () => {
     expect(summary.closest('details')?.open).toBeFalsy();
     expect(screen.getByText('light.demo_kitchen')).toBeInTheDocument();
     expect(screen.getByText('lighting_handler')).toBeInTheDocument();
+  });
+
+  it('shows the domain-specific limits the bridge sends', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', mockApi(ALL_ROUTES));
+    renderWithProviders(<DevicesPage />);
+
+    await user.click(await screen.findByText('מזגן סלון'));
+
+    expect(await screen.findByText('טווחים ואפשרויות')).toBeInTheDocument();
+    expect(screen.getByText('טמפרטורה מינימלית')).toBeInTheDocument();
+    expect(screen.getByText('16')).toBeInTheDocument();
+    expect(screen.getByText('עוצמות מאוורר')).toBeInTheDocument();
+    expect(screen.getByText('low · high')).toBeInTheDocument();
   });
 
   it('shows the aliases Bobi understands', async () => {
@@ -292,6 +334,23 @@ describe('ShabbatPage', () => {
     // The label, never the raw token.
     expect(screen.getAllByText('אור מטבח').length).toBeGreaterThan(0);
     expect(screen.queryByText('kitchen_light')).not.toBeInTheDocument();
+  });
+
+  it('shows the pre-Shabbat offset the bridge nests inside upcoming', async () => {
+    vi.stubGlobal('fetch', mockApi(ALL_ROUTES));
+    renderWithProviders(<ShabbatPage />);
+
+    await screen.findByText('18:52');
+    expect(screen.getByText(/20 דקות לפני הכניסה/)).toBeInTheDocument();
+  });
+
+  it('keeps each temperature tied to its air conditioner', async () => {
+    vi.stubGlobal('fetch', mockApi(ALL_ROUTES));
+    renderWithProviders(<ShabbatPage />);
+
+    await screen.findByText('18:52');
+    const row = screen.getByText('מזגן סלון').closest('div');
+    expect(within(row as HTMLElement).getByText('24°')).toBeInTheDocument();
   });
 
   it('is read-only, with saving disabled', async () => {

@@ -75,11 +75,11 @@ states, in light and dark mode.
 
 | Screen | Bridge service | Shows |
 | --- | --- | --- |
-| **בית** | `bobi_cc_status` + `bobi_cc_diagnostics` | Component health, counts, and what needs attention |
+| **בית** | `bobi_cc_status` + `bobi_cc_diagnostics` | Component health, WhatsApp, AI and its fast paths, household members, feature toggles, counts, and what needs attention |
 | **מכשירים** | `bobi_cc_devices` | Bobi's canonical catalog by room, with the 11 semantic scopes, alias search and availability filters |
 | **יכולות** | `bobi_cc_capabilities` | The Capability Registry rendered dynamically — label, example, risk — plus read-only master toggles |
 | **כללים חכמים** | `bobi_cc_rules` | Bobi's canonical smart rules |
-| **שעון שבת** | `bobi_cc_shabbat` | Candle lighting, havdalah, the four profiles, AC temperatures |
+| **שעון שבת** | `bobi_cc_shabbat` | Candle lighting, havdalah, the pre-Shabbat offset, the profiles and their devices, AC temperatures |
 | **משימות** | `bobi_cc_tasks` | Open and completed tasks |
 | **משתמשים** | `bobi_cc_users` | Household profiles and a read-only permissions matrix |
 | **בדיקות** | `bobi_cc_probe` | Type anything and watch Bobi parse it — **without executing** |

@@ -2,6 +2,7 @@
 
 import type {
   BridgeCapabilities,
+  DeviceLimits,
   BridgeDevice,
   BridgeDevices,
   BridgeDiagnostics,
@@ -20,6 +21,7 @@ export function makeConnection(overrides: Partial<ConnectionInfo> = {}): Connect
     connected: true,
     writes_enabled: false,
     phase: 2,
+    app_version: '2.0.1',
     detail: 'מחובר לגשר של בובי',
     ...overrides,
   };
@@ -30,13 +32,72 @@ export function makeStatus(overrides: Partial<BridgeStatus> = {}): BridgeStatus 
     ok: true,
     version: '1.2.3',
     uptime: '4 ימים',
+    whatsapp: {
+      connected: true,
+      status: 'WORKING',
+      label: 'תקין',
+      detail: null,
+      extra: {},
+    },
+    ai: {
+      enabled: true,
+      fast_paths_enabled: true,
+      fast_paths_count: 3,
+      fast_paths: ['lighting', 'climate', 'shabbat'],
+      label: 'פעיל',
+      detail: '3 מסלולים מהירים',
+      extra: {},
+    },
+    users: { total: 3, active: 2, admins: 1, names: [], extra: {} },
+    config: { ok: true, status: 'OK', label: 'תקין', detail: null, extra: {} },
+    features: [
+      { id: 'shabbat', label: 'שעון שבת', enabled: true, detail: null },
+      { id: 'vision', label: 'עיבוד תמונות', enabled: false, detail: null },
+    ],
+    // Derived by the backend from the sections above, as the real bridge sends
+    // no component list of its own.
     components: [
-      { id: 'bobi', name: 'בובי', label: 'פעיל', state: 'online', ok: true, detail: null },
+      { id: 'bobi', name: 'בובי', label: 'פעיל', state: 'ok', ok: true, detail: null },
       { id: 'whatsapp', name: 'WhatsApp', label: 'תקין', state: 'WORKING', ok: true, detail: null },
+      {
+        id: 'ai',
+        name: 'בינה מלאכותית',
+        label: 'פעיל',
+        state: null,
+        ok: true,
+        detail: '3 מסלולים מהירים',
+      },
+      { id: 'config', name: 'תצורה', label: 'תקין', state: 'OK', ok: true, detail: null },
     ],
     counts: { devices: 18, rules: 6, issues: 2 },
     details: { profile: 'household' },
     writes_enabled: false,
+    ...overrides,
+  };
+}
+
+/** Every limit null, so a fixture only states the ones it cares about. */
+export function makeLimits(overrides: Partial<DeviceLimits> = {}): DeviceLimits {
+  return {
+    min: null,
+    max: null,
+    step: null,
+    min_temp: null,
+    max_temp: null,
+    temp_step: null,
+    preset_modes: [],
+    fan_modes: [],
+    swing_modes: [],
+    hvac_modes: [],
+    min_kelvin: null,
+    max_kelvin: null,
+    min_brightness: null,
+    max_brightness: null,
+    intensity_min: null,
+    intensity_max: null,
+    scent_slots: [],
+    timer_max_seconds: null,
+    extra: {},
     ...overrides,
   };
 }
@@ -82,6 +143,16 @@ export function makeDevices(overrides: Partial<BridgeDevices> = {}): BridgeDevic
         aliases: ['מזגן סלון', 'המזגן בסלון'],
         handler: 'climate_handler',
         state: 'off',
+        limits: makeLimits({
+          min: 16,
+          max: 30,
+          step: 1,
+          min_temp: 16,
+          max_temp: 30,
+          temp_step: 1,
+          fan_modes: ['low', 'high'],
+          hvac_modes: ['off', 'cool'],
+        }),
       }),
       makeDevice({
         id: 'camera.demo_girls',
@@ -193,12 +264,12 @@ export function makeShabbat(overrides: Partial<BridgeShabbat> = {}): BridgeShabb
         active: true,
         time: null,
         offset_minutes: 20,
-        // Already resolved to friendly names by the backend.
-        devices: ['אור מטבח'],
+        // The backend resolves the bridge's tokens, keeping both halves.
+        devices: [{ id: 'kitchen_light', label: 'אור מטבח' }],
         extra: {},
       },
     ],
-    ac_temperatures: { 'מזגן סלון': '24' },
+    ac_temperatures: [{ id: 'living_room_ac', label: 'מזגן סלון', temperature: '24' }],
     has_draft: false,
     draft_owners: [],
     writes_enabled: false,

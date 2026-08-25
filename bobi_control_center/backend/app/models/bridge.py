@@ -45,17 +45,88 @@ class StatusComponent(CanonicalModel):
     detail: str | None = None
 
 
+class WhatsAppStatus(CanonicalModel):
+    """Bobi's messaging channel."""
+
+    connected: bool | None = None
+    status: str | None = None
+    label: str | None = None
+    detail: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class AiStatus(CanonicalModel):
+    """The language-model fallback and its fast paths.
+
+    `fast_paths` is normalized from whatever the bridge sends — a flag, a count,
+    or a list of path names — into a flag plus a count, so the dashboard can
+    show it either way.
+    """
+
+    enabled: bool | None = None
+    fast_paths_enabled: bool | None = None
+    fast_paths_count: int | None = None
+    fast_paths: list[str] = Field(default_factory=list)
+    label: str | None = None
+    detail: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class UsersSummary(CanonicalModel):
+    """How many household members Bobi is serving."""
+
+    total: int | None = None
+    active: int | None = None
+    admins: int | None = None
+    names: list[str] = Field(default_factory=list)
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class FeatureFlag(CanonicalModel):
+    """One feature toggle Bobi reports. READ-ONLY in Phase 2."""
+
+    id: str
+    label: str
+    enabled: bool | None = None
+    detail: str | None = None
+
+
+class ConfigStatus(CanonicalModel):
+    """Health of Bobi's own configuration."""
+
+    ok: bool | None = None
+    status: str | None = None
+    label: str | None = None
+    detail: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
 class BridgeStatus(CanonicalModel):
-    """Normalized `script.bobi_cc_status`."""
+    """Normalized `script.bobi_cc_status`.
+
+    The bridge reports far more than a flat health list, so the real sections
+    are first-class fields rather than being flattened into `details`.
+    """
 
     ok: bool | None = None
     version: str | None = None
     uptime: str | None = None
+
+    #: Structured sections the dashboard renders directly.
+    whatsapp: WhatsAppStatus | None = None
+    ai: AiStatus | None = None
+    users: UsersSummary | None = None
+    config: ConfigStatus | None = None
+    features: list[FeatureFlag] = Field(default_factory=list)
+
+    #: Health cards. Derived from the sections above when the bridge does not
+    #: send an explicit list, so the dashboard always has a top row.
     components: list[StatusComponent] = Field(default_factory=list)
+
     #: Numeric headline figures, rendered dynamically.
     counts: dict[str, int] = Field(default_factory=dict)
-    #: Remaining scalar fields the bridge sent, shown as a details list rather
-    #: than discarded.
+    #: Whatever scalar fields remain, shown as a details list rather than
+    #: discarded.
     details: dict[str, str] = Field(default_factory=dict)
     #: Phase 2 invariant, never taken from the bridge.
     writes_enabled: bool = False
@@ -63,9 +134,46 @@ class BridgeStatus(CanonicalModel):
 
 # --- devices ----------------------------------------------------------------
 class DeviceLimits(CanonicalModel):
+    """A device's constraints, preserved in full.
+
+    Bobi's catalog carries domain-specific limits — temperature ranges and mode
+    lists for climate, colour temperature for lights, intensity and slots for
+    the scent diffuser. Collapsing them to a bare min/max/step threw away what
+    the editing controls will need, so every documented field is kept and
+    anything else lands in `extra`.
+
+    `min`/`max`/`step` remain as a generic view, filled from the domain-specific
+    values where there is an unambiguous equivalent.
+    """
+
+    # Generic view.
     min: float | None = None
     max: float | None = None
     step: float | None = None
+
+    # Climate.
+    min_temp: float | None = None
+    max_temp: float | None = None
+    temp_step: float | None = None
+    preset_modes: list[str] = Field(default_factory=list)
+    fan_modes: list[str] = Field(default_factory=list)
+    swing_modes: list[str] = Field(default_factory=list)
+    hvac_modes: list[str] = Field(default_factory=list)
+
+    # Lights.
+    min_kelvin: float | None = None
+    max_kelvin: float | None = None
+    min_brightness: float | None = None
+    max_brightness: float | None = None
+
+    # Scent diffuser.
+    intensity_min: float | None = None
+    intensity_max: float | None = None
+    scent_slots: list[str] = Field(default_factory=list)
+    timer_max_seconds: int | None = None
+
+    #: Anything the bridge sends that is not listed above.
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class BridgeDevice(CanonicalModel):
@@ -216,6 +324,25 @@ class BridgeProbe(CanonicalModel):
 
 
 # --- shabbat ----------------------------------------------------------------
+class ProfileDevice(CanonicalModel):
+    """A device inside a Shabbat profile.
+
+    Both halves are kept: `id` is the bridge's own token, which Phase 3 will
+    need in order to write a change back, and `label` is what a person reads.
+    """
+
+    id: str
+    label: str
+
+
+class ShabbatAcTemperature(CanonicalModel):
+    """A temperature tied to the air conditioner it belongs to."""
+
+    id: str
+    label: str
+    temperature: str
+
+
 class ShabbatProfile(CanonicalModel):
     """One Shabbat profile.
 
@@ -229,8 +356,8 @@ class ShabbatProfile(CanonicalModel):
     active: bool | None = None
     time: str | None = None
     offset_minutes: int | None = None
-    #: Friendly device names, already resolved from tokens.
-    devices: list[str] = Field(default_factory=list)
+    #: Resolved from the bridge's device tokens, keeping both id and label.
+    devices: list[ProfileDevice] = Field(default_factory=list)
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -242,10 +369,8 @@ class BridgeShabbat(CanonicalModel):
     parasha: str | None = None
     pre_shabbat_offset_minutes: int | None = None
     profiles: list[ShabbatProfile] = Field(default_factory=list)
-    ac_temperatures: dict[str, str] = Field(
-        default_factory=dict,
-        description="Friendly device name → temperature, already resolved.",
-    )
+    #: Each temperature stays tied to its air conditioner, id and label both.
+    ac_temperatures: list[ShabbatAcTemperature] = Field(default_factory=list)
     has_draft: bool = False
     draft_owners: list[str] = Field(default_factory=list)
     #: False for the whole of Phase 2.
@@ -356,4 +481,6 @@ class ConnectionInfo(CanonicalModel):
     connected: bool
     writes_enabled: bool = False
     phase: int = 2
+    #: This application's version, so the UI never hard-codes it.
+    app_version: str = ""
     detail: str | None = None

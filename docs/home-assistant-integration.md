@@ -54,7 +54,11 @@ is written to tolerate variation:
 | --- | --- |
 | `entries` | `devices` |
 | `registry` (map **or** list) | `capabilities` |
+| status sections (`whatsapp`, `ai`, `users`, `config`, `features`) | first-class fields, plus a derived `components` row |
+| domain limits (`min_temp`, `fan_modes`, `min_kelvin`, `scent_slots`, …) | one `limits` model keeping every one |
 | `upcoming` / `profiles` / `drafts` | flat times, one `profiles` list, `has_draft` |
+| profile `tokens` + `device_labels` | `devices: [{id, label}]` |
+| `ac_temperatures` map | a list, each temperature tied to its air conditioner |
 | per-user `users` (tasks) | one flat `tasks` list with `owner` |
 | `{"result": {…}}` (probe) | flattened top-level fields |
 | `checks` as a **map** | `checks` as a list |
@@ -67,7 +71,9 @@ Rules it follows:
 * never raise on a missing or oddly-typed field — a partial response must
   produce an empty screen, not a 502;
 * route unmapped fields into a per-item `extra` map so nothing is silently lost;
-* resolve device tokens to friendly names, so the UI never receives a raw token;
+* resolve device tokens to friendly names, so the UI never shows a raw token —
+  while keeping the token itself alongside the label, since a write in Phase 3
+  will have to send it back;
 * drop anything resembling a phone number, LID or chat id, even if a future
   bridge version starts sending one.
 
