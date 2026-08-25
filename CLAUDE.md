@@ -34,11 +34,23 @@ Two guards enforce this, but do not rely on them to remember for you:
 
 ## The other rules that outlive a session
 
-**Phase 2 is read-only.** No write method exists on `HomeAssistantAdapter`, the
-real adapter's `ALLOWED_SERVICES` holds exactly the nine `script.bobi_cc_*`
-services, and `POST /api/bobi/probe` is the only non-GET route. `writes_enabled`
-and `would_execute` are forced `false` in code, never read from the bridge.
-Unfinished write controls render disabled, labelled *"עריכה תהיה זמינה בשלב הבא"*.
+**Writes fail closed.** `HomeAssistantAdapter` still has no write method; a
+write path exists only as a `ManagementBridge` an adapter hands back, and no
+adapter returns one — so every management request is refused with *"ניהול עדיין
+לא הופעל ב-Home Assistant"* until Home Assistant declares the contract. Nothing
+in settings or the environment may turn it on. `ALLOWED_SERVICES` holds exactly
+the nine read/probe services, `writes_enabled` and `would_execute` are forced
+`false` in code, and the only non-GET routes are the probe and the managed
+preview/commit pair.
+
+**Every change is previewed, confirmed, committed and verified.** In that order,
+enforced in `services/manage.py` so no route or screen can skip a step. A
+preview never writes. A commit needs a single-use, unexpired preview id plus an
+explicit confirmation — and, when destructive, the confirmation word typed. The
+result is reported as *בוצע ואומת*, *בוצע אך לא הצלחנו לאמת* or *לא בוצע*, and
+the UI shows no saved state before the read-back agrees. Phase 3A covers tasks
+and feature toggles only; device control, Shabbat saving, rules, automations,
+calendar and permissions come later.
 
 **Normalize in `app/services/normalize.py`, never in React.** It is the only
 module that may know a bridge field name. The frontend receives one canonical

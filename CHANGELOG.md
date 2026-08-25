@@ -4,6 +4,36 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 2.1.0
+
+Phase 3A: the management path, prepared and **fail-closed**.
+
+Every change follows one flow — edit → preview → explicit confirmation →
+commit → read-after-write verification → result — and it is enforced in the
+service layer, so no route, adapter or screen can skip a step.
+
+- **New endpoints.** `GET /api/bobi/manage/status`,
+  `POST /api/bobi/manage/{tasks|features}/preview`,
+  `POST /api/bobi/manage/{tasks|features}/commit`, `GET /api/bobi/manage/audit`.
+- **Fail closed.** Management is discovered from a Home Assistant write bridge,
+  never from configuration. No adapter declares one today, so every management
+  request is refused with *"ניהול עדיין לא הופעל ב-Home Assistant"*. There is no
+  fallback that calls a service anyway, and no environment variable that could
+  enable one.
+- **Tasks UI** for add, rename, complete, reopen and delete — each opening a
+  Hebrew preview dialog rather than acting. Deleting warns and requires the
+  confirmation word to be typed.
+- **Feature toggles** show current and proposed state through the same dialog.
+- **Audit** entries for every preview and commit, including refusals, carrying
+  no phone number, LID or credential.
+- The result is reported honestly as one of *השינוי בוצע ואומת*,
+  *השינוי בוצע אך לא הצלחנו לאמת* or *השינוי לא בוצע*; nothing is shown as
+  saved before the read-back agrees.
+
+`writes_enabled` stays `false`, the bridge allow-list still holds only the nine
+read/probe services, and no device control, Shabbat saving, rule creation,
+automation editing, calendar write or permission change is exposed.
+
 ## 2.0.2
 
 Two things the live 2.0.1 install still got wrong.

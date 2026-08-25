@@ -58,7 +58,7 @@ Stack traces never leave the process.
 ### `GET /health`
 
 ```json
-{ "ok": true, "app": "bobi-control-center", "version": "2.0.2",
+{ "ok": true, "app": "bobi-control-center", "version": "2.1.0",
   "adapter": "home_assistant", "writes_enabled": false }
 ```
 
@@ -68,7 +68,7 @@ Whether the app is showing real or demo data. Contains no secret.
 
 ```json
 { "adapter": "home_assistant", "connected": true, "writes_enabled": false,
-  "phase": 2, "app_version": "2.0.2", "detail": "מחובר לגשר של בובי" }
+  "phase": 2, "app_version": "2.1.0", "detail": "מחובר לגשר של בובי" }
 ```
 
 ---
@@ -384,8 +384,99 @@ displays **בדיקה בלבד — לא בוצעה שום פעולה**.
 
 ---
 
+## Management — Phase 3A
+
+Base path `/api/bobi/manage`. Every change follows one flow:
+
+```
+edit → preview → explicit confirmation → commit → read-after-write → result
+```
+
+**Management fails closed.** It is available only when Home Assistant declares a
+write bridge, discovered at `GET /manage/status` — never from a setting or an
+environment variable. No adapter declares one today, so every route below
+answers `503 management_unavailable` with
+*"ניהול עדיין לא הופעל ב-Home Assistant"*.
+
+### `GET /api/bobi/manage/status`
+
+```json
+{ "available": false,
+  "reason": "ניהול עדיין לא הופעל ב-Home Assistant",
+  "contract_version": null, "resources": [], "writes_enabled": false }
+```
+
+When a bridge is present, `resources` lists what it supports — `tasks` with
+`create`/`rename`/`complete`/`reopen`/`delete`, `features` with `set`. An
+operation the bridge does not declare cannot be requested. `writes_enabled`
+stays `false`: management is per-operation, not a general permission to write.
+
+### `POST /api/bobi/manage/{resource}/preview`
+
+`resource` is `tasks` or `features`; anything else is a 404 before any service
+is consulted. **This performs no write.**
+
+Request: `{ "operation": "delete", "resource_id": "task_1",
+            "payload": { "current_title": "לקבוע תור לרופא" } }`
+
+```json
+{
+  "preview_id": "pv_…",
+  "operation": "delete", "resource_type": "tasks", "resource_id": "task_1",
+  "title": "מחיקת משימה",
+  "changes": [{ "label": "משימה", "before": "לקבוע תור לרופא", "after": null }],
+  "explanation": "המשימה תוסר לגמרי מהרשימה.",
+  "destructive": true,
+  "warning": "פעולה זו אינה הפיכה…",
+  "confirm_word": "מחק",
+  "confirm_label": "מחק משימה",
+  "valid": true, "errors": [],
+  "expires_at": "…", "would_execute": false
+}
+```
+
+`preview_id` is **single-use** and expires after five minutes. `would_execute`
+is hard-coded `false`, exactly as on the probe.
+
+### `POST /api/bobi/manage/{resource}/commit`
+
+Request: `{ "preview_id": "pv_…", "confirmed": true, "confirm_word": "מחק" }`
+
+Refused with `409 preview_expired` if the preview is unknown, expired, already
+used, or belongs to another resource; with `428 confirmation_required` if
+`confirmed` is not true, or if a destructive change arrives without its word.
+
+```json
+{
+  "preview_id": "pv_…", "operation": "delete", "resource_type": "tasks",
+  "result": {
+    "status": "committed",
+    "message": "השינוי בוצע ואומת",
+    "resource_id": "task_1",
+    "verification": { "verified": true, "method": "read_after_write", "detail": null }
+  },
+  "audit": { "…": "the entry this produced" }
+}
+```
+
+`status` is one of `committed` (*השינוי בוצע ואומת*), `committed_unverified`
+(*השינוי בוצע אך לא הצלחנו לאמת*) or `failed` (*השינוי לא בוצע*). A write that
+landed but could not be confirmed is never reported as success, and the UI shows
+no saved state until the read-back agrees.
+
+### `GET /api/bobi/manage/audit`
+
+Recent previews and commits, newest first, including refusals. Every entry
+carries `timestamp`, `operation`, `resource_type`, `resource_id`,
+`requested_change`, `result`, `verified` and `source: "web"`. Fields resembling
+a phone number, LID, chat id or credential are stripped before an entry is
+created — and before the payload reaches the bridge.
+
+---
+
 ## What does not exist
 
-There is no endpoint to turn a device on or off, change a schedule, complete a
-task, edit permissions, or toggle a capability. A test enumerates the router and
-asserts that `POST /api/bobi/probe` is the only non-GET route.
+There is still no endpoint to control a device, save a Shabbat configuration,
+create a smart rule, edit an automation, write to a calendar, or change a user's
+permissions. A test enumerates the published surface and asserts the only
+non-GET routes are the probe and the managed preview/commit pair.

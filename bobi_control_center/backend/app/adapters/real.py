@@ -24,6 +24,7 @@ from typing import Any
 import httpx
 
 from app.adapters.base import HomeAssistantAdapter
+from app.adapters.management import ManagementBridge
 from app.config import Settings
 from app.errors import BobiError, UpstreamError
 from app.models.bridge import (
@@ -235,6 +236,30 @@ class RealHomeAssistantAdapter(HomeAssistantAdapter):
             writes_enabled=False,
             detail="מחובר לגשר של בובי",
         )
+
+    # --- management -------------------------------------------------------
+    def management_bridge(self) -> ManagementBridge | None:
+        """No write bridge yet — so every management request is refused.
+
+        This is the one place a Home Assistant write contract plugs in. It
+        returns `None` until the HA side supplies the bridge service names and
+        their schemas, and returning `None` is not a stub that will quietly
+        start working: it is the whole refusal.
+
+        What must **not** happen here, when that contract does arrive:
+
+        * calling a service that is not in `ALLOWED_SERVICES` — the allow-list
+          is checked before any request is built, and it holds exactly the nine
+          read/probe services today;
+        * accepting a service name from a request, a setting or an environment
+          variable. The bridge declares its operations; the app never names an
+          `input_boolean`, a `todo.*` service or any other entity.
+
+        A future `RealManagementBridge` therefore takes an operation from the
+        closed set in `models/manage.py`, maps it to a declared `bobi_cc_*`
+        write service, and reads the resource back through the existing getters.
+        """
+        return None
 
     # --- bridge services --------------------------------------------------
     async def get_status(self) -> BridgeStatus:

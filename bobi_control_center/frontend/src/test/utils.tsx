@@ -47,7 +47,10 @@ function json(body: unknown, status = 200): Response {
  * to the `/api/bobi/devices` entry.
  */
 export function mockApi(routes: Record<string, unknown>) {
-  return vi.fn(async (input: RequestInfo | URL) => {
+  // `init` is declared even though the router ignores it, so a test can assert
+  // which method and body a page actually sent.
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    void init;
     const url = typeof input === 'string' ? input : input.toString();
     const path = url.split('?')[0] as string;
     const match = Object.keys(routes).find((key) => path.endsWith(key));

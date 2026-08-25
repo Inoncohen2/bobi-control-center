@@ -8,13 +8,17 @@
 household assistant, a management interface. Hebrew-first, RTL, mobile-first,
 served through Home Assistant Ingress.
 
-> ### 🔒 Phase 2 is **read-only**
+> ### 🔒 Writes fail closed
 >
 > The app calls only Bobi's `script.bobi_cc_*` bridge services, every one of
-> which is a read or a probe. It cannot turn on a light, change a schedule,
-> complete a task, or save a Shabbat configuration. The adapter interface has
-> no write method to implement, so this is structural rather than a matter of
-> discipline.
+> which is a read or a probe. Phase 3A adds a management path for **tasks and
+> feature toggles** — but it is refused entirely until Home Assistant declares a
+> write bridge, and none exists yet, so the app still cannot change anything.
+> Nothing in settings or the environment can turn it on.
+>
+> When it is enabled, every change is previewed in Hebrew, confirmed explicitly,
+> then read back before the screen says it happened. Device control, Shabbat
+> saving, rules, automations, calendar and permissions remain untouched.
 
 ---
 
@@ -227,10 +231,15 @@ lets the Supervisor build it.
 
 ## Phase 3
 
-Writes. The UI already renders every write control disabled and labelled
-*"עריכה תהיה זמינה בשלב הבא"*, so enabling them is a matter of adding write
-methods to the adapter interface and wiring the existing controls — the shape
-of the product does not change.
+**3A (prepared, inert).** The management path exists end to end: preview,
+confirm, commit, read-after-write verification, audit — for tasks and feature
+toggles. `RealHomeAssistantAdapter.management_bridge()` returns `None`, which is
+the whole refusal; supplying a `ManagementBridge` there, once Home Assistant
+declares its write service names and schemas, is what switches it on.
+
+**Later milestones.** Device control, Shabbat saving, smart rules, automation
+editing, calendar writes and permission changes — each added to the closed set
+of managed resources deliberately, never by widening what a request may name.
 
 ## License
 

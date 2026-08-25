@@ -18,7 +18,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import router as bobi_router
-from app.api.deps import build_adapter
+from app.api.deps import build_adapter, build_management
+from app.api.manage import router as manage_router
 from app.config import Settings, get_settings
 from app.errors import INTERNAL, BobiError
 from app.version import APP_NAME, APP_VERSION
@@ -41,6 +42,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     _configure_logging(settings)
 
     adapter = build_adapter(settings)
+    management = build_management(adapter)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -68,6 +70,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
     app.state.adapter = adapter
+    app.state.management = management
 
     app.add_middleware(
         CORSMiddleware,
@@ -80,6 +83,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     _register_errors(app)
     _register_security_headers(app)
     app.include_router(bobi_router)
+    app.include_router(manage_router)
 
     @app.get("/health", tags=["system"], summary="Health check")
     async def health() -> dict[str, object]:

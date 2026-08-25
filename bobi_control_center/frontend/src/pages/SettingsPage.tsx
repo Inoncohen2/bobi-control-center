@@ -6,12 +6,22 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { ReadOnlyNotice } from '@/components/ui/ReadOnly';
 import { QueryBoundary } from '@/components/state/QueryBoundary';
 import { useTheme, type ThemeChoice } from '@/hooks/useTheme';
-import { useConnection, useStatus } from '@/hooks/queries';
+import { useAudit, useConnection, useManagementStatus, useStatus } from '@/hooks/queries';
+import { formatDateTime } from '@/utils/format';
 
 const THEME_LABELS: Record<ThemeChoice, string> = {
   system: 'לפי המערכת',
   light: 'בהיר',
   dark: 'כהה',
+};
+
+/** Audit results, in the words the trail shows. */
+const AUDIT_RESULTS: Record<string, string> = {
+  previewed: 'תצוגה מקדימה',
+  committed: 'בוצע ואומת',
+  committed_unverified: 'בוצע ללא אימות',
+  failed: 'לא בוצע',
+  refused: 'נחסם',
 };
 
 const ADAPTER_LABELS: Record<string, string> = {
@@ -34,6 +44,8 @@ function Row({ label, value, help }: { label: string; value: React.ReactNode; he
 export function SettingsPage() {
   const connection = useConnection();
   const status = useStatus();
+  const management = useManagementStatus();
+  const audit = useAudit();
   const { theme, setTheme } = useTheme();
 
   return (
@@ -41,7 +53,8 @@ export function SettingsPage() {
       <PageHeader title="הגדרות" description="איך היישום מחובר ומה מצבו." />
 
       <ReadOnlyNotice className="mb-4">
-        שלב 2 הוא קריאה בלבד. שינוי הגדרות של בובי יהיה זמין בשלב הבא.
+        שינוי הגדרות של בובי יהיה זמין בשלב הבא. ניהול משימות ותכונות נפתח כשהוא
+        מופעל ב-Home Assistant.
       </ReadOnlyNotice>
 
       <div className="space-y-4">
@@ -114,6 +127,63 @@ export function SettingsPage() {
                 <Row label="גרסת ממשק" value={connection.data.app_version} />
               ) : null}
             </dl>
+          </Card>
+        ) : null}
+
+        {management.data ? (
+          <Card as="section">
+            <h2 className="mb-2 font-semibold text-slate-900 dark:text-slate-100">ניהול</h2>
+            <dl>
+              <Row
+                label="מצב"
+                value={
+                  <Badge tone={management.data.available ? 'ok' : 'muted'} dot>
+                    {management.data.available ? 'זמין' : 'לא מופעל'}
+                  </Badge>
+                }
+                help={
+                  management.data.available
+                    ? 'כל שינוי עובר תצוגה מקדימה, אישור ואימות לאחר הביצוע.'
+                    : (management.data.reason ?? undefined)
+                }
+              />
+              {management.data.resources.map((resource) => (
+                <Row
+                  key={resource.id}
+                  label={resource.label}
+                  value={resource.available ? 'זמין' : 'לא מופעל'}
+                />
+              ))}
+              <Row
+                label="כתיבה חופשית"
+                value="חסומה"
+                help="היישום אינו מבצע פעולות ב-Home Assistant מחוץ לגשר הניהול."
+              />
+            </dl>
+          </Card>
+        ) : null}
+
+        {audit.data && audit.data.records.length > 0 ? (
+          <Card as="section">
+            <h2 className="mb-2 font-semibold text-slate-900 dark:text-slate-100">
+              שינויים אחרונים
+            </h2>
+            {/* No personal detail reaches this list — the backend strips it. */}
+            <ul className="divide-y divide-slate-100 text-sm dark:divide-slate-700/60">
+              {audit.data.records.slice(0, 10).map((entry) => (
+                <li key={entry.id} className="flex flex-wrap items-baseline gap-x-2 py-2">
+                  <span className="text-slate-900 dark:text-slate-100">
+                    {AUDIT_RESULTS[entry.result] ?? entry.result}
+                  </span>
+                  <span className="text-slate-500 dark:text-slate-400">
+                    {entry.resource_type === 'tasks' ? 'משימות' : 'תכונות'}
+                  </span>
+                  <span className="text-xs text-slate-400 dark:text-slate-500">
+                    {formatDateTime(entry.timestamp)}
+                  </span>
+                </li>
+              ))}
+            </ul>
           </Card>
         ) : null}
 

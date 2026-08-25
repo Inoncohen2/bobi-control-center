@@ -13,6 +13,9 @@ import type {
   BridgeTasks,
   BridgeUsers,
   ConnectionInfo,
+  ManagementStatus,
+  PreviewResponse,
+  CommitResponse,
 } from '@/types/api';
 
 export function makeConnection(overrides: Partial<ConnectionInfo> = {}): ConnectionInfo {
@@ -21,7 +24,7 @@ export function makeConnection(overrides: Partial<ConnectionInfo> = {}): Connect
     connected: true,
     writes_enabled: false,
     phase: 2,
-    app_version: '2.0.2',
+    app_version: '2.1.0',
     detail: 'מחובר לגשר של בובי',
     ...overrides,
   };
@@ -406,6 +409,112 @@ export function makeProbe(overrides: Partial<BridgeProbe> = {}): BridgeProbe {
     probe_only: true,
     would_execute: false,
     raw: {},
+    ...overrides,
+  };
+}
+
+// --- management (Phase 3A) -------------------------------------------------
+/**
+ * Management off — the default, and what the live install reports today.
+ *
+ * Every screen must be usable in this state, so it is what the shared route
+ * table serves unless a test deliberately turns management on.
+ */
+export function makeManagementOff(
+  overrides: Partial<ManagementStatus> = {},
+): ManagementStatus {
+  return {
+    available: false,
+    reason: 'ניהול עדיין לא הופעל ב-Home Assistant',
+    contract_version: null,
+    resources: [],
+    writes_enabled: false,
+    ...overrides,
+  };
+}
+
+/** Management on, as a Home Assistant write bridge would declare it. */
+export function makeManagementOn(
+  overrides: Partial<ManagementStatus> = {},
+): ManagementStatus {
+  return {
+    available: true,
+    reason: null,
+    contract_version: 'test-1',
+    resources: [
+      {
+        id: 'tasks',
+        label: 'משימות',
+        available: true,
+        detail: null,
+        operations: [
+          { id: 'create', label: 'הוספת משימה', destructive: false },
+          { id: 'rename', label: 'שינוי שם', destructive: false },
+          { id: 'complete', label: 'סימון כבוצעה', destructive: false },
+          { id: 'reopen', label: 'החזרה לפעילה', destructive: false },
+          { id: 'delete', label: 'מחיקה', destructive: true },
+        ],
+      },
+      {
+        id: 'features',
+        label: 'תכונות',
+        available: true,
+        detail: null,
+        operations: [{ id: 'set', label: 'הפעלה או כיבוי', destructive: false }],
+      },
+    ],
+    writes_enabled: false,
+    ...overrides,
+  };
+}
+
+export function makePreview(overrides: Partial<PreviewResponse> = {}): PreviewResponse {
+  return {
+    preview_id: 'pv_test',
+    operation: 'create',
+    resource_type: 'tasks',
+    resource_id: null,
+    title: 'הוספת משימה',
+    changes: [
+      { label: 'משתמש', before: 'ינון', after: 'ינון' },
+      { label: 'משימה', before: null, after: 'לקבוע תור לרופא' },
+    ],
+    explanation: 'המשימה תתווסף לרשימה של המשתמש.',
+    destructive: false,
+    warning: null,
+    confirm_word: null,
+    confirm_label: 'בצע שינוי',
+    valid: true,
+    errors: [],
+    expires_at: new Date(Date.now() + 300_000).toISOString(),
+    would_execute: false,
+    ...overrides,
+  };
+}
+
+export function makeCommit(overrides: Partial<CommitResponse> = {}): CommitResponse {
+  return {
+    preview_id: 'pv_test',
+    operation: 'create',
+    resource_type: 'tasks',
+    result: {
+      status: 'committed',
+      message: 'השינוי בוצע ואומת',
+      resource_id: 'task_new',
+      verification: { verified: true, method: 'read_after_write', detail: null },
+    },
+    audit: {
+      id: 'au_test',
+      timestamp: new Date().toISOString(),
+      stage: 'commit',
+      operation: 'create',
+      resource_type: 'tasks',
+      resource_id: 'task_new',
+      requested_change: { title: 'לקבוע תור לרופא' },
+      result: 'committed',
+      verified: true,
+      source: 'web',
+    },
     ...overrides,
   };
 }

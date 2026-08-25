@@ -1,7 +1,9 @@
 /**
  * TanStack Query hooks — the only way components read server data.
  *
- * Phase 2 has no mutations except the probe, which is a read of the parser.
+ * The only mutations are the probe, which is a read of the parser, and the
+ * managed preview/commit pair, which lives in `features/manage` because it is
+ * a flow rather than a single call.
  */
 
 import { useMutation, useQuery } from '@tanstack/react-query';
@@ -20,6 +22,8 @@ export const keys = {
   rules: ['rules'] as const,
   tasks: ['tasks'] as const,
   diagnostics: ['diagnostics'] as const,
+  managementStatus: ['management-status'] as const,
+  audit: ['audit'] as const,
 };
 
 /**
@@ -78,3 +82,16 @@ export const useDiagnostics = () =>
 export function useRunProbe() {
   return useMutation({ mutationFn: (text: string) => bobi.runProbe(text) });
 }
+
+/**
+ * Whether Home Assistant has declared a write bridge.
+ *
+ * Loaded on entry to a screen that offers management and cached after: this
+ * changes only when the Home Assistant side is reconfigured, so polling it
+ * would be a service call per interval for nothing.
+ */
+export const useManagementStatus = () =>
+  useQuery({ queryKey: keys.managementStatus, queryFn: bobi.fetchManagementStatus });
+
+/** Recent previews and commits. Loaded on entry to the settings screen. */
+export const useAudit = () => useQuery({ queryKey: keys.audit, queryFn: bobi.fetchAudit });

@@ -1,16 +1,20 @@
 """The single seam between this application and Home Assistant.
 
-Phase 2 narrows the interface to exactly the Bobi Control Center bridge: one
-method per `script.bobi_cc_*` service, and nothing else. There is deliberately
-no write method on this interface — an adapter cannot expose one without
-changing this file, which makes the read-only guarantee structural rather than
-a matter of discipline.
+Phase 2 narrowed this interface to exactly the Bobi Control Center bridge: one
+method per `script.bobi_cc_*` service, and no write method at all.
+
+Phase 3A keeps that discipline and adds one narrow door. There is still no
+write method here. Instead `management_bridge()` returns an object that only a
+Home Assistant write bridge can supply, and returns `None` — refusing every
+write — unless one has. An adapter cannot acquire a write path by editing
+itself; Home Assistant has to declare one.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from app.adapters.management import ManagementBridge
 from app.models.bridge import (
     BridgeCapabilities,
     BridgeDevices,
@@ -31,8 +35,22 @@ class HomeAssistantAdapter(ABC):
     #: Identifies the implementation in `/health` and the settings screen.
     name: str = "abstract"
 
-    #: Phase 2 invariant. No implementation may set this True.
+    #: Unrestricted writes. Still False in Phase 3A, for every implementation:
+    #: management is per-operation and goes through the bridge below, never
+    #: through a general permission to write.
     writes_enabled: bool = False
+
+    # --- management -------------------------------------------------------
+    def management_bridge(self) -> ManagementBridge | None:
+        """The declared write path, or `None`.
+
+        Concrete and defaulting to `None` on purpose: an adapter that does
+        nothing gets no write path, and the API answers *"ניהול עדיין לא הופעל
+        ב-Home Assistant"*. Overriding this is the only way to enable
+        management, and an override is only correct once Home Assistant
+        actually declares the contract.
+        """
+        return None
 
     # --- lifecycle --------------------------------------------------------
     async def aclose(self) -> None:  # noqa: B027 - optional hook, not abstract

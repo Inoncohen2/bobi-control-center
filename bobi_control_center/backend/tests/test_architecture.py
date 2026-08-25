@@ -233,15 +233,35 @@ def test_response_bodies_are_only_logged_in_debug_mode() -> None:
 
 
 # --- read-only guarantee ----------------------------------------------------
-def test_phase_two_cannot_write_to_home_assistant() -> None:
+def test_unrestricted_writes_stay_off() -> None:
+    """Phase 3A adds management, not a general permission to write."""
     from app.adapters import MockHomeAssistantAdapter, RealHomeAssistantAdapter
 
     assert RealHomeAssistantAdapter.writes_enabled is False
     assert MockHomeAssistantAdapter.writes_enabled is False
 
 
+def test_no_adapter_declares_a_write_bridge_yet() -> None:
+    """Management is refused until Home Assistant supplies the contract.
+
+    This is the whole of the Phase 3A safety story: the write path exists in
+    the code, and no running adapter has one.
+    """
+    from app.adapters import MockHomeAssistantAdapter, RealHomeAssistantAdapter
+    from app.config import Settings
+
+    assert MockHomeAssistantAdapter().management_bridge() is None
+    real = RealHomeAssistantAdapter(Settings(ha_token="unused-in-this-test"))
+    assert real.management_bridge() is None
+
+
 def test_the_adapter_interface_declares_no_write_method() -> None:
-    """Read-only is structural: there is nothing to implement."""
+    """Writing is not something an adapter can implement.
+
+    The abstract surface is still read-only. A write path arrives only as a
+    `ManagementBridge` an adapter hands back, which Home Assistant has to
+    declare — never as a method someone can fill in here.
+    """
     import inspect
 
     from app.adapters.base import HomeAssistantAdapter
@@ -263,6 +283,80 @@ def test_the_adapter_interface_declares_no_write_method() -> None:
         "get_diagnostics",
         "probe",
     }
+
+
+def test_management_cannot_be_switched_on_by_configuration() -> None:
+    """No setting, flag or environment variable may enable writes."""
+    from app.config import Settings
+
+    fields = set(Settings.model_fields)
+    for name in fields:
+        assert "write" not in name.lower(), f"a settings field must not gate writes: {name}"
+        assert "manage" not in name.lower(), f"a settings field must not gate writes: {name}"
+
+    # And the seam itself reads nothing from the process environment.
+    source = (BACKEND_APP / "adapters" / "management.py").read_text("utf-8")
+    for reader in ("os.environ", "os.getenv", "getenv(", "import os"):
+        assert reader not in source, f"the write seam must not read configuration: {reader}"
+
+
+def test_management_writes_only_through_declared_operations() -> None:
+    """No management route or service may name a Home Assistant service."""
+    forbidden = ("todo.", "input_boolean.", "call_service", "homeassistant.")
+    for name in ("api/manage.py", "services/manage.py", "models/manage.py"):
+        code = strip_comments((BACKEND_APP / name).read_text("utf-8"))
+        for token in forbidden:
+            assert token not in code, f"{name} must not reach a raw HA service: {token}"
+
+
+def test_the_bridge_allow_list_still_holds_only_reads() -> None:
+    """Phase 3A adds no service to the allow-list."""
+    from app.adapters.real import ALLOWED_SERVICES
+
+    assert frozenset(
+        {
+            "bobi_cc_status",
+            "bobi_cc_devices",
+            "bobi_cc_capabilities",
+            "bobi_cc_users",
+            "bobi_cc_shabbat",
+            "bobi_cc_rules",
+            "bobi_cc_tasks",
+            "bobi_cc_diagnostics",
+            "bobi_cc_probe",
+        }
+    ) == ALLOWED_SERVICES
+
+
+def test_every_non_get_route_is_a_probe_or_a_managed_change() -> None:
+    """Enumerate the published surface: nothing writes outside the managed flow.
+
+    Read from the OpenAPI schema rather than `app.routes`, because an included
+    router appears there as one opaque entry — the schema is what a client can
+    actually reach.
+    """
+    from app.main import create_app
+
+    paths = create_app().openapi()["paths"]
+    non_get = {
+        (path, method.upper())
+        for path, methods in paths.items()
+        for method in methods
+        if method.upper() not in {"GET", "HEAD", "OPTIONS"}
+    }
+
+    assert non_get == {
+        ("/api/bobi/probe", "POST"),
+        ("/api/bobi/manage/{resource}/preview", "POST"),
+        ("/api/bobi/manage/{resource}/commit", "POST"),
+    }
+
+
+def test_a_commit_cannot_run_without_a_confirmed_preview() -> None:
+    """The guard lives in the service, so no caller can route around it."""
+    source = (BACKEND_APP / "services" / "manage.py").read_text("utf-8")
+    assert "raise ConfirmationRequiredError" in source
+    assert "stored.consumed = True" in source
 
 
 def test_probe_hardcodes_would_execute_false() -> None:
@@ -301,6 +395,49 @@ def test_normalization_is_the_only_place_that_knows_bridge_field_names() -> None
     assert not offenders, (
         "the frontend must not touch raw bridge field names:\n" + "\n".join(offenders)
     )
+
+
+def test_the_frontend_cannot_write_without_a_preview() -> None:
+    """The commit guard lives in one hook, so no screen can route around it."""
+    hook = strip_comments(
+        (FRONTEND_SRC / "features" / "manage" / "useManagedChange.ts").read_text("utf-8")
+    )
+    # A commit without a valid preview returns early.
+    assert "if (!preview?.preview_id || !preview.valid) return;" in hook
+    # And every commit states the confirmation explicitly.
+    assert "confirmed: true" in hook
+
+    # No screen may call the commit endpoint itself.
+    for path in _frontend_sources():
+        if path.parts[-2:] == ("manage", "useManagedChange.ts"):
+            continue
+        code = strip_comments(path.read_text("utf-8"))
+        assert "commitChange" not in code or "api/bobi" in path.as_posix(), (
+            f"{path.name} must commit through useManagedChange, not directly"
+        )
+
+
+def test_a_destructive_change_needs_more_than_a_click() -> None:
+    dialog = strip_comments(
+        (FRONTEND_SRC / "features" / "manage" / "ChangeDialog.tsx").read_text("utf-8")
+    )
+    # The confirm button is disabled until the typed word matches.
+    assert "wordMatches" in dialog
+    assert "disabled={!preview?.valid || !wordMatches}" in dialog
+
+
+def test_the_preview_and_the_commit_are_labelled_differently() -> None:
+    """A user must never mistake "this is what would happen" for "done"."""
+    dialog = (FRONTEND_SRC / "features" / "manage" / "ChangeDialog.tsx").read_text("utf-8")
+    assert "'תצוגה מקדימה'" in dialog
+    assert "'ביצוע'" in dialog
+    for outcome in ("השינוי בוצע ואומת", "השינוי בוצע אך לא הצלחנו לאמת", "השינוי לא בוצע"):
+        assert outcome in (BACKEND_APP / "services" / "manage.py").read_text("utf-8"), outcome
+
+
+def test_the_unavailable_message_is_the_agreed_wording() -> None:
+    seam = (BACKEND_APP / "adapters" / "management.py").read_text("utf-8")
+    assert 'UNAVAILABLE_MESSAGE = "ניהול עדיין לא הופעל ב-Home Assistant"' in seam
 
 
 def test_frontend_marks_unfinished_writes() -> None:

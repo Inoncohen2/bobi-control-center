@@ -393,3 +393,123 @@ export interface ApiErrorBody {
   message: string;
   details: Record<string, unknown>;
 }
+
+// --- management (Phase 3A) -------------------------------------------------
+/**
+ * The write flow: edit → preview → confirm → commit → verify → result.
+ *
+ * Nothing here is optimistic. A commit reports one of three outcomes, and the
+ * UI must not show a saved state until the read-back agrees.
+ */
+
+/** One reason a change cannot proceed. `message` is Hebrew, for display. */
+export interface ManageValidationError {
+  field: string | null;
+  code: string;
+  message: string;
+}
+
+/** One before/after row of a preview, already rendered as text. */
+export interface ChangeField {
+  label: string;
+  before: string | null;
+  after: string | null;
+}
+
+export interface PreviewRequest {
+  operation: string;
+  resource_id?: string | null;
+  payload?: Record<string, unknown>;
+}
+
+export interface PreviewResponse {
+  /** Single-use; the matching commit requires it. */
+  preview_id: string;
+  operation: string;
+  resource_type: string;
+  resource_id: string | null;
+  title: string;
+  changes: ChangeField[];
+  explanation: string | null;
+  destructive: boolean;
+  warning: string | null;
+  /** The word the user must type to confirm a destructive change. */
+  confirm_word: string | null;
+  confirm_label: string;
+  valid: boolean;
+  errors: ManageValidationError[];
+  expires_at: string;
+  /** A preview never writes. */
+  would_execute: boolean;
+}
+
+export interface CommitRequest {
+  preview_id: string;
+  confirmed: boolean;
+  confirm_word?: string | null;
+}
+
+export interface VerificationResult {
+  verified: boolean;
+  method: string | null;
+  detail: string | null;
+}
+
+export interface WriteResult {
+  /** `committed` · `committed_unverified` · `failed`. */
+  status: string;
+  /** Hebrew, exactly what the screen shows. */
+  message: string;
+  resource_id: string | null;
+  verification: VerificationResult;
+}
+
+export interface AuditEntry {
+  id: string;
+  timestamp: string;
+  stage: string;
+  operation: string;
+  resource_type: string;
+  resource_id: string | null;
+  requested_change: Record<string, unknown>;
+  result: string;
+  verified: boolean | null;
+  source: string;
+}
+
+export interface CommitResponse {
+  preview_id: string;
+  operation: string;
+  resource_type: string;
+  result: WriteResult;
+  audit: AuditEntry;
+}
+
+export interface ManagedOperation {
+  id: string;
+  label: string;
+  destructive: boolean;
+}
+
+export interface ManagementResource {
+  id: string;
+  label: string;
+  available: boolean;
+  operations: ManagedOperation[];
+  detail: string | null;
+}
+
+export interface ManagementStatus {
+  available: boolean;
+  /** Hebrew. Shown when management is off. */
+  reason: string | null;
+  contract_version: string | null;
+  resources: ManagementResource[];
+  /** Still false: unrestricted writes remain off. */
+  writes_enabled: boolean;
+}
+
+export interface AuditLog {
+  count: number;
+  records: AuditEntry[];
+}

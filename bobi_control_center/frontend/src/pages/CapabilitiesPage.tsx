@@ -6,9 +6,13 @@ import { Card, SectionTitle } from '@/components/ui/Card';
 import { AdvancedDisclosure, TechnicalDetails } from '@/components/ui/Advanced';
 import { Modal } from '@/components/ui/Modal';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { NextPhaseBadge, ReadOnlyNotice, ReadOnlyToggle } from '@/components/ui/ReadOnly';
+import { NextPhaseBadge, ReadOnlyToggle } from '@/components/ui/ReadOnly';
+import { ChangeDialog } from '@/features/manage/ChangeDialog';
+import { useManagedChange } from '@/features/manage/useManagedChange';
+import { ManagementNotice, useResource } from '@/features/manage/ManagementNotice';
 import { EmptyState, QueryBoundary } from '@/components/state/QueryBoundary';
-import { useCapabilities } from '@/hooks/queries';
+import { keys, useCapabilities, useManagementStatus } from '@/hooks/queries';
+import { cn } from '@/utils/cn';
 import type { BridgeCapability, CapabilityToggle } from '@/types/api';
 import { RISK_LABELS, RISK_TONE } from '@/utils/format';
 
@@ -106,7 +110,21 @@ function CapabilityCard({
   );
 }
 
-function ToggleRow({ toggle }: { toggle: CapabilityToggle }) {
+/**
+ * One master toggle.
+ *
+ * When management is unavailable it renders exactly as it did in Phase 2 — an
+ * indicator, not a control. When it is available, flipping it opens the preview
+ * dialog rather than switching anything: the toggle's visible state keeps
+ * showing what the bridge last reported, never what the user just clicked.
+ */
+function ToggleRow({
+  toggle,
+  onChange,
+}: {
+  toggle: CapabilityToggle;
+  onChange?: (toggle: CapabilityToggle, next: boolean) => void;
+}) {
   const label = toggle.label;
   // `enabled` is resolved by the backend; the raw state is only a fallback.
   const on = toggle.enabled ?? (toggle.state ?? '').toLowerCase() === 'on';
@@ -115,7 +133,30 @@ function ToggleRow({ toggle }: { toggle: CapabilityToggle }) {
     <li className="px-4 py-3">
       <div className="flex items-center justify-between gap-3">
         <p className="min-w-0 font-medium text-slate-900 dark:text-slate-100">{label}</p>
-        <ReadOnlyToggle on={on} label={label} />
+        {onChange ? (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={on}
+            aria-label={label}
+            onClick={() => onChange(toggle, !on)}
+            className={cn(
+              'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors',
+              'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bobi-600',
+              on ? 'bg-bobi-500' : 'bg-slate-300 dark:bg-slate-600',
+            )}
+          >
+            <span
+              aria-hidden="true"
+              className={cn(
+                'absolute right-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform',
+                on ? '-translate-x-5' : 'translate-x-0',
+              )}
+            />
+          </button>
+        ) : (
+          <ReadOnlyToggle on={on} label={label} />
+        )}
       </div>
       {/* The badge sits on its own line: side by side it crowds the label on a
           narrow screen. */}
@@ -123,7 +164,7 @@ function ToggleRow({ toggle }: { toggle: CapabilityToggle }) {
         <span className="text-xs text-slate-500 dark:text-slate-400">
           {on ? 'מופעל' : 'כבוי'}
         </span>
-        <NextPhaseBadge />
+        {onChange ? null : <NextPhaseBadge />}
       </div>
     </li>
   );
@@ -131,6 +172,9 @@ function ToggleRow({ toggle }: { toggle: CapabilityToggle }) {
 
 export function CapabilitiesPage() {
   const query = useCapabilities();
+  const management = useManagementStatus();
+  const featuresResource = useResource(management.data, 'features');
+  const change = useManagedChange('features', [keys.capabilities, keys.status]);
   const [openKey, setOpenKey] = useState<string | null>(null);
 
   // Memoised so the `?? []` fallback does not produce a fresh array on every
@@ -158,9 +202,12 @@ export function CapabilitiesPage() {
         description="מה בובי יודע לעשות, לפי הרישום הקנוני שלו."
       />
 
-      <ReadOnlyNotice className="mb-4">
-        רשימת היכולות והמתגים מוצגים לקריאה בלבד. שינוי מצב יהיה זמין בשלב הבא.
-      </ReadOnlyNotice>
+      <ManagementNotice
+        status={management.data}
+        resource="features"
+        className="mb-4"
+        readOnlyText="רשימת היכולות והמתגים מוצגים לקריאה בלבד."
+      />
 
       <QueryBoundary
         isLoading={query.isLoading}
@@ -208,7 +255,24 @@ export function CapabilitiesPage() {
                 <Card className="p-0">
                   <ul className="divide-y divide-slate-100 dark:divide-slate-700/60">
                     {data.toggles.map((toggle) => (
-                      <ToggleRow key={toggle.id} toggle={toggle} />
+                      <ToggleRow
+                        key={toggle.id}
+                        toggle={toggle}
+                        onChange={
+                          featuresResource?.available
+                            ? (item, next) =>
+                                void change.start({
+                                  operation: 'set',
+                                  resource_id: item.id,
+                                  payload: {
+                                    label: item.label,
+                                    current: item.enabled,
+                                    enabled: next,
+                                  },
+                                })
+                            : undefined
+                        }
+                      />
                     ))}
                   </ul>
                 </Card>
@@ -226,6 +290,8 @@ export function CapabilitiesPage() {
       {openCapability ? (
         <CapabilityDetail capability={openCapability} onClose={() => setOpenKey(null)} />
       ) : null}
+
+      <ChangeDialog change={change} />
     </>
   );
 }

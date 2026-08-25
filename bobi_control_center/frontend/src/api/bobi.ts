@@ -1,8 +1,9 @@
 /**
  * One typed function per backend endpoint.
  *
- * Phase 2 is read-only: the only non-GET call is the probe, which Home
- * Assistant guarantees runs with `probe_only=true`.
+ * The only non-GET calls are the probe — which Home Assistant runs with
+ * `probe_only=true` — and the managed preview/commit pair, which cannot write
+ * unless Home Assistant has declared a write bridge.
  *
  * Components never call these directly — they go through `src/hooks/queries.ts`.
  */
@@ -20,6 +21,12 @@ import type {
   BridgeUsers,
   ConnectionInfo,
   DeviceScope,
+  AuditLog,
+  CommitRequest,
+  CommitResponse,
+  ManagementStatus,
+  PreviewRequest,
+  PreviewResponse,
 } from '@/types/api';
 
 const ROOT = '/api/bobi';
@@ -41,3 +48,19 @@ export const fetchDiagnostics = () => api.get<BridgeDiagnostics>(`${ROOT}/diagno
 
 /** Probe only — never executes. */
 export const runProbe = (text: string) => api.post<BridgeProbe>(`${ROOT}/probe`, { text });
+
+// --- management ------------------------------------------------------------
+const MANAGE = `${ROOT}/manage`;
+
+/** Whether Home Assistant has declared a write bridge. Discovered, not configured. */
+export const fetchManagementStatus = () => api.get<ManagementStatus>(`${MANAGE}/status`);
+
+/** Describe a change. Performs no write — the backend guarantees it. */
+export const previewChange = (resource: string, request: PreviewRequest) =>
+  api.post<PreviewResponse>(`${MANAGE}/${resource}/preview`, request);
+
+/** Apply a previewed, confirmed change. Refused without a valid preview id. */
+export const commitChange = (resource: string, request: CommitRequest) =>
+  api.post<CommitResponse>(`${MANAGE}/${resource}/commit`, request);
+
+export const fetchAudit = () => api.get<AuditLog>(`${MANAGE}/audit`);
