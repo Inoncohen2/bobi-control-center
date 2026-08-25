@@ -10,15 +10,19 @@ served through Home Assistant Ingress.
 
 > ### 🔒 Writes fail closed
 >
-> The app calls only Bobi's `script.bobi_cc_*` bridge services, every one of
-> which is a read or a probe. Phase 3A adds a management path for **tasks and
-> feature toggles** — but it is refused entirely until Home Assistant declares a
-> write bridge, and none exists yet, so the app still cannot change anything.
-> Nothing in settings or the environment can turn it on.
+> The app calls only Bobi's `script.bobi_cc_*` bridge services — fourteen of
+> them, and no raw `todo.*` or `input_boolean.*` ever. Phase 3A manages **tasks
+> and feature toggles** through Bobi's own write bridge, behind two independent
+> safety layers: this app's single-use preview token, and Home Assistant's
+> master switch, whitelists and read-after-write.
 >
-> When it is enabled, every change is previewed in Hebrew, confirmed explicitly,
-> then read back before the screen says it happened. Device control, Shabbat
-> saving, rules, automations, calendar and permissions remain untouched.
+> **That master switch is off today**, so previews work and commits answer
+> *"ניהול עדיין לא הופעל ב-Home Assistant"*. Nothing here can turn it on.
+>
+> Every change is previewed in Hebrew, confirmed explicitly, then read back
+> before the screen says it happened. Device control, Shabbat saving, rules,
+> automations, calendar, permissions, the AI master toggle and Fast Paths remain
+> untouched.
 
 ---
 
@@ -231,15 +235,19 @@ lets the Supervisor build it.
 
 ## Phase 3
 
-**3A (prepared, inert).** The management path exists end to end: preview,
-confirm, commit, read-after-write verification, audit — for tasks and feature
-toggles. `RealHomeAssistantAdapter.management_bridge()` returns `None`, which is
-the whole refusal; supplying a `ManagementBridge` there, once Home Assistant
-declares its write service names and schemas, is what switches it on.
+**3A (wired, awaiting the switch).** Tasks — add, edit, complete, reopen,
+delete — and Bobi's four feature toggles, through
+`script.bobi_cc_manage_contract`, `bobi_cc_task_snapshot`,
+`bobi_cc_task_add_commit`, `bobi_cc_task_update_commit` and
+`bobi_cc_feature_commit`. Everything works except the commit itself, because
+Home Assistant's master write switch is off pending its own end-to-end testing.
+Flipping it is done there, never here.
 
 **Later milestones.** Device control, Shabbat saving, smart rules, automation
-editing, calendar writes and permission changes — each added to the closed set
-of managed resources deliberately, never by widening what a request may name.
+editing, calendar writes, permission changes, the AI master toggle and Fast
+Paths — each needs its own Home Assistant contract, and each is added to the
+closed set of managed resources deliberately, never by widening what a request
+may name.
 
 ## License
 

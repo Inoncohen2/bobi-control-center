@@ -30,13 +30,47 @@ from app.models.bridge import CanonicalModel
 #: later milestone has to add itself here deliberately.
 MANAGED_RESOURCES = ("tasks", "features")
 
-#: Operations, per resource. `reopen` is listed because a task list may support
-#: it; the bridge decides, and an unsupported operation is simply not offered.
-TASK_OPERATIONS = ("create", "rename", "complete", "reopen", "delete")
+#: Operations, per resource — named exactly as the Home Assistant contract
+#: names them, so nothing has to be translated on the way out. The bridge
+#: declares which of these it supports; anything it omits is never offered.
+TASK_OPERATIONS = ("add", "edit", "complete", "reopen", "delete")
 FEATURE_OPERATIONS = ("set",)
 
 #: Operations that destroy something a person cannot get back by undoing.
 DESTRUCTIVE_OPERATIONS = frozenset({"delete"})
+
+
+class ObservedState(CanonicalModel):
+    """What the resource looked like when the preview was taken.
+
+    This is the other half of the safety story: Home Assistant re-checks these
+    values immediately before it acts, and refuses with `stale_preview` if the
+    world moved on. So a preview binds to what it saw, and the commit carries
+    that forward unchanged.
+    """
+
+    resource_id: str | None = None
+    #: A readable name for the preview dialog.
+    label: str | None = None
+    #: The exact values the bridge will compare against — `summary`, `status`,
+    #: `state`. Never anything the user typed.
+    values: dict[str, Any] = Field(default_factory=dict)
+
+
+class BridgeOutcome(CanonicalModel):
+    """What the Home Assistant write bridge reported.
+
+    The bridge performs its own read-after-write, so `verified` is its answer,
+    not a guess made here. `reason` is its own token — `stale_preview`,
+    `already_in_state`, and whatever else it may add.
+    """
+
+    executed: bool = False
+    verified: bool | None = None
+    reason: str | None = None
+    resource_id: str | None = None
+    #: The bridge's master switch, as it reported it on this call.
+    writes_enabled: bool = False
 
 
 class ValidationError(CanonicalModel):
@@ -116,7 +150,14 @@ class PreviewResponse(CanonicalModel):
 
 
 class CommitRequest(BaseModel):
-    """The confirmation of a preview the user has seen."""
+    """The confirmation of a preview the user has seen.
+
+    Deliberately carries no payload. Everything that will be sent to Home
+    Assistant comes from the stored preview, so a client cannot alter what it
+    confirmed. `operation` and `resource_id` may be echoed back, and are then
+    checked against the stored preview — a mismatch is a rejected commit, not a
+    silently corrected one.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -126,6 +167,9 @@ class CommitRequest(BaseModel):
     #: For a destructive change: the word from `PreviewResponse.confirm_word`,
     #: typed by the user.
     confirm_word: str | None = None
+    #: Optional echoes, checked for agreement with the stored preview.
+    operation: str | None = None
+    resource_id: str | None = None
 
 
 class VerificationResult(CanonicalModel):
@@ -150,6 +194,8 @@ class WriteResult(CanonicalModel):
     #: Hebrew, exactly what the screen shows.
     message: str
     resource_id: str | None = None
+    #: The bridge's own reason token, kept for the technical view.
+    reason: str | None = None
     verification: VerificationResult = Field(default_factory=VerificationResult)
 
 
@@ -194,6 +240,24 @@ class ManagedOperation(CanonicalModel):
     destructive: bool = False
 
 
+class ManagedTarget(CanonicalModel):
+    """Something an operation may be applied to.
+
+    For tasks these are the household members the bridge will accept; for
+    features, the feature ids it will accept. Either way the id is the bridge's
+    own token — never a Home Assistant entity id, which the bridge does not
+    hand out and this app must not reconstruct.
+    """
+
+    id: str
+    label: str
+    #: Features only, when the bridge rates them.
+    risk: str | None = None
+    #: Features only: current state, when the bridge reports it. `None` means
+    #: unknown, which blocks a preview rather than being guessed.
+    enabled: bool | None = None
+
+
 class ManagementResource(CanonicalModel):
     """What can be managed, and how."""
 
@@ -201,6 +265,8 @@ class ManagementResource(CanonicalModel):
     label: str
     available: bool = False
     operations: list[ManagedOperation] = Field(default_factory=list)
+    #: Who or what the operations may target.
+    targets: list[ManagedTarget] = Field(default_factory=list)
     #: Hebrew, when unavailable — why not.
     detail: str | None = None
 
@@ -212,13 +278,49 @@ class ManagementStatus(CanonicalModel):
     no setting or environment variable that can turn management on.
     """
 
+    #: The bridge answered and declares itself usable. Previews may run.
     available: bool = False
     #: Hebrew. The screen shows this when management is off.
     reason: str | None = None
-    #: The HA-side contract's own version, once it declares one.
+    #: The HA-side contract's own version.
     contract_version: str | None = None
     resources: list[ManagementResource] = Field(default_factory=list)
-    #: The Phase 2 invariant, still false: unrestricted writes remain off.
+
+    #: Home Assistant's master write switch, **as the bridge reports it**. It is
+    #: off today, by design: previews work, commits are refused. Nothing in this
+    #: application can turn it on, and no endpoint tries.
+    writes_enabled: bool = False
+    #: The flow the bridge requires. All three are true today, and this app does
+    #: all three regardless — it never relaxes a step because the bridge said it
+    #: could.
+    requires_preview: bool = True
+    requires_confirmation: bool = True
+    requires_read_after_write: bool = True
+
+
+class SnapshotTask(CanonicalModel):
+    """One task as the management snapshot reports it.
+
+    `uid` is the bridge's own task id — the handle a commit needs. No Home
+    Assistant `todo.*` entity id appears here, because the bridge does not send
+    one and this app must not infer one.
+    """
+
+    uid: str
+    summary: str
+    status: str
+    completed: bool = False
+    due: str | None = None
+    owner_id: str
+    owner: str
+
+
+class TaskSnapshot(CanonicalModel):
+    """Normalized `script.bobi_cc_task_snapshot` — open and completed alike."""
+
+    count: int = 0
+    tasks: list[SnapshotTask] = Field(default_factory=list)
+    owners: list[ManagedTarget] = Field(default_factory=list)
     writes_enabled: bool = False
 
 

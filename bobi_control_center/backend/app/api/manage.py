@@ -20,6 +20,7 @@ from app.models.manage import (
     ManagementStatus,
     PreviewRequest,
     PreviewResponse,
+    TaskSnapshot,
 )
 
 router = APIRouter(prefix="/api/bobi/manage", tags=["manage"])
@@ -38,15 +39,29 @@ def _check(resource: str) -> str:
     return resource
 
 
-@router.get("/status", response_model=ManagementStatus, summary="מצב הניהול")
-async def get_management_status(service: ManagementDep) -> ManagementStatus:
-    """Whether management is available, discovered from the bridge.
+@router.get("/contract", response_model=ManagementStatus, summary="חוזה הניהול")
+async def get_management_contract(service: ManagementDep) -> ManagementStatus:
+    """`script.bobi_cc_manage_contract` — what may be managed, and whether writes are on.
 
-    Nothing in configuration can turn this on — if Home Assistant has not
-    declared a write bridge, this reports unavailable and every other route
-    below refuses.
+    Read-only, and the only place `writes_enabled` comes from. Nothing in
+    configuration can turn management on, and **no endpoint anywhere in this
+    application can set Home Assistant's master write switch** — it is reported
+    and never written. Enabling it is a Home Assistant-side decision.
     """
     return await service.status()
+
+
+@router.get(
+    "/tasks/snapshot", response_model=TaskSnapshot, summary="משימות פתוחות והושלמו"
+)
+async def get_task_snapshot(service: ManagementDep) -> TaskSnapshot:
+    """`script.bobi_cc_task_snapshot`. Read-only.
+
+    The list a preview binds to. Carries the bridge's own task `uid`, never a
+    Home Assistant `todo.*` entity id — the bridge does not send one, and this
+    application must not infer one.
+    """
+    return await service.snapshot()
 
 
 @router.post(

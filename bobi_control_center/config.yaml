@@ -5,7 +5,7 @@
 # ever called.
 
 name: Bobi Control Center
-version: "2.1.0"
+version: "2.2.0"
 slug: bobi_control_center
 description: מרכז הניהול של בובי — מכשירים, יכולות, שעון שבת, כללים חכמים ומרכז בדיקות
 url: https://github.com/Inoncohen2/bobi-control-center

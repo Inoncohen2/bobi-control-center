@@ -16,6 +16,7 @@ import type {
   ManagementStatus,
   PreviewResponse,
   CommitResponse,
+  TaskSnapshot,
 } from '@/types/api';
 
 export function makeConnection(overrides: Partial<ConnectionInfo> = {}): ConnectionInfo {
@@ -24,7 +25,7 @@ export function makeConnection(overrides: Partial<ConnectionInfo> = {}): Connect
     connected: true,
     writes_enabled: false,
     phase: 2,
-    app_version: '2.1.0',
+    app_version: '2.2.0',
     detail: 'מחובר לגשר של בובי',
     ...overrides,
   };
@@ -429,18 +430,24 @@ export function makeManagementOff(
     contract_version: null,
     resources: [],
     writes_enabled: false,
+    requires_preview: true,
+    requires_confirmation: true,
+    requires_read_after_write: true,
     ...overrides,
   };
 }
 
-/** Management on, as a Home Assistant write bridge would declare it. */
+/**
+ * The contract as Home Assistant publishes it — bridge available, **master
+ * write switch off**, which is the real state today.
+ */
 export function makeManagementOn(
   overrides: Partial<ManagementStatus> = {},
 ): ManagementStatus {
   return {
     available: true,
     reason: null,
-    contract_version: 'test-1',
+    contract_version: '3a',
     resources: [
       {
         id: 'tasks',
@@ -448,11 +455,15 @@ export function makeManagementOn(
         available: true,
         detail: null,
         operations: [
-          { id: 'create', label: 'הוספת משימה', destructive: false },
-          { id: 'rename', label: 'שינוי שם', destructive: false },
+          { id: 'add', label: 'הוספת משימה', destructive: false },
+          { id: 'edit', label: 'שינוי תוכן', destructive: false },
           { id: 'complete', label: 'סימון כבוצעה', destructive: false },
           { id: 'reopen', label: 'החזרה לפעילה', destructive: false },
           { id: 'delete', label: 'מחיקה', destructive: true },
+        ],
+        targets: [
+          { id: 'user_1', label: 'ינון', risk: null, enabled: null },
+          { id: 'user_2', label: 'הודיה', risk: null, enabled: null },
         ],
       },
       {
@@ -461,7 +472,47 @@ export function makeManagementOn(
         available: true,
         detail: null,
         operations: [{ id: 'set', label: 'הפעלה או כיבוי', destructive: false }],
+        targets: [
+          { id: 'morning_auto', label: 'סיכום בוקר אוטומטי', risk: 'low', enabled: false },
+          { id: 'home_status_auto', label: 'מצב הבית האוטומטי', risk: 'low', enabled: true },
+        ],
       },
+    ],
+    writes_enabled: false,
+    requires_preview: true,
+    requires_confirmation: true,
+    requires_read_after_write: true,
+    ...overrides,
+  };
+}
+
+/** The management snapshot: both open and completed tasks, with bridge uids. */
+export function makeTaskSnapshot(overrides: Partial<TaskSnapshot> = {}): TaskSnapshot {
+  return {
+    count: 2,
+    tasks: [
+      {
+        uid: 'u-1',
+        summary: 'לקבוע תור לרופא',
+        status: 'needs_action',
+        completed: false,
+        due: null,
+        owner_id: 'user_1',
+        owner: 'ינון',
+      },
+      {
+        uid: 'u-2',
+        summary: 'לחדש ביטוח רכב',
+        status: 'completed',
+        completed: true,
+        due: null,
+        owner_id: 'user_2',
+        owner: 'הודיה',
+      },
+    ],
+    owners: [
+      { id: 'user_1', label: 'ינון', risk: null, enabled: null },
+      { id: 'user_2', label: 'הודיה', risk: null, enabled: null },
     ],
     writes_enabled: false,
     ...overrides,
@@ -471,7 +522,7 @@ export function makeManagementOn(
 export function makePreview(overrides: Partial<PreviewResponse> = {}): PreviewResponse {
   return {
     preview_id: 'pv_test',
-    operation: 'create',
+    operation: 'add',
     resource_type: 'tasks',
     resource_id: null,
     title: 'הוספת משימה',
@@ -495,21 +546,22 @@ export function makePreview(overrides: Partial<PreviewResponse> = {}): PreviewRe
 export function makeCommit(overrides: Partial<CommitResponse> = {}): CommitResponse {
   return {
     preview_id: 'pv_test',
-    operation: 'create',
+    operation: 'add',
     resource_type: 'tasks',
     result: {
       status: 'committed',
       message: 'השינוי בוצע ואומת',
-      resource_id: 'task_new',
+      resource_id: 'u-9',
+      reason: 'ok',
       verification: { verified: true, method: 'read_after_write', detail: null },
     },
     audit: {
       id: 'au_test',
       timestamp: new Date().toISOString(),
       stage: 'commit',
-      operation: 'create',
+      operation: 'add',
       resource_type: 'tasks',
-      resource_id: 'task_new',
+      resource_id: 'u-9',
       requested_change: { title: 'לקבוע תור לרופא' },
       result: 'committed',
       verified: true,

@@ -11,19 +11,60 @@ import { EmptyState, QueryBoundary } from '@/components/state/QueryBoundary';
 import { ChangeDialog } from '@/features/manage/ChangeDialog';
 import { useManagedChange } from '@/features/manage/useManagedChange';
 import { ManagementNotice, useResource } from '@/features/manage/ManagementNotice';
-import { keys, useManagementStatus, useTasks } from '@/hooks/queries';
-import type { BridgeTask } from '@/types/api';
+import { keys, useManagementContract, useTaskSnapshot, useTasks } from '@/hooks/queries';
+import type { BridgeTask, ManagedTarget, SnapshotTask } from '@/types/api';
 import { formatDate } from '@/utils/format';
 import { cn } from '@/utils/cn';
 
-interface RowActions {
-  /** Undefined while management is unavailable — the row then renders read-only. */
-  onEdit?: (task: BridgeTask) => void;
-  onToggle?: (task: BridgeTask) => void;
-  onDelete?: (task: BridgeTask) => void;
+/**
+ * One task, from whichever source the screen is using.
+ *
+ * The read-only screen renders `bobi_cc_tasks`; the managed screen renders the
+ * management snapshot, because a change needs the bridge's own `uid` and the
+ * owner's id, which the read-only list does not carry.
+ */
+interface TaskRowData {
+  id: string;
+  title: string;
+  completed: boolean;
+  owner: string | null;
+  ownerId: string | null;
+  due: string | null;
+  listName: string | null;
 }
 
-function TaskRow({ task, actions }: { task: BridgeTask; actions: RowActions }) {
+function fromRead(task: BridgeTask): TaskRowData {
+  return {
+    id: task.id,
+    title: task.title,
+    completed: task.completed,
+    owner: task.owner,
+    ownerId: null,
+    due: task.due,
+    listName: task.list_name,
+  };
+}
+
+function fromSnapshot(task: SnapshotTask): TaskRowData {
+  return {
+    id: task.uid,
+    title: task.summary,
+    completed: task.completed,
+    owner: task.owner,
+    ownerId: task.owner_id,
+    due: task.due,
+    listName: null,
+  };
+}
+
+interface RowActions {
+  /** Undefined while management is unavailable — the row then renders read-only. */
+  onEdit?: (task: TaskRowData) => void;
+  onToggle?: (task: TaskRowData) => void;
+  onDelete?: (task: TaskRowData) => void;
+}
+
+function TaskRow({ task, actions }: { task: TaskRowData; actions: RowActions }) {
   const done = task.completed;
   const canManage = Boolean(actions.onToggle);
 
@@ -76,9 +117,9 @@ function TaskRow({ task, actions }: { task: BridgeTask; actions: RowActions }) {
         </p>
         <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-slate-500 dark:text-slate-400">
           {task.owner ? <span>{task.owner}</span> : null}
-          {task.owner && (task.due || task.list_name) ? <span aria-hidden="true">·</span> : null}
+          {task.owner && (task.due || task.listName) ? <span aria-hidden="true">·</span> : null}
           {task.due ? <span>{formatDate(task.due)}</span> : null}
-          {task.list_name ? <Badge tone="muted">{task.list_name}</Badge> : null}
+          {task.listName ? <Badge tone="muted">{task.listName}</Badge> : null}
         </p>
       </div>
 
@@ -107,7 +148,7 @@ function TaskRow({ task, actions }: { task: BridgeTask; actions: RowActions }) {
   );
 }
 
-/** The add/rename form. Submitting only asks for a preview — it never saves. */
+/** The add/edit form. Submitting only asks for a preview — it never saves. */
 function TaskForm({
   open,
   task,
@@ -116,21 +157,23 @@ function TaskForm({
   onPreview,
 }: {
   open: boolean;
-  task: BridgeTask | null;
-  owners: string[];
+  task: TaskRowData | null;
+  owners: ManagedTarget[];
   onClose: () => void;
-  onPreview: (values: { title: string; owner: string }) => void;
+  onPreview: (values: { summary: string; userId: string; dueDate: string }) => void;
 }) {
-  const [title, setTitle] = useState('');
-  const [owner, setOwner] = useState('');
+  const [summary, setSummary] = useState('');
+  const [userId, setUserId] = useState('');
+  const [dueDate, setDueDate] = useState('');
 
   // Re-seed whenever the dialog opens on a different task.
   const seed = task?.id ?? 'new';
   const [seeded, setSeeded] = useState(seed);
   if (open && seeded !== seed) {
     setSeeded(seed);
-    setTitle(task?.title ?? '');
-    setOwner(task?.owner ?? owners[0] ?? '');
+    setSummary(task?.title ?? '');
+    setUserId(task?.ownerId ?? owners[0]?.id ?? '');
+    setDueDate('');
   }
 
   if (!open) return null;
@@ -139,13 +182,13 @@ function TaskForm({
     <Modal
       open
       onClose={onClose}
-      title={task ? 'שינוי שם משימה' : 'הוספת משימה'}
+      title={task ? 'שינוי תוכן משימה' : 'הוספת משימה'}
       description="אחרי המילוי תוצג תצוגה מקדימה לפני כל שינוי."
       footer={
         <div className="flex flex-wrap gap-2">
           <Button
-            disabled={!title.trim()}
-            onClick={() => onPreview({ title: title.trim(), owner })}
+            disabled={!summary.trim()}
+            onClick={() => onPreview({ summary: summary.trim(), userId, dueDate })}
           >
             המשך לתצוגה מקדימה
           </Button>
@@ -157,20 +200,29 @@ function TaskForm({
     >
       <div className="space-y-4">
         <TextField
-          id="task-title"
+          id="task-summary"
           label="תוכן המשימה"
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
+          value={summary}
+          onChange={(event) => setSummary(event.target.value)}
           placeholder="לקבוע תור לרופא"
         />
         {task ? null : (
-          <SelectField
-            id="task-owner"
-            label="למי המשימה שייכת"
-            value={owner}
-            onChange={(event) => setOwner(event.target.value)}
-            options={owners.map((name) => ({ value: name, label: name }))}
-          />
+          <>
+            <SelectField
+              id="task-owner"
+              label="למי המשימה שייכת"
+              value={userId}
+              onChange={(event) => setUserId(event.target.value)}
+              options={owners.map((owner) => ({ value: owner.id, label: owner.label }))}
+            />
+            <TextField
+              id="task-due"
+              type="date"
+              label="תאריך יעד (לא חובה)"
+              value={dueDate}
+              onChange={(event) => setDueDate(event.target.value)}
+            />
+          </>
         )}
       </div>
     </Modal>
@@ -178,18 +230,27 @@ function TaskForm({
 }
 
 export function TasksPage() {
-  const query = useTasks();
-  const management = useManagementStatus();
+  const management = useManagementContract();
   const tasksResource = useResource(management.data, 'tasks');
-  const change = useManagedChange('tasks', [keys.tasks]);
+  const canManage = tasksResource?.available ?? false;
+
+  // Two sources, never both: the read-only catalog, or the management snapshot
+  // that carries the uid a change needs.
+  const readOnly = useTasks();
+  const snapshot = useTaskSnapshot(canManage);
+  const change = useManagedChange('tasks', [keys.taskSnapshot, keys.tasks]);
 
   const [showCompleted, setShowCompleted] = useState(false);
-  const [form, setForm] = useState<{ open: boolean; task: BridgeTask | null }>({
+  const [form, setForm] = useState<{ open: boolean; task: TaskRowData | null }>({
     open: false,
     task: null,
   });
 
-  const canManage = tasksResource?.available ?? false;
+  const query = canManage ? snapshot : readOnly;
+  const rows: TaskRowData[] = canManage
+    ? (snapshot.data?.tasks ?? []).map(fromSnapshot)
+    : (readOnly.data?.tasks ?? []).map(fromRead);
+  const owners = snapshot.data?.owners ?? tasksResource?.targets ?? [];
 
   const supports = (operation: string) =>
     canManage && (tasksResource?.operations ?? []).some((item) => item.id === operation);
@@ -200,18 +261,11 @@ export function TasksPage() {
         onToggle: (task) => {
           const operation = task.completed ? 'reopen' : 'complete';
           if (!supports(operation)) return;
-          void change.start({
-            operation,
-            resource_id: task.id,
-            payload: { owner: task.owner, current_title: task.title },
-          });
+          // No payload beyond the target: the backend reads the current state
+          // itself, so the screen cannot mis-state what is being changed.
+          void change.start({ operation, resource_id: task.id });
         },
-        onDelete: (task) =>
-          void change.start({
-            operation: 'delete',
-            resource_id: task.id,
-            payload: { owner: task.owner, current_title: task.title },
-          }),
+        onDelete: (task) => void change.start({ operation: 'delete', resource_id: task.id }),
       }
     : {};
 
@@ -233,7 +287,7 @@ export function TasksPage() {
         errorMessage="לא הצלחתי לקבל את רשימת המשימות מ-Home Assistant"
         loadingLabel="טוען משימות…"
         onRetry={() => void query.refetch()}
-        isEmpty={(data) => data.tasks.length === 0 && !canManage}
+        isEmpty={() => rows.length === 0 && !canManage}
         empty={
           <EmptyState
             title="אין משימות פתוחות 🎉"
@@ -242,16 +296,16 @@ export function TasksPage() {
           />
         }
       >
-        {(data) => {
-          const open = data.tasks.filter((task) => !task.completed);
-          const completed = data.tasks.filter((task) => task.completed);
+        {() => {
+          const open = rows.filter((task) => !task.completed);
+          const completed = rows.filter((task) => task.completed);
 
           return (
             <div className="space-y-6">
               <section aria-labelledby="open-heading">
                 <SectionTitle
                   action={
-                    supports('create') ? (
+                    supports('add') ? (
                       <Button
                         size="sm"
                         icon={<Plus size={16} />}
@@ -313,19 +367,22 @@ export function TasksPage() {
       <TaskForm
         open={form.open}
         task={form.task}
-        owners={query.data?.owners ?? []}
+        owners={owners}
         onClose={() => setForm({ open: false, task: null })}
-        onPreview={({ title, owner }) => {
+        onPreview={({ summary, userId, dueDate }) => {
           const task = form.task;
           setForm({ open: false, task: null });
           void change.start(
             task
               ? {
-                  operation: 'rename',
+                  operation: 'edit',
                   resource_id: task.id,
-                  payload: { title, owner: task.owner, current_title: task.title },
+                  payload: { new_summary: summary },
                 }
-              : { operation: 'create', payload: { title, owner } },
+              : {
+                  operation: 'add',
+                  payload: { summary, user_id: userId, due_date: dueDate },
+                },
           );
         }}
       />

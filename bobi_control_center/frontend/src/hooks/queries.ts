@@ -22,7 +22,8 @@ export const keys = {
   rules: ['rules'] as const,
   tasks: ['tasks'] as const,
   diagnostics: ['diagnostics'] as const,
-  managementStatus: ['management-status'] as const,
+  managementContract: ['management-contract'] as const,
+  taskSnapshot: ['task-snapshot'] as const,
   audit: ['audit'] as const,
 };
 
@@ -90,8 +91,17 @@ export function useRunProbe() {
  * changes only when the Home Assistant side is reconfigured, so polling it
  * would be a service call per interval for nothing.
  */
-export const useManagementStatus = () =>
-  useQuery({ queryKey: keys.managementStatus, queryFn: bobi.fetchManagementStatus });
+export const useManagementContract = () =>
+  useQuery({ queryKey: keys.managementContract, queryFn: bobi.fetchManagementContract });
+
+/**
+ * The task list a change binds to.
+ *
+ * Only fetched when management is available: without it the read-only screen
+ * uses `bobi_cc_tasks`, and one extra service call per visit would buy nothing.
+ */
+export const useTaskSnapshot = (enabled: boolean) =>
+  useQuery({ queryKey: keys.taskSnapshot, queryFn: bobi.fetchTaskSnapshot, enabled });
 
 /** Recent previews and commits. Loaded on entry to the settings screen. */
 export const useAudit = () => useQuery({ queryKey: keys.audit, queryFn: bobi.fetchAudit });

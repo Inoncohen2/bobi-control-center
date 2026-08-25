@@ -2,22 +2,23 @@
 
 Phase 2 kept read-only honest by giving `HomeAssistantAdapter` no write method
 at all. Phase 3A keeps it honest a different way: writes exist, but only
-through this interface, and **an adapter has one only if Home Assistant
-declares it**.
+through this interface, and only through the operations a bridge declares.
 
-Three properties matter more than anything else here:
+Four properties matter more than anything else here:
 
-* **Absent means refused.** `management_bridge()` returns `None` by default and
-  the real adapter returns `None` today, because no HA-side contract has been
-  supplied. Every route checks, and answers *"ניהול עדיין לא הופעל
-  ב-Home Assistant"*. There is no fallback path that calls a service anyway.
+* **Absent means refused.** `management_bridge()` returns `None` by default, and
+  every route checks. There is no fallback path that calls a service anyway.
 * **Discovery is the bridge's job, not configuration's.** There is deliberately
   no setting, flag or environment variable in this file. Management turns on
-  when Home Assistant says so and in no other way.
-* **The operations are named, not open.** A bridge declares which operations it
-  supports; anything not declared cannot be requested. `apply()` takes an
-  operation name from a closed set, never a service id — this interface cannot
-  express "call `todo.add_item`", let alone "call anything".
+  when Home Assistant says so and in no other way — including the master write
+  switch, which this application can read and can never set.
+* **The operations are named, not open.** `apply()` takes an operation from a
+  closed set, never a service id. This interface cannot express "call
+  `todo.add_item`", let alone "call anything".
+* **The two safety layers stay independent.** The bridge does its own
+  whitelisting, expected-state checking and read-after-write; this application
+  does its own token, expiry, single-use and confirmation checks. Neither is
+  relaxed because the other exists.
 """
 
 from __future__ import annotations
@@ -25,22 +26,37 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from app.models.manage import ManagementStatus, VerificationResult
+from app.models.manage import BridgeOutcome, ManagementStatus, ObservedState, TaskSnapshot
 
 #: Shown whenever management is asked for and no bridge has declared itself.
 UNAVAILABLE_MESSAGE = "ניהול עדיין לא הופעל ב-Home Assistant"
 
+#: Shown when the bridge is present but Home Assistant's master write switch is
+#: off. Deliberately the same sentence: from a household member's point of view
+#: it is the same situation, and it is not an error.
+WRITES_DISABLED_MESSAGE = UNAVAILABLE_MESSAGE
+
 
 class ManagementBridge(ABC):
-    """A declared, verified write path into Bobi.
-
-    An implementation promises three things: it can describe what it supports,
-    it can apply one named operation, and it can read the result back.
-    """
+    """A declared, verified write path into Bobi."""
 
     @abstractmethod
     async def status(self) -> ManagementStatus:
-        """What this bridge supports. Must be discovered, never assumed."""
+        """The contract. Must be discovered from Home Assistant, never assumed."""
+
+    @abstractmethod
+    async def snapshot(self) -> TaskSnapshot:
+        """The task list a preview binds to. READ ONLY."""
+
+    @abstractmethod
+    async def observe(self, resource_type: str, resource_id: str | None) -> ObservedState | None:
+        """Read the current state a preview must bind to. READ ONLY.
+
+        Returning `None` means the state could not be observed. A preview must
+        then refuse rather than invent one: the bridge compares this value
+        immediately before acting, so a guess would either be rejected as stale
+        or — worse — accepted while describing the wrong thing.
+        """
 
     @abstractmethod
     async def apply(
@@ -50,25 +66,13 @@ class ManagementBridge(ABC):
         operation: str,
         resource_id: str | None,
         payload: dict[str, Any],
-    ) -> str | None:
-        """Perform one declared operation and return the resource's id.
+        observed: ObservedState,
+        request_id: str,
+    ) -> BridgeOutcome:
+        """Perform one declared operation and report what happened.
 
-        Raises a `BobiError` on refusal or failure. It must never fall back to
-        a generic service call: an operation this bridge does not declare is an
+        The bridge does its own read-after-write, so the outcome's `verified` is
+        its answer rather than a guess made here. It must never fall back to a
+        generic service call: an operation this bridge does not declare is an
         error, not an invitation to improvise.
-        """
-
-    @abstractmethod
-    async def verify(
-        self,
-        *,
-        resource_type: str,
-        operation: str,
-        resource_id: str | None,
-        payload: dict[str, Any],
-    ) -> VerificationResult:
-        """Read the resource back and report whether it matches the request.
-
-        Returning `verified=False` is a legitimate answer — the write may have
-        landed while the read could not confirm it. Never guess `True`.
         """

@@ -21,6 +21,7 @@ import {
   makeManagementOn,
   makePreview,
   makeStatus,
+  makeTaskSnapshot,
   makeTasks,
 } from '@/test/fixtures';
 import { mockApi, renderWithProviders } from '@/test/utils';
@@ -32,11 +33,12 @@ const BASE = {
   '/api/bobi/capabilities': makeCapabilities(),
 };
 
-/** Routes with management on, and a preview/commit pair ready to serve. */
+/** Routes with the bridge present, and a preview/commit pair ready to serve. */
 function managed(overrides: Record<string, unknown> = {}) {
   return {
     ...BASE,
-    '/api/bobi/manage/status': makeManagementOn(),
+    '/api/bobi/manage/contract': makeManagementOn(),
+    '/api/bobi/manage/tasks/snapshot': makeTaskSnapshot(),
     '/api/bobi/manage/tasks/preview': makePreview(),
     '/api/bobi/manage/tasks/commit': makeCommit(),
     ...overrides,
@@ -56,7 +58,7 @@ describe('with no Home Assistant write bridge', () => {
   it('says so and offers no controls', async () => {
     vi.stubGlobal(
       'fetch',
-      mockApi({ ...BASE, '/api/bobi/manage/status': makeManagementOff() }),
+      mockApi({ ...BASE, '/api/bobi/manage/contract': makeManagementOff() }),
     );
     renderWithProviders(<TasksPage />);
 
@@ -68,13 +70,57 @@ describe('with no Home Assistant write bridge', () => {
   it('leaves the master toggles read-only', async () => {
     vi.stubGlobal(
       'fetch',
-      mockApi({ ...BASE, '/api/bobi/manage/status': makeManagementOff() }),
+      mockApi({ ...BASE, '/api/bobi/manage/contract': makeManagementOff() }),
     );
     renderWithProviders(<CapabilitiesPage />);
 
     await screen.findByText('מתגים ראשיים');
     expect(screen.queryByRole('switch')).not.toBeInTheDocument();
     expect(screen.getAllByText('עריכה תהיה זמינה בשלב הבא').length).toBeGreaterThan(0);
+  });
+
+  it('keeps the capability master switches read-only even when it is on', async () => {
+    // The AI master toggle and Fast Paths are outside this contract, so they
+    // stay indicators no matter what the bridge declares.
+    vi.stubGlobal('fetch', mockApi({ ...BASE, '/api/bobi/manage/contract': makeManagementOn() }));
+    renderWithProviders(<CapabilitiesPage />);
+
+    await screen.findByText('מתגים ראשיים');
+    const switches = screen.queryAllByRole('switch');
+    for (const control of switches) {
+      // Only the contract's own features are operable.
+      expect(['סיכום בוקר אוטומטי', 'מצב הבית האוטומטי']).toContain(
+        control.getAttribute('aria-label'),
+      );
+    }
+    expect(screen.getAllByText('עריכה תהיה זמינה בשלב הבא').length).toBeGreaterThan(0);
+  });
+
+  it('shows a feature whose state the bridge does not report as not operable', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockApi({
+        ...BASE,
+        '/api/bobi/manage/contract': makeManagementOn({
+          resources: [
+            {
+              id: 'features',
+              label: 'תכונות',
+              available: true,
+              detail: null,
+              operations: [{ id: 'set', label: 'הפעלה או כיבוי', destructive: false }],
+              targets: [
+                { id: 'morning_auto', label: 'סיכום בוקר אוטומטי', risk: 'low', enabled: null },
+              ],
+            },
+          ],
+        }),
+      }),
+    );
+    renderWithProviders(<CapabilitiesPage />);
+
+    expect(await screen.findByText('מצב לא ידוע')).toBeInTheDocument();
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
   });
 });
 
@@ -166,7 +212,7 @@ describe('a change', () => {
 describe('deleting a task', () => {
   const deletePreview = makePreview({
     operation: 'delete',
-    resource_id: 'task_1',
+    resource_id: 'u-1',
     title: 'מחיקת משימה',
     destructive: true,
     warning: 'פעולה זו אינה הפיכה. המשימה תימחק ולא ניתן יהיה לשחזר אותה.',
@@ -227,7 +273,8 @@ describe('the result', () => {
         result: {
           status: 'committed_unverified',
           message: 'השינוי בוצע אך לא הצלחנו לאמת',
-          resource_id: 'task_new',
+          resource_id: 'u-9',
+          reason: 'verification_failed',
           verification: {
             verified: false,
             method: 'read_after_write',
@@ -248,12 +295,119 @@ describe('the result', () => {
           status: 'failed',
           message: 'השינוי לא בוצע',
           resource_id: null,
-          verification: { verified: false, method: null, detail: 'הגשר סירב' },
+          reason: 'stale_preview',
+          verification: {
+            verified: false,
+            method: null,
+            detail: 'המצב השתנה מאז התצוגה המקדימה. אפשר לנסות שוב.',
+          },
         },
       }),
     );
 
     expect(screen.getByText('השינוי לא בוצע')).toBeInTheDocument();
+  });
+});
+
+// --- the master write switch ------------------------------------------------
+describe("Home Assistant's master write switch", () => {
+  it('is presented as a disabled feature, not a connection failure', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockApi({ ...BASE, '/api/bobi/manage/contract': makeManagementOff() }),
+    );
+    renderWithProviders(<TasksPage />);
+
+    expect(await screen.findByText(/ניהול עדיין לא הופעל ב-Home Assistant/)).toBeInTheDocument();
+    // Not the wording of a broken connection.
+    expect(screen.queryByText(/לא הצלחתי לקבל נתונים/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/שגיאה/)).not.toBeInTheDocument();
+    // The read-only screen still works.
+    expect(screen.getByText('לקבוע תור לרופא')).toBeInTheDocument();
+  });
+
+  it('cannot be turned on from anywhere in the UI', async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockApi(managed());
+    vi.stubGlobal('fetch', fetchMock);
+    renderWithProviders(<TasksPage />);
+
+    await screen.findByRole('button', { name: 'משימה חדשה' });
+    await user.click(screen.getByRole('button', { name: 'משימה חדשה' }));
+    await user.type(screen.getByLabelText('תוכן המשימה'), 'לקנות חלב');
+    await user.click(screen.getByRole('button', { name: 'המשך לתצוגה מקדימה' }));
+    await screen.findByRole('dialog');
+    await user.click(screen.getByRole('button', { name: 'בצע שינוי' }));
+    await screen.findByText('ביצוע');
+
+    // Nothing the page sent, anywhere, tries to set the switch.
+    for (const [, init] of fetchMock.mock.calls) {
+      const body = String((init as RequestInit | undefined)?.body ?? '');
+      expect(body).not.toContain('writes_enabled');
+      expect(body).not.toContain('master');
+    }
+    // And no route exists for it.
+    const paths = calls(fetchMock).map((entry) => entry[0] ?? '');
+    expect(paths.some((path) => /writes|master|enable/.test(path))).toBe(false);
+  });
+});
+
+// --- no raw Home Assistant identifiers --------------------------------------
+describe('what the browser sends', () => {
+  it('never names a todo or input_boolean service', async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockApi(managed());
+    vi.stubGlobal('fetch', fetchMock);
+    renderWithProviders(<TasksPage />);
+
+    const rows = await screen.findAllByRole('button', { name: 'מחיקה' });
+    await user.click(rows[0] as HTMLElement);
+    await screen.findByRole('dialog');
+
+    for (const [input, init] of fetchMock.mock.calls) {
+      const wire = `${String(input)} ${String((init as RequestInit | undefined)?.body ?? '')}`;
+      expect(wire).not.toContain('todo.');
+      expect(wire).not.toContain('input_boolean');
+    }
+  });
+
+  it('sends the bridge uid as the target, not an entity id', async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockApi(managed());
+    vi.stubGlobal('fetch', fetchMock);
+    renderWithProviders(<TasksPage />);
+
+    const rows = await screen.findAllByRole('button', { name: 'מחיקה' });
+    await user.click(rows[0] as HTMLElement);
+    await screen.findByRole('dialog');
+
+    const preview = fetchMock.mock.calls.find(([input]) =>
+      String(input).includes('/manage/tasks/preview'),
+    );
+    const body = JSON.parse(String((preview?.[1] as RequestInit).body));
+    expect(body.resource_id).toBe('u-1');
+    expect(body.operation).toBe('delete');
+  });
+
+  it('lets the backend read the current state rather than claiming it', async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockApi(managed());
+    vi.stubGlobal('fetch', fetchMock);
+    renderWithProviders(<TasksPage />);
+
+    // Completing a task sends the target and nothing else: `expected_status`
+    // is the backend's to observe, so the screen cannot get it wrong.
+    const checkboxes = await screen.findAllByRole('button', {
+      name: 'סימון המשימה כבוצעה',
+    });
+    await user.click(checkboxes[0] as HTMLElement);
+    await screen.findByRole('dialog');
+
+    const preview = fetchMock.mock.calls.find(([input]) =>
+      String(input).includes('/manage/tasks/preview'),
+    );
+    const body = JSON.parse(String((preview?.[1] as RequestInit).body));
+    expect(body).toEqual({ operation: 'complete', resource_id: 'u-1' });
   });
 });
 
@@ -263,11 +417,11 @@ describe('a feature toggle', () => {
     const user = userEvent.setup();
     const fetchMock = mockApi({
       ...BASE,
-      '/api/bobi/manage/status': makeManagementOn(),
+      '/api/bobi/manage/contract': makeManagementOn(),
       '/api/bobi/manage/features/preview': makePreview({
         operation: 'set',
         resource_type: 'features',
-        resource_id: 'master_vision',
+        resource_id: 'morning_auto',
         title: 'הפעלת עיבוד תמונות',
         changes: [
           { label: 'תכונה', before: 'עיבוד תמונות', after: 'עיבוד תמונות' },
@@ -296,7 +450,8 @@ describe('a feature toggle', () => {
     const user = userEvent.setup();
     const fetchMock = mockApi({
       ...BASE,
-      '/api/bobi/manage/status': makeManagementOn(),
+      '/api/bobi/manage/contract': makeManagementOn(),
+      '/api/bobi/manage/tasks/snapshot': makeTaskSnapshot(),
       '/api/bobi/manage/features/preview': makePreview({ resource_type: 'features' }),
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -309,9 +464,11 @@ describe('a feature toggle', () => {
     const preview = fetchMock.mock.calls.find(([input]) =>
       String(input).includes('/manage/features/preview'),
     );
-    const body = String((preview?.[1] as RequestInit).body);
-    // The capability's own id travels; the entity behind it never does.
-    expect(body).not.toContain('input_boolean');
-    expect(body).not.toContain('todo.');
+    const body = JSON.parse(String((preview?.[1] as RequestInit).body));
+    // The contract's own feature id travels; the entity behind it never does.
+    expect(body.resource_id).toBe('morning_auto');
+    expect(JSON.stringify(body)).not.toContain('input_boolean');
+    // The current state is the backend's to read, so the page does not send one.
+    expect(body.payload).toEqual({ enabled: true });
   });
 });

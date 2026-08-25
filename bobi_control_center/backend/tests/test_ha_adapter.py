@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from app.adapters import MockHomeAssistantAdapter, RealHomeAssistantAdapter
-from app.adapters.real import ALLOWED_SERVICES, extract_service_response
+from app.adapters.real import ALLOWED_SERVICES, READ_SERVICES, extract_service_response
 from app.api.deps import build_adapter
 from app.config import Settings
 from app.errors import BobiError
@@ -211,7 +211,8 @@ async def test_only_the_bridge_services_may_be_called(make_real_adapter) -> None
     assert called == [], "no HTTP request should have been attempted"
 
 
-def test_the_allow_list_is_exactly_the_nine_bridge_services() -> None:
+def test_the_read_services_are_exactly_the_nine_bridge_scripts() -> None:
+    """Phase 3A added management services beside these, and changed none of them."""
     assert {
         "bobi_cc_status",
         "bobi_cc_devices",
@@ -222,7 +223,8 @@ def test_the_allow_list_is_exactly_the_nine_bridge_services() -> None:
         "bobi_cc_tasks",
         "bobi_cc_diagnostics",
         "bobi_cc_probe",
-    } == ALLOWED_SERVICES
+    } == READ_SERVICES
+    assert READ_SERVICES <= ALLOWED_SERVICES
 
 
 def test_neither_adapter_exposes_a_write_method() -> None:

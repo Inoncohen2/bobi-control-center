@@ -4,6 +4,38 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 2.2.0
+
+Phase 3A wired to Home Assistant's real write bridge.
+
+Five `script.bobi_cc_*` services and nothing else: `manage_contract` and
+`task_snapshot` (reads), `task_add_commit`, `task_update_commit` and
+`feature_commit` (writes). `todo.*` and `input_boolean.*` are never called —
+the allow-list holds fourteen `bobi_cc_*` names, pinned by a test.
+
+- **The master switch is read, never set.** `writes_enabled` comes from the
+  contract and is off today, so **previews work and commits are refused** with
+  *"ניהול עדיין לא הופעל ב-Home Assistant"* — presented as a disabled feature,
+  not a connection failure. No endpoint, setting or UI control can turn it on.
+- **Two independent layers.** This application holds the preview token —
+  server-side, random, five-minute TTL, single-use, bound to the operation, the
+  target, the requested values *and the state observed at preview time*. Home
+  Assistant re-checks its own whitelists, duplicates, `expected_summary` /
+  `expected_status` / `expected_state` and read-after-write. Neither is relaxed
+  because of the other.
+- **Optimistic locking is honoured.** A bridge answering `stale_preview` means
+  nothing was mutated, and the result says *השינוי לא בוצע*. `already_in_state`
+  is reported as a verified success that needed no change.
+- **The commit carries no payload.** Everything sent to Home Assistant comes
+  from the stored preview, so a client cannot alter what it confirmed; an
+  echoed `operation` or `resource_id` that disagrees is rejected outright.
+- Tasks are driven by the management snapshot (open and completed, with the
+  bridge's own `uid`); feature toggles by the contract's four feature ids. The
+  AI master toggle and Fast Paths stay read-only — they are outside this
+  contract.
+- A feature whose current state the bridge does not report is shown but not
+  operable: `expected_state` must be observed, never guessed.
+
 ## 2.1.0
 
 Phase 3A: the management path, prepared and **fail-closed**.

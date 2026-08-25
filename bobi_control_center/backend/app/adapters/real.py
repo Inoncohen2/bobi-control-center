@@ -25,6 +25,11 @@ import httpx
 
 from app.adapters.base import HomeAssistantAdapter
 from app.adapters.management import ManagementBridge
+from app.adapters.real_management import (
+    MANAGEMENT_READ_SERVICES,
+    MANAGEMENT_WRITE_SERVICES,
+    RealManagementBridge,
+)
 from app.config import Settings
 from app.errors import BobiError, UpstreamError
 from app.models.bridge import (
@@ -55,12 +60,19 @@ TASKS = "bobi_cc_tasks"
 DIAGNOSTICS = "bobi_cc_diagnostics"
 PROBE = "bobi_cc_probe"
 
+#: The nine read/probe services of Phase 2.
+READ_SERVICES = frozenset(
+    {STATUS, DEVICES, CAPABILITIES, USERS, SHABBAT, RULES, TASKS, DIAGNOSTICS, PROBE}
+)
+
 #: Every service this adapter is permitted to call. Anything outside this set
 #: raises before a request is made, so a typo or a future edit cannot turn into
 #: an accidental write.
-ALLOWED_SERVICES = frozenset(
-    {STATUS, DEVICES, CAPABILITIES, USERS, SHABBAT, RULES, TASKS, DIAGNOSTICS, PROBE}
-)
+#:
+#: Phase 3A adds the five management services and nothing else. `todo.*` and
+#: `input_boolean.*` are not here and must never be: Bobi's bridge owns those
+#: entities, and this adapter asks the bridge by operation name instead.
+ALLOWED_SERVICES = READ_SERVICES | MANAGEMENT_READ_SERVICES | MANAGEMENT_WRITE_SERVICES
 
 
 class RealHomeAssistantAdapter(HomeAssistantAdapter):
@@ -239,27 +251,20 @@ class RealHomeAssistantAdapter(HomeAssistantAdapter):
 
     # --- management -------------------------------------------------------
     def management_bridge(self) -> ManagementBridge | None:
-        """No write bridge yet — so every management request is refused.
+        """Bobi's Phase 3A write bridge.
 
-        This is the one place a Home Assistant write contract plugs in. It
-        returns `None` until the HA side supplies the bridge service names and
-        their schemas, and returning `None` is not a stub that will quietly
-        start working: it is the whole refusal.
+        Returning a bridge does **not** mean writes are on. The bridge reports
+        Home Assistant's master switch, which is off today, and a commit is
+        refused while it is: previews run, commits answer *"ניהול עדיין לא
+        הופעל ב-Home Assistant"*. Nothing in this application can set that
+        switch, and no endpoint tries.
 
-        What must **not** happen here, when that contract does arrive:
-
-        * calling a service that is not in `ALLOWED_SERVICES` — the allow-list
-          is checked before any request is built, and it holds exactly the nine
-          read/probe services today;
-        * accepting a service name from a request, a setting or an environment
-          variable. The bridge declares its operations; the app never names an
-          `input_boolean`, a `todo.*` service or any other entity.
-
-        A future `RealManagementBridge` therefore takes an operation from the
-        closed set in `models/manage.py`, maps it to a declared `bobi_cc_*`
-        write service, and reads the resource back through the existing getters.
+        The bridge can reach exactly five services, all of them
+        `script.bobi_cc_*`. It cannot express a raw Home Assistant service call:
+        `apply()` takes an operation from a closed set, and `ALLOWED_SERVICES`
+        rejects anything else before a request is built.
         """
-        return None
+        return RealManagementBridge(self)
 
     # --- bridge services --------------------------------------------------
     async def get_status(self) -> BridgeStatus:

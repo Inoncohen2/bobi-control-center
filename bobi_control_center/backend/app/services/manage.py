@@ -18,11 +18,16 @@ Every preview and every commit writes an audit line, including the refusals.
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from app.adapters.management import UNAVAILABLE_MESSAGE, ManagementBridge
+from app.adapters.management import (
+    UNAVAILABLE_MESSAGE,
+    WRITES_DISABLED_MESSAGE,
+    ManagementBridge,
+)
 from app.errors import BobiError, NotFoundError, ValidationError
 from app.models.manage import (
     DESTRUCTIVE_OPERATIONS,
@@ -30,12 +35,15 @@ from app.models.manage import (
     TASK_OPERATIONS,
     AuditEntry,
     AuditLog,
+    BridgeOutcome,
     ChangeField,
     CommitRequest,
     CommitResponse,
     ManagementStatus,
+    ObservedState,
     PreviewRequest,
     PreviewResponse,
+    TaskSnapshot,
     VerificationResult,
     WriteResult,
 )
@@ -56,6 +64,19 @@ DESTRUCTIVE_CONFIRM_WORD = "מחק"
 
 _MAX_TITLE = 200
 
+#: Bridge refusal reasons worth explaining. Anything else falls through to the
+#: plain "השינוי לא בוצע", which is still honest.
+_REASON_MESSAGES = {
+    "writes_disabled": WRITES_DISABLED_MESSAGE,
+    "not_confirmed": "השינוי לא אושר",
+    "duplicate": "כבר קיימת משימה פתוחה עם אותו תוכן.",
+    "invalid_user": "המשתמש אינו מורשה לניהול משימות.",
+    "invalid_summary": "תוכן המשימה אינו תקין.",
+    "invalid_due_date": "תאריך היעד אינו בפורמט הנכון.",
+    "not_found": "לא מצאנו את המשימה. ייתכן שהיא נמחקה.",
+    "verification_failed": "הפעולה בוצעה אך הקריאה חזרה לא אישרה אותה.",
+}
+
 
 class ManagementUnavailableError(BobiError):
     """No Home Assistant write bridge has declared itself."""
@@ -71,6 +92,27 @@ class PreviewExpiredError(BobiError):
     status_code = 409
     code = "preview_expired"
     message = "התצוגה המקדימה כבר לא תקפה. אפשר לנסות שוב."
+
+
+class WritesDisabledError(BobiError):
+    """The bridge is there; Home Assistant's master write switch is off.
+
+    A 409 rather than a 5xx, because nothing is broken. This is the expected
+    state today, and the screen presents it as a disabled feature rather than a
+    connection failure.
+    """
+
+    status_code = 409
+    code = "writes_disabled"
+    message = WRITES_DISABLED_MESSAGE
+
+
+class StateChangedError(BobiError):
+    """What the preview observed is no longer true, so nothing was done."""
+
+    status_code = 409
+    code = "stale_preview"
+    message = "המצב השתנה מאז התצוגה המקדימה. אפשר לנסות שוב."
 
 
 class ConfirmationRequiredError(BobiError):
@@ -104,20 +146,40 @@ def sanitise(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 class _StoredPreview:
-    """A preview waiting to be confirmed. Single use."""
+    """A preview waiting to be confirmed.
 
-    __slots__ = ("consumed", "expires_at", "payload", "resource_type", "response")
+    Server-side only, single use, and bound to everything the commit will need:
+    the operation, the resource, the requested values **and the state observed
+    when the preview was taken**. The client gets an opaque id and nothing else,
+    so it cannot alter what it is confirming — there is no payload on the commit
+    request for it to alter.
+    """
+
+    __slots__ = (
+        "consumed",
+        "expires_at",
+        "observed",
+        "operation",
+        "payload",
+        "resource_id",
+        "resource_type",
+        "response",
+    )
 
     def __init__(
         self,
         response: PreviewResponse,
         resource_type: str,
         payload: dict[str, Any],
+        observed: ObservedState,
         expires_at: datetime,
     ) -> None:
         self.response = response
         self.resource_type = resource_type
+        self.operation = response.operation
+        self.resource_id = response.resource_id
         self.payload = payload
+        self.observed = observed
         self.expires_at = expires_at
         self.consumed = False
 
@@ -138,12 +200,36 @@ class ManagementService:
                 available=False, reason=UNAVAILABLE_MESSAGE, writes_enabled=False
             )
         status = await self._bridge.status()
-        # The Phase 2 invariant is the app's to state, not the bridge's: a
-        # bridge claiming writes_enabled cannot turn unrestricted writes on.
-        return status.model_copy(update={"writes_enabled": False})
+        # `writes_enabled` is reported exactly as Home Assistant states it —
+        # discovered, never assumed, and never settable from here. It is off
+        # today, which is why commits are refused and previews are not.
+        #
+        # The three `requires_*` flags are not permission to skip a step: this
+        # application previews, confirms and verifies whatever they say.
+        return status.model_copy(
+            update={
+                "requires_preview": True,
+                "requires_confirmation": True,
+                "requires_read_after_write": True,
+            }
+        )
 
-    async def _require_bridge(self, resource_type: str, operation: str) -> ManagementBridge:
-        """Fail closed, and record the refusal."""
+    async def snapshot(self) -> TaskSnapshot:
+        """The task list a preview binds to. Read-only, and fails closed."""
+        if self._bridge is None:
+            raise ManagementUnavailableError()
+        return await self._bridge.snapshot()
+
+    async def _require_bridge(
+        self, resource_type: str, operation: str, *, for_write: bool = False
+    ) -> ManagementBridge:
+        """Fail closed, and record the refusal.
+
+        `for_write` adds the master-switch check. A preview deliberately does
+        not need it: reading and describing a change is safe while writes are
+        off, and it is how the flow gets tested end to end before the switch is
+        ever flipped.
+        """
         if self._bridge is None:
             self._record(
                 stage="preview",
@@ -174,23 +260,57 @@ class ManagementService:
                 "הפעולה הזו אינה נתמכת על ידי הגשר של בובי",
                 details={"operation": operation, "resource": resource_type},
             )
+        if for_write and not status.writes_enabled:
+            # Home Assistant's master switch is off. Expected, not an error —
+            # and nothing here may turn it on.
+            self._record(
+                stage="commit",
+                operation=operation,
+                resource_type=resource_type,
+                resource_id=None,
+                requested_change={},
+                result="refused",
+            )
+            raise WritesDisabledError()
         return self._bridge
 
     # --- preview ----------------------------------------------------------
     async def preview(self, resource_type: str, request: PreviewRequest) -> PreviewResponse:
         """Describe the change. Performs no write of any kind."""
-        await self._require_bridge(resource_type, request.operation)
+        bridge = await self._require_bridge(resource_type, request.operation)
 
         payload = sanitise(request.payload)
+
+        # Read what the resource looks like *now*. Home Assistant compares
+        # against this immediately before it acts, so it is the preview's job to
+        # capture it — not the client's to supply it.
+        observed = await bridge.observe(resource_type, request.resource_id)
+        if observed is None:
+            return _invalid(
+                request.operation,
+                request.resource_id,
+                _heading(resource_type, request.operation),
+                [
+                    FieldError(
+                        field=None,
+                        code="state_unavailable",
+                        message=(
+                            "לא הצלחנו לקרוא את המצב הנוכחי מ-Home Assistant, "
+                            "ולכן אי אפשר להציג תצוגה מקדימה."
+                        ),
+                    )
+                ],
+            ).model_copy(update={"resource_type": resource_type})
+
         if resource_type == "tasks":
-            response = _preview_task(request.operation, request.resource_id, payload)
+            response = _preview_task(request.operation, request.resource_id, payload, observed)
         elif resource_type == "features":
-            response = _preview_feature(request.operation, request.resource_id, payload)
+            response = _preview_feature(request.operation, request.resource_id, payload, observed)
         else:  # pragma: no cover - the router restricts this first.
             raise NotFoundError("משאב לא מוכר")
 
         expires_at = _now() + PREVIEW_TTL
-        preview_id = f"pv_{secrets.token_urlsafe(16)}"
+        preview_id = f"pv_{secrets.token_urlsafe(24)}"
         response = response.model_copy(
             update={
                 "preview_id": preview_id,
@@ -202,7 +322,7 @@ class ManagementService:
 
         if response.valid:
             self._previews[preview_id] = _StoredPreview(
-                response, resource_type, payload, expires_at
+                response, resource_type, payload, observed, expires_at
             )
 
         self._record(
@@ -225,6 +345,13 @@ class ManagementService:
             raise PreviewExpiredError()
 
         preview = stored.response
+        # An echo that disagrees with what was previewed is a rejected commit,
+        # never a silently corrected one.
+        if request.operation is not None and request.operation != stored.operation:
+            raise PreviewExpiredError()
+        if request.resource_id is not None and request.resource_id != stored.resource_id:
+            raise PreviewExpiredError()
+
         if not request.confirmed:
             raise ConfirmationRequiredError()
         if preview.destructive and request.confirm_word != preview.confirm_word:
@@ -232,70 +359,146 @@ class ManagementService:
                 f'למחיקה יש להקליד "{preview.confirm_word}" כדי לאשר'
             )
 
-        bridge = await self._require_bridge(resource_type, preview.operation)
+        bridge = await self._require_bridge(
+            resource_type, preview.operation, for_write=True
+        )
 
         # Consume before applying: a failed commit must not leave a preview
         # that a retry could replay against changed state.
         stored.consumed = True
 
+        request_id = f"req_{secrets.token_urlsafe(12)}"
         try:
-            resource_id = await bridge.apply(
+            outcome = await bridge.apply(
                 resource_type=resource_type,
                 operation=preview.operation,
                 resource_id=preview.resource_id,
                 payload=stored.payload,
+                observed=stored.observed,
+                request_id=request_id,
             )
         except BobiError as exc:
-            result = WriteResult(
+            return self._failed(request, resource_type, preview, stored, exc.message, exc.code)
+
+        return self._report(request, resource_type, preview, stored, outcome)
+
+    def _report(
+        self,
+        request: CommitRequest,
+        resource_type: str,
+        preview: PreviewResponse,
+        stored: _StoredPreview,
+        outcome: BridgeOutcome,
+    ) -> CommitResponse:
+        """Turn the bridge's answer into one of three honest outcomes.
+
+        The bridge does its own read-after-write, so `verified` is its word.
+        A change that landed but could not be confirmed is neither a success nor
+        a failure, which is why there are three states and not a boolean.
+        """
+        resource_id = outcome.resource_id or preview.resource_id
+
+        # The world moved between the preview and the commit, and Home Assistant
+        # refused rather than acting on a stale picture. Nothing happened.
+        if outcome.reason == "stale_preview":
+            return self._failed(
+                request,
+                resource_type,
+                preview,
+                stored,
+                StateChangedError.message,
+                "stale_preview",
+            )
+
+        if not outcome.executed and outcome.verified and outcome.reason == "already_in_state":
+            # Nothing needed doing, and the bridge confirmed the desired state
+            # holds. That is a verified success, said plainly.
+            return self._respond(
+                request,
+                resource_type,
+                preview,
+                stored,
+                WriteResult(
+                    status="committed",
+                    message="השינוי בוצע ואומת",
+                    resource_id=resource_id,
+                    reason=outcome.reason,
+                    verification=VerificationResult(
+                        verified=True,
+                        method="read_after_write",
+                        detail="המצב כבר היה כמבוקש — לא נדרש שינוי.",
+                    ),
+                ),
+            )
+
+        if not outcome.executed:
+            return self._failed(
+                request,
+                resource_type,
+                preview,
+                stored,
+                _REASON_MESSAGES.get(outcome.reason or ""),
+                outcome.reason,
+            )
+
+        verified = bool(outcome.verified)
+        return self._respond(
+            request,
+            resource_type,
+            preview,
+            stored,
+            WriteResult(
+                status="committed" if verified else "committed_unverified",
+                message=("השינוי בוצע ואומת" if verified else "השינוי בוצע אך לא הצלחנו לאמת"),
+                resource_id=resource_id,
+                reason=outcome.reason,
+                verification=VerificationResult(
+                    verified=verified,
+                    method="read_after_write",
+                    detail=None if verified else "הפעולה בוצעה אך הקריאה חזרה לא אישרה אותה.",
+                ),
+            ),
+        )
+
+    def _failed(
+        self,
+        request: CommitRequest,
+        resource_type: str,
+        preview: PreviewResponse,
+        stored: _StoredPreview,
+        detail: str | None,
+        reason: str | None,
+    ) -> CommitResponse:
+        return self._respond(
+            request,
+            resource_type,
+            preview,
+            stored,
+            WriteResult(
                 status="failed",
                 message="השינוי לא בוצע",
                 resource_id=preview.resource_id,
-                verification=VerificationResult(verified=False, detail=exc.message),
-            )
-            audit = self._record(
-                stage="commit",
-                operation=preview.operation,
-                resource_type=resource_type,
-                resource_id=preview.resource_id,
-                requested_change=stored.payload,
-                result="failed",
-                verified=False,
-            )
-            return CommitResponse(
-                preview_id=request.preview_id,
-                operation=preview.operation,
-                resource_type=resource_type,
-                result=result,
-                audit=audit,
-            )
-
-        verification = await self._verify(
-            bridge,
-            resource_type=resource_type,
-            operation=preview.operation,
-            resource_id=resource_id or preview.resource_id,
-            payload=stored.payload,
-        )
-
-        status = "committed" if verification.verified else "committed_unverified"
-        result = WriteResult(
-            status=status,
-            message=(
-                "השינוי בוצע ואומת"
-                if verification.verified
-                else "השינוי בוצע אך לא הצלחנו לאמת"
+                reason=reason,
+                verification=VerificationResult(verified=False, detail=detail),
             ),
-            resource_id=resource_id or preview.resource_id,
-            verification=verification,
         )
+
+    def _respond(
+        self,
+        request: CommitRequest,
+        resource_type: str,
+        preview: PreviewResponse,
+        stored: _StoredPreview,
+        result: WriteResult,
+    ) -> CommitResponse:
         audit = self._record(
             stage="commit",
             operation=preview.operation,
             resource_type=resource_type,
             resource_id=result.resource_id,
             requested_change=stored.payload,
-            result=status,
-            verified=verification.verified,
+            result=result.status,
+            verified=result.verification.verified,
         )
         return CommitResponse(
             preview_id=request.preview_id,
@@ -304,38 +507,6 @@ class ManagementService:
             result=result,
             audit=audit,
         )
-
-    async def _verify(
-        self,
-        bridge: ManagementBridge,
-        *,
-        resource_type: str,
-        operation: str,
-        resource_id: str | None,
-        payload: dict[str, Any],
-    ) -> VerificationResult:
-        """Read back, and treat any failure to confirm as unverified.
-
-        A verification that itself errors must not be reported as success, and
-        must not turn a change that did land into a "failed" — hence the third
-        state.
-        """
-        try:
-            return await bridge.verify(
-                resource_type=resource_type,
-                operation=operation,
-                resource_id=resource_id,
-                payload=payload,
-            )
-        except BobiError as exc:
-            return VerificationResult(verified=False, method="read_after_write", detail=exc.message)
-        except Exception:  # pragma: no cover - defensive
-            logger.exception("Read-after-write verification failed unexpectedly.")
-            return VerificationResult(
-                verified=False,
-                method="read_after_write",
-                detail="לא הצלחנו לקרוא את הערך בחזרה",
-            )
 
     # --- audit ------------------------------------------------------------
     def _record(
@@ -395,49 +566,97 @@ def _invalid(
 
 
 _TASK_TITLES = {
-    "create": "הוספת משימה",
-    "rename": "שינוי שם משימה",
+    "add": "הוספת משימה",
+    "edit": "שינוי תוכן משימה",
     "complete": "סימון משימה כבוצעה",
     "reopen": "החזרת משימה לפעילה",
     "delete": "מחיקת משימה",
 }
 
+_FEATURE_TITLE = "שינוי תכונה"
+
+
+def _heading(resource_type: str, operation: str) -> str:
+    if resource_type == "tasks":
+        return _TASK_TITLES.get(operation, "שינוי משימה")
+    return _FEATURE_TITLE
+
+
+#: `YYYY-MM-DD`, the only shape the bridge accepts beside an empty string.
+_DUE_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
 
 def _preview_task(
-    operation: str, resource_id: str | None, payload: dict[str, Any]
+    operation: str,
+    resource_id: str | None,
+    payload: dict[str, Any],
+    observed: ObservedState,
 ) -> PreviewResponse:
-    """Describe a task change, in the words the dialog shows."""
+    """Describe a task change, in the words the dialog shows.
+
+    Every "before" comes from `observed` — what the bridge reported a moment
+    ago — rather than from what the client sent, so the dialog cannot describe a
+    change against a state that was never true.
+    """
     if operation not in TASK_OPERATIONS:
-        raise ValidationError(
-            "פעולה לא מוכרת על משימה", details={"operation": operation}
-        )
+        raise ValidationError("פעולה לא מוכרת על משימה", details={"operation": operation})
 
     heading = _TASK_TITLES[operation]
-    owner = _text(payload, "owner")
-    title = _text(payload, "title")
-    current_title = _text(payload, "current_title")
+    summary = _text(payload, "summary")
+    new_summary = _text(payload, "new_summary")
+    due_date = _text(payload, "due_date")
+    user_id = _text(payload, "user_id")
+    owner = _text(payload, "owner") or observed.values.get("owner")
+
+    current_summary = observed.values.get("summary")
+    current_status = observed.values.get("status")
 
     errors: list[FieldError] = []
-    if operation in {"create", "rename"} and not title:
-        errors.append(
-            FieldError(field="title", code="required", message="צריך למלא את תוכן המשימה")
-        )
-    if title and len(title) > _MAX_TITLE:
-        errors.append(
-            FieldError(
-                field="title",
-                code="too_long",
-                message=f"תוכן המשימה ארוך מדי (עד {_MAX_TITLE} תווים)",
+    if operation == "add":
+        if not summary:
+            errors.append(
+                FieldError(field="summary", code="required", message="צריך למלא את תוכן המשימה")
             )
-        )
-    if operation == "create" and not owner:
-        errors.append(
-            FieldError(field="owner", code="required", message="צריך לבחור למי המשימה שייכת")
-        )
-    if operation != "create" and not resource_id:
-        errors.append(
-            FieldError(field="resource_id", code="required", message="לא נבחרה משימה")
-        )
+        if not user_id:
+            errors.append(
+                FieldError(field="user_id", code="required", message="צריך לבחור למי המשימה שייכת")
+            )
+        if due_date and not _DUE_DATE.match(due_date):
+            errors.append(
+                FieldError(
+                    field="due_date",
+                    code="invalid",
+                    message="תאריך היעד צריך להיות בפורמט YYYY-MM-DD",
+                )
+            )
+    else:
+        if not resource_id:
+            errors.append(
+                FieldError(field="resource_id", code="required", message="לא נבחרה משימה")
+            )
+        if operation == "edit" and not new_summary:
+            errors.append(
+                FieldError(field="new_summary", code="required", message="צריך למלא את התוכן החדש")
+            )
+        # The bridge refuses these itself; saying so before the user confirms is
+        # kinder than letting the commit come back with `stale_preview`.
+        if operation == "complete" and current_status == "completed":
+            errors.append(
+                FieldError(field=None, code="already", message="המשימה כבר מסומנת כבוצעה")
+            )
+        if operation == "reopen" and current_status == "needs_action":
+            errors.append(FieldError(field=None, code="already", message="המשימה כבר פתוחה"))
+
+    for value, field in ((summary, "summary"), (new_summary, "new_summary")):
+        if value and len(value) > _MAX_TITLE:
+            errors.append(
+                FieldError(
+                    field=field,
+                    code="too_long",
+                    message=f"תוכן המשימה ארוך מדי (עד {_MAX_TITLE} תווים)",
+                )
+            )
+
     if errors:
         return _invalid(operation, resource_id, heading, errors)
 
@@ -445,22 +664,24 @@ def _preview_task(
     if owner:
         changes.append(ChangeField(label="משתמש", before=owner, after=owner))
 
-    if operation == "create":
-        changes.append(ChangeField(label="משימה", before=None, after=title))
+    if operation == "add":
+        changes.append(ChangeField(label="משימה", before=None, after=summary))
+        if due_date:
+            changes.append(ChangeField(label="תאריך יעד", before=None, after=due_date))
         explanation = "המשימה תתווסף לרשימה של המשתמש."
-    elif operation == "rename":
-        changes.append(ChangeField(label="משימה", before=current_title, after=title))
+    elif operation == "edit":
+        changes.append(ChangeField(label="משימה", before=current_summary, after=new_summary))
         explanation = "תוכן המשימה יתעדכן. שאר הפרטים יישארו כפי שהם."
     elif operation == "complete":
-        changes.append(ChangeField(label="משימה", before=current_title, after=current_title))
+        changes.append(ChangeField(label="משימה", before=current_summary, after=current_summary))
         changes.append(ChangeField(label="מצב", before="פתוחה", after="בוצעה"))
         explanation = "המשימה תסומן כבוצעה ותעבור לרשימת המשימות שהושלמו."
     elif operation == "reopen":
-        changes.append(ChangeField(label="משימה", before=current_title, after=current_title))
+        changes.append(ChangeField(label="משימה", before=current_summary, after=current_summary))
         changes.append(ChangeField(label="מצב", before="בוצעה", after="פתוחה"))
         explanation = "המשימה תחזור לרשימת המשימות הפתוחות."
     else:  # delete
-        changes.append(ChangeField(label="משימה", before=current_title, after=None))
+        changes.append(ChangeField(label="משימה", before=current_summary, after=None))
         explanation = "המשימה תוסר לגמרי מהרשימה."
 
     destructive = operation in DESTRUCTIVE_OPERATIONS
@@ -485,17 +706,23 @@ def _preview_task(
 
 
 def _preview_feature(
-    operation: str, resource_id: str | None, payload: dict[str, Any]
+    operation: str,
+    resource_id: str | None,
+    payload: dict[str, Any],
+    observed: ObservedState,
 ) -> PreviewResponse:
-    """Describe a feature toggle change."""
-    if operation not in FEATURE_OPERATIONS:
-        raise ValidationError(
-            "פעולה לא מוכרת על תכונה", details={"operation": operation}
-        )
+    """Describe a feature toggle change.
 
-    label = _text(payload, "label") or resource_id
+    The current state comes from `observed` — the bridge's own reading. Home
+    Assistant compares it again immediately before acting, so a preview that
+    could not read it does not exist.
+    """
+    if operation not in FEATURE_OPERATIONS:
+        raise ValidationError("פעולה לא מוכרת על תכונה", details={"operation": operation})
+
+    label = observed.label or resource_id
     enabled = payload.get("enabled")
-    current = payload.get("current")
+    current = observed.values.get("enabled")
 
     errors: list[FieldError] = []
     if not resource_id:
@@ -505,7 +732,7 @@ def _preview_feature(
             FieldError(field="enabled", code="required", message="צריך לבחור מצב חדש לתכונה")
         )
     if errors:
-        return _invalid(operation, resource_id, "שינוי תכונה", errors)
+        return _invalid(operation, resource_id, _FEATURE_TITLE, errors)
 
     def state(value: Any) -> str:
         if value is True:

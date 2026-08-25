@@ -1,16 +1,15 @@
-"""An in-memory write bridge, for exercising the flow — wired to nothing.
+"""An in-memory stand-in for the Home Assistant write bridge — wired to nothing.
 
 This is a **test double**, not a mode of the application. Neither adapter
-returns it from `management_bridge()`, so no running instance of Bobi Control
-Center — mock or real — has a write path. It exists so the preview → confirm →
-commit → verify flow can be tested end to end without inventing what the real
-Home Assistant contract will look like.
+returns it from `management_bridge()`, so no running instance uses it. It exists
+so the preview → confirm → commit → verify flow can be tested end to end, and it
+mimics the real contract closely enough to be worth trusting: the same operation
+names, the same `expected_*` comparison, the same `stale_preview` and
+`already_in_state` reasons, and the same master switch that defaults to **off**.
 
-That distinction matters: simulating a management bridge inside the mock
-adapter would mean guessing the HA-side service names and schemas, and then
-shipping a UI built against a guess. The mock adapter therefore fails closed
-exactly like the real one, and a developer sees the same *"ניהול עדיין לא הופעל
-ב-Home Assistant"* screen the live install shows today.
+That last part matters. `writes_enabled` starts `False` here exactly as it does
+in the live install, so the default test is the safe one and enabling it has to
+be deliberate.
 """
 
 from __future__ import annotations
@@ -18,55 +17,74 @@ from __future__ import annotations
 import secrets
 from typing import Any
 
-from app.adapters.management import ManagementBridge
+from app.adapters.management import UNAVAILABLE_MESSAGE, ManagementBridge
 from app.errors import BobiError
 from app.models.manage import (
+    BridgeOutcome,
     ManagedOperation,
+    ManagedTarget,
     ManagementResource,
     ManagementStatus,
-    VerificationResult,
+    ObservedState,
+    SnapshotTask,
+    TaskSnapshot,
 )
+
+_OPEN = "needs_action"
+_COMPLETED = "completed"
 
 
 class MockManagementBridge(ManagementBridge):
-    """Keeps tasks and feature flags in a dict and reads them back honestly."""
+    """Keeps tasks and features in memory and checks them the way HA does."""
 
     def __init__(
         self,
         *,
         tasks: dict[str, dict[str, Any]] | None = None,
         features: dict[str, bool] | None = None,
+        users: dict[str, str] | None = None,
         available: bool = True,
+        #: Home Assistant's master switch. Off by default, as it is today.
+        writes_enabled: bool = False,
+        #: When False, the feature contract omits current state — which must
+        #: block a preview rather than be guessed at.
+        reports_feature_state: bool = True,
         fail_on: str | None = None,
         verifies: bool = True,
     ) -> None:
         self.tasks: dict[str, dict[str, Any]] = tasks or {}
         self.features: dict[str, bool] = features or {}
+        self.users: dict[str, str] = users or {"user_1": "ינון", "user_2": "הודיה"}
         self._available = available
-        #: An operation this bridge should refuse, so the failure path is testable.
+        self.writes_enabled = writes_enabled
+        self._reports_feature_state = reports_feature_state
         self._fail_on = fail_on
-        #: When False, the write lands but the read-back cannot confirm it.
         self._verifies = verifies
         #: Every apply() call, so a test can assert a preview made none.
         self.applied: list[dict[str, Any]] = []
 
     async def status(self) -> ManagementStatus:
         if not self._available:
-            return ManagementStatus(available=False, reason="ניהול עדיין לא הופעל ב-Home Assistant")
+            return ManagementStatus(available=False, reason=UNAVAILABLE_MESSAGE)
         return ManagementStatus(
             available=True,
-            contract_version="mock-1",
+            contract_version="mock-3a",
+            writes_enabled=self.writes_enabled,
             resources=[
                 ManagementResource(
                     id="tasks",
                     label="משימות",
                     available=True,
                     operations=[
-                        ManagedOperation(id="create", label="הוספת משימה"),
-                        ManagedOperation(id="rename", label="שינוי שם"),
+                        ManagedOperation(id="add", label="הוספת משימה"),
+                        ManagedOperation(id="edit", label="שינוי תוכן"),
                         ManagedOperation(id="complete", label="סימון כבוצעה"),
                         ManagedOperation(id="reopen", label="החזרה לפעילה"),
                         ManagedOperation(id="delete", label="מחיקה", destructive=True),
+                    ],
+                    targets=[
+                        ManagedTarget(id=user_id, label=name)
+                        for user_id, name in self.users.items()
                     ],
                 ),
                 ManagementResource(
@@ -74,9 +92,67 @@ class MockManagementBridge(ManagementBridge):
                     label="תכונות",
                     available=True,
                     operations=[ManagedOperation(id="set", label="הפעלה או כיבוי")],
+                    targets=[
+                        ManagedTarget(
+                            id=feature_id,
+                            label=feature_id,
+                            risk="low",
+                            enabled=state if self._reports_feature_state else None,
+                        )
+                        for feature_id, state in self.features.items()
+                    ],
                 ),
             ],
         )
+
+    async def snapshot(self) -> TaskSnapshot:
+        tasks = [
+            SnapshotTask(
+                uid=uid,
+                summary=task["summary"],
+                status=task["status"],
+                completed=task["status"] == _COMPLETED,
+                due=task.get("due") or None,
+                owner_id=task["user_id"],
+                owner=self.users.get(task["user_id"], task["user_id"]),
+            )
+            for uid, task in self.tasks.items()
+        ]
+        return TaskSnapshot(
+            count=len(tasks),
+            tasks=tasks,
+            owners=[ManagedTarget(id=k, label=v) for k, v in self.users.items()],
+            writes_enabled=self.writes_enabled,
+        )
+
+    async def observe(self, resource_type: str, resource_id: str | None) -> ObservedState | None:
+        if resource_type == "tasks":
+            if resource_id is None:
+                return ObservedState(values={})
+            task = self.tasks.get(resource_id)
+            if task is None:
+                return None
+            return ObservedState(
+                resource_id=resource_id,
+                label=task["summary"],
+                values={
+                    "summary": task["summary"],
+                    "status": task["status"],
+                    "user_id": task["user_id"],
+                    "owner": self.users.get(task["user_id"], task["user_id"]),
+                },
+            )
+
+        if resource_type == "features":
+            if not self._reports_feature_state or resource_id not in self.features:
+                return None
+            enabled = self.features[resource_id]
+            return ObservedState(
+                resource_id=resource_id,
+                label=resource_id,
+                values={"state": "on" if enabled else "off", "enabled": enabled},
+            )
+        return None
 
     async def apply(
         self,
@@ -85,84 +161,97 @@ class MockManagementBridge(ManagementBridge):
         operation: str,
         resource_id: str | None,
         payload: dict[str, Any],
-    ) -> str | None:
+        observed: ObservedState,
+        request_id: str,
+    ) -> BridgeOutcome:
         self.applied.append(
             {
                 "resource_type": resource_type,
                 "operation": operation,
                 "resource_id": resource_id,
                 "payload": payload,
+                "observed": observed.values,
+                "request_id": request_id,
             }
         )
+        # The bridge's own master switch, checked again on its side.
+        if not self.writes_enabled:
+            return BridgeOutcome(executed=False, verified=False, reason="writes_disabled")
         if self._fail_on == operation:
             raise BobiError("הגשר סירב לבצע את הפעולה", code="bridge_refused")
 
         if resource_type == "tasks":
-            return self._apply_task(operation, resource_id, payload)
-        if resource_type == "features" and resource_id is not None:
-            self.features[resource_id] = bool(payload.get("enabled"))
-            return resource_id
+            return self._apply_task(operation, resource_id, payload, observed)
+        if resource_type == "features":
+            return self._apply_feature(resource_id, payload, observed)
         raise BobiError("משאב לא נתמך", code="unsupported_resource")
 
     def _apply_task(
-        self, operation: str, resource_id: str | None, payload: dict[str, Any]
-    ) -> str | None:
-        if operation == "create":
-            new_id = f"task_{secrets.token_hex(4)}"
-            self.tasks[new_id] = {
-                "title": payload.get("title"),
-                "owner": payload.get("owner"),
-                "completed": False,
-            }
-            return new_id
-
-        task = self.tasks.get(resource_id or "")
-        if task is None:
-            raise BobiError("המשימה לא נמצאה", code="not_found")
-
-        if operation == "rename":
-            task["title"] = payload.get("title")
-        elif operation == "complete":
-            task["completed"] = True
-        elif operation == "reopen":
-            task["completed"] = False
-        elif operation == "delete":
-            self.tasks.pop(resource_id or "", None)
-        return resource_id
-
-    async def verify(
         self,
-        *,
-        resource_type: str,
         operation: str,
         resource_id: str | None,
         payload: dict[str, Any],
-    ) -> VerificationResult:
-        if not self._verifies:
-            return VerificationResult(
-                verified=False,
-                method="read_after_write",
-                detail="לא הצלחנו לקרוא את הערך בחזרה",
+        observed: ObservedState,
+    ) -> BridgeOutcome:
+        if operation == "add":
+            summary = payload.get("summary")
+            if any(
+                task["summary"] == summary and task["status"] == _OPEN
+                for task in self.tasks.values()
+            ):
+                return BridgeOutcome(executed=False, verified=False, reason="duplicate")
+            uid = f"uid_{secrets.token_hex(4)}"
+            self.tasks[uid] = {
+                "summary": summary,
+                "status": _OPEN,
+                "user_id": payload.get("user_id"),
+                "due": payload.get("due_date") or "",
+            }
+            return BridgeOutcome(
+                executed=True, verified=self._verifies, reason="ok", resource_id=uid
             )
 
-        if resource_type == "features":
-            actual = self.features.get(resource_id or "")
-            ok = actual == bool(payload.get("enabled"))
-        elif operation == "delete":
-            ok = (resource_id or "") not in self.tasks
-        else:
-            task = self.tasks.get(resource_id or "")
-            if task is None:
-                ok = False
-            elif operation == "create" or operation == "rename":
-                ok = task.get("title") == payload.get("title")
-            elif operation == "complete":
-                ok = task.get("completed") is True
-            else:
-                ok = task.get("completed") is False
+        task = self.tasks.get(resource_id or "")
+        if task is None:
+            return BridgeOutcome(executed=False, verified=False, reason="not_found")
 
-        return VerificationResult(
-            verified=ok,
-            method="read_after_write",
-            detail=None if ok else "הערך שנקרא בחזרה אינו תואם למבוקש",
+        # Optimistic locking, exactly as Home Assistant does it: compare what
+        # the preview saw against what is true now, and refuse if they differ.
+        if (
+            task["summary"] != observed.values.get("summary")
+            or task["status"] != observed.values.get("status")
+        ):
+            return BridgeOutcome(executed=False, verified=False, reason="stale_preview")
+
+        if operation == "edit":
+            task["summary"] = payload.get("new_summary")
+        elif operation == "complete":
+            task["status"] = _COMPLETED
+        elif operation == "reopen":
+            task["status"] = _OPEN
+        elif operation == "delete":
+            self.tasks.pop(resource_id or "", None)
+        return BridgeOutcome(
+            executed=True, verified=self._verifies, reason="ok", resource_id=resource_id
+        )
+
+    def _apply_feature(
+        self, resource_id: str | None, payload: dict[str, Any], observed: ObservedState
+    ) -> BridgeOutcome:
+        if resource_id not in self.features:
+            return BridgeOutcome(executed=False, verified=False, reason="unknown_feature")
+
+        actual = "on" if self.features[resource_id] else "off"
+        if actual != observed.values.get("state"):
+            return BridgeOutcome(executed=False, verified=False, reason="stale_preview")
+
+        wanted = bool(payload.get("enabled"))
+        if self.features[resource_id] == wanted:
+            return BridgeOutcome(
+                executed=False, verified=True, reason="already_in_state", resource_id=resource_id
+            )
+
+        self.features[resource_id] = wanted
+        return BridgeOutcome(
+            executed=True, verified=self._verifies, reason="ok", resource_id=resource_id
         )

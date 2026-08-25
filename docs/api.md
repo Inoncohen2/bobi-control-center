@@ -58,7 +58,7 @@ Stack traces never leave the process.
 ### `GET /health`
 
 ```json
-{ "ok": true, "app": "bobi-control-center", "version": "2.1.0",
+{ "ok": true, "app": "bobi-control-center", "version": "2.2.0",
   "adapter": "home_assistant", "writes_enabled": false }
 ```
 
@@ -68,7 +68,7 @@ Whether the app is showing real or demo data. Contains no secret.
 
 ```json
 { "adapter": "home_assistant", "connected": true, "writes_enabled": false,
-  "phase": 2, "app_version": "2.1.0", "detail": "מחובר לגשר של בובי" }
+  "phase": 2, "app_version": "2.2.0", "detail": "מחובר לגשר של בובי" }
 ```
 
 ---
@@ -392,91 +392,154 @@ Base path `/api/bobi/manage`. Every change follows one flow:
 edit → preview → explicit confirmation → commit → read-after-write → result
 ```
 
-**Management fails closed.** It is available only when Home Assistant declares a
-write bridge, discovered at `GET /manage/status` — never from a setting or an
-environment variable. No adapter declares one today, so every route below
-answers `503 management_unavailable` with
-*"ניהול עדיין לא הופעל ב-Home Assistant"*.
+### Two independent layers
 
-### `GET /api/bobi/manage/status`
+| This application | Home Assistant |
+| --- | --- |
+| Preview token: random, server-side, 5-minute TTL, single use | Master write switch |
+| Token bound to operation, target, values **and observed state** | Operation and target whitelists |
+| Commit carries no payload — only the stored one is sent | `expected_summary` / `expected_status` / `expected_state` |
+| Explicit confirmation; a typed word when destructive | Duplicate protection, read-after-write |
+
+Both must approve. Neither is relaxed because the other exists.
+
+### The bridge services
+
+Five, and only these. `todo.*` and `input_boolean.*` are never called.
+
+| Service | Kind | Endpoint |
+| --- | --- | --- |
+| `script.bobi_cc_manage_contract` | read | `GET /manage/contract` |
+| `script.bobi_cc_task_snapshot` | read | `GET /manage/tasks/snapshot` |
+| `script.bobi_cc_task_add_commit` | write | `POST /manage/tasks/commit` |
+| `script.bobi_cc_task_update_commit` | write | `POST /manage/tasks/commit` |
+| `script.bobi_cc_feature_commit` | write | `POST /manage/features/commit` |
+
+### `GET /api/bobi/manage/contract`
 
 ```json
-{ "available": false,
-  "reason": "ניהול עדיין לא הופעל ב-Home Assistant",
-  "contract_version": null, "resources": [], "writes_enabled": false }
+{
+  "available": true,
+  "reason": null,
+  "contract_version": "3a",
+  "writes_enabled": false,
+  "requires_preview": true, "requires_confirmation": true,
+  "requires_read_after_write": true,
+  "resources": [
+    { "id": "tasks", "label": "משימות", "available": true,
+      "operations": [{ "id": "add", "label": "הוספת משימה", "destructive": false },
+                     { "id": "delete", "label": "מחיקה", "destructive": true }],
+      "targets": [{ "id": "user_1", "label": "…", "risk": null, "enabled": null }] },
+    { "id": "features", "label": "תכונות", "available": true,
+      "operations": [{ "id": "set", "label": "הפעלה או כיבוי", "destructive": false }],
+      "targets": [{ "id": "morning_auto", "label": "סיכום בוקר אוטומטי",
+                    "risk": "low", "enabled": null }] }
+  ]
+}
 ```
 
-When a bridge is present, `resources` lists what it supports — `tasks` with
-`create`/`rename`/`complete`/`reopen`/`delete`, `features` with `set`. An
-operation the bridge does not declare cannot be requested. `writes_enabled`
-stays `false`: management is per-operation, not a general permission to write.
+**`writes_enabled` is read, never written.** It is off today, which means
+previews work and commits are refused — a disabled feature, not an error. No
+endpoint in this API can set it; enabling it is a Home Assistant-side decision.
+
+Task operations are `add`, `edit`, `complete`, `reopen`, `delete`; features
+have `set`. An operation the contract does not name is never offered, and one
+this application does not implement is dropped rather than passed through.
+
+### `GET /api/bobi/manage/tasks/snapshot`
+
+Open and completed tasks, flattened, each with its owner. `uid` is the bridge's
+own handle — **no `todo.*` entity id appears**, because the bridge does not send
+one and this app must not infer one.
+
+```json
+{ "count": 2, "writes_enabled": false,
+  "owners": [{ "id": "user_1", "label": "…", "risk": null, "enabled": null }],
+  "tasks": [{ "uid": "…", "summary": "…", "status": "needs_action",
+              "completed": false, "due": null,
+              "owner_id": "user_1", "owner": "…" }] }
+```
 
 ### `POST /api/bobi/manage/{resource}/preview`
 
 `resource` is `tasks` or `features`; anything else is a 404 before any service
-is consulted. **This performs no write.**
+is consulted. **This performs no write** — it reads the snapshot or the
+contract, and describes what would change.
 
-Request: `{ "operation": "delete", "resource_id": "task_1",
-            "payload": { "current_title": "לקבוע תור לרופא" } }`
+Request: `{ "operation": "delete", "resource_id": "<uid>" }`
+
+The client sends the target and what the user typed. It does **not** send the
+current state: the backend observes that itself, so a screen cannot mis-state
+what is being changed. A resource whose state cannot be read yields an invalid
+preview rather than a guess.
 
 ```json
 {
   "preview_id": "pv_…",
-  "operation": "delete", "resource_type": "tasks", "resource_id": "task_1",
+  "operation": "delete", "resource_type": "tasks", "resource_id": "<uid>",
   "title": "מחיקת משימה",
   "changes": [{ "label": "משימה", "before": "לקבוע תור לרופא", "after": null }],
   "explanation": "המשימה תוסר לגמרי מהרשימה.",
   "destructive": true,
   "warning": "פעולה זו אינה הפיכה…",
-  "confirm_word": "מחק",
-  "confirm_label": "מחק משימה",
+  "confirm_word": "מחק", "confirm_label": "מחק משימה",
   "valid": true, "errors": [],
   "expires_at": "…", "would_execute": false
 }
 ```
 
-`preview_id` is **single-use** and expires after five minutes. `would_execute`
-is hard-coded `false`, exactly as on the probe.
-
 ### `POST /api/bobi/manage/{resource}/commit`
 
 Request: `{ "preview_id": "pv_…", "confirmed": true, "confirm_word": "מחק" }`
 
-Refused with `409 preview_expired` if the preview is unknown, expired, already
-used, or belongs to another resource; with `428 confirmation_required` if
-`confirmed` is not true, or if a destructive change arrives without its word.
+No payload: everything sent to Home Assistant comes from the stored preview.
+`operation` and `resource_id` may be echoed and are then checked for agreement —
+a mismatch is rejected, not corrected.
+
+| Status | `code` | When |
+| --- | --- | --- |
+| 409 | `preview_expired` | Unknown, expired, already used, wrong resource, or a disagreeing echo |
+| 428 | `confirmation_required` | Not confirmed, or a destructive change without its word |
+| 409 | `writes_disabled` | Home Assistant's master switch is off — *ניהול עדיין לא הופעל ב-Home Assistant* |
 
 ```json
 {
   "preview_id": "pv_…", "operation": "delete", "resource_type": "tasks",
   "result": {
-    "status": "committed",
-    "message": "השינוי בוצע ואומת",
-    "resource_id": "task_1",
+    "status": "committed", "message": "השינוי בוצע ואומת",
+    "resource_id": "<uid>", "reason": "ok",
     "verification": { "verified": true, "method": "read_after_write", "detail": null }
   },
   "audit": { "…": "the entry this produced" }
 }
 ```
 
-`status` is one of `committed` (*השינוי בוצע ואומת*), `committed_unverified`
-(*השינוי בוצע אך לא הצלחנו לאמת*) or `failed` (*השינוי לא בוצע*). A write that
-landed but could not be confirmed is never reported as success, and the UI shows
-no saved state until the read-back agrees.
+`status` is `committed` (*השינוי בוצע ואומת*), `committed_unverified`
+(*השינוי בוצע אך לא הצלחנו לאמת*) or `failed` (*השינוי לא בוצע*). The bridge's
+own `reason` is carried through:
+
+| `reason` | Result |
+| --- | --- |
+| `stale_preview` | `failed` — the state moved after the preview, and **nothing was mutated** |
+| `already_in_state` | `committed`, verified, with *המצב כבר היה כמבוקש* |
+| `duplicate`, `not_found`, `invalid_*` | `failed`, with the bridge's reason explained in Hebrew |
 
 ### `GET /api/bobi/manage/audit`
 
-Recent previews and commits, newest first, including refusals. Every entry
-carries `timestamp`, `operation`, `resource_type`, `resource_id`,
-`requested_change`, `result`, `verified` and `source: "web"`. Fields resembling
-a phone number, LID, chat id or credential are stripped before an entry is
-created — and before the payload reaches the bridge.
+Recent previews and commits, newest first, including refusals. Each record has
+`timestamp`, `operation`, `resource_type`, `resource_id`, `requested_change`,
+`result`, `verified` and `source: "web"`. Fields resembling a phone number, LID,
+chat id or credential are stripped before a record is created — and before the
+payload reaches the bridge.
 
 ---
 
 ## What does not exist
 
 There is still no endpoint to control a device, save a Shabbat configuration,
-create a smart rule, edit an automation, write to a calendar, or change a user's
-permissions. A test enumerates the published surface and asserts the only
+create a smart rule, edit an automation, write to a calendar, change a user's
+permissions, or move the AI master toggle or Fast Paths — each needs its own
+Home Assistant contract first. There is also **no endpoint that enables Home
+Assistant's master write switch**, and a test asserts none of the management
+modules can set it. A test enumerates the published surface and asserts the only
 non-GET routes are the probe and the managed preview/commit pair.

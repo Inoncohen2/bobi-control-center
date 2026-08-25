@@ -6,7 +6,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { ReadOnlyNotice } from '@/components/ui/ReadOnly';
 import { QueryBoundary } from '@/components/state/QueryBoundary';
 import { useTheme, type ThemeChoice } from '@/hooks/useTheme';
-import { useAudit, useConnection, useManagementStatus, useStatus } from '@/hooks/queries';
+import { useAudit, useConnection, useManagementContract, useStatus } from '@/hooks/queries';
 import { formatDateTime } from '@/utils/format';
 
 const THEME_LABELS: Record<ThemeChoice, string> = {
@@ -44,7 +44,7 @@ function Row({ label, value, help }: { label: string; value: React.ReactNode; he
 export function SettingsPage() {
   const connection = useConnection();
   const status = useStatus();
-  const management = useManagementStatus();
+  const management = useManagementContract();
   const audit = useAudit();
   const { theme, setTheme } = useTheme();
 

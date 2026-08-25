@@ -27,6 +27,7 @@ import type {
   ManagementStatus,
   PreviewRequest,
   PreviewResponse,
+  TaskSnapshot,
 } from '@/types/api';
 
 const ROOT = '/api/bobi';
@@ -52,8 +53,17 @@ export const runProbe = (text: string) => api.post<BridgeProbe>(`${ROOT}/probe`,
 // --- management ------------------------------------------------------------
 const MANAGE = `${ROOT}/manage`;
 
-/** Whether Home Assistant has declared a write bridge. Discovered, not configured. */
-export const fetchManagementStatus = () => api.get<ManagementStatus>(`${MANAGE}/status`);
+/**
+ * The management contract, discovered from Home Assistant.
+ *
+ * Carries `writes_enabled` — Home Assistant's master switch. It is read here
+ * and nowhere written: there is deliberately no call in this file that could
+ * turn it on.
+ */
+export const fetchManagementContract = () => api.get<ManagementStatus>(`${MANAGE}/contract`);
+
+/** Open and completed tasks, with the bridge's own uid. Read-only. */
+export const fetchTaskSnapshot = () => api.get<TaskSnapshot>(`${MANAGE}/tasks/snapshot`);
 
 /** Describe a change. Performs no write — the backend guarantees it. */
 export const previewChange = (resource: string, request: PreviewRequest) =>

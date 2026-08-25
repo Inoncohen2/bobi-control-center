@@ -447,6 +447,9 @@ export interface CommitRequest {
   preview_id: string;
   confirmed: boolean;
   confirm_word?: string | null;
+  /** Echoed back and checked against the stored preview. */
+  operation?: string | null;
+  resource_id?: string | null;
 }
 
 export interface VerificationResult {
@@ -461,6 +464,8 @@ export interface WriteResult {
   /** Hebrew, exactly what the screen shows. */
   message: string;
   resource_id: string | null;
+  /** The bridge's own reason token, for the technical view. */
+  reason: string | null;
   verification: VerificationResult;
 }
 
@@ -491,11 +496,26 @@ export interface ManagedOperation {
   destructive: boolean;
 }
 
+/**
+ * Something an operation may target — a household member, a feature.
+ *
+ * `id` is the bridge's own token. It is never a Home Assistant entity id: the
+ * bridge does not hand those out, and this app must not reconstruct one.
+ */
+export interface ManagedTarget {
+  id: string;
+  label: string;
+  risk: string | null;
+  /** Features only. `null` means unknown, which blocks a preview. */
+  enabled: boolean | null;
+}
+
 export interface ManagementResource {
   id: string;
   label: string;
   available: boolean;
   operations: ManagedOperation[];
+  targets: ManagedTarget[];
   detail: string | null;
 }
 
@@ -505,7 +525,31 @@ export interface ManagementStatus {
   reason: string | null;
   contract_version: string | null;
   resources: ManagementResource[];
-  /** Still false: unrestricted writes remain off. */
+  /**
+   * Home Assistant's master write switch, as the bridge reports it. Off today:
+   * previews work, commits are refused. Nothing in this app can turn it on.
+   */
+  writes_enabled: boolean;
+  requires_preview: boolean;
+  requires_confirmation: boolean;
+  requires_read_after_write: boolean;
+}
+
+/** One task from the management snapshot. `uid` is the bridge's handle. */
+export interface SnapshotTask {
+  uid: string;
+  summary: string;
+  status: string;
+  completed: boolean;
+  due: string | null;
+  owner_id: string;
+  owner: string;
+}
+
+export interface TaskSnapshot {
+  count: number;
+  tasks: SnapshotTask[];
+  owners: ManagedTarget[];
   writes_enabled: boolean;
 }
 

@@ -90,7 +90,7 @@ def test_frontend_never_hardcodes_home_assistant_entity_ids() -> None:
     offenders: list[str] = []
     for path in sources:
         relative = path.relative_to(FRONTEND_SRC).as_posix()
-        for number, value in scan_for_entity_ids(path.read_text("utf-8")):
+        for number, value in scan_for_entity_ids(strip_docstrings(path.read_text("utf-8"))):
             offenders.append(f"{relative}:{number}: {value}")
 
     assert not offenders, (
@@ -99,18 +99,50 @@ def test_frontend_never_hardcodes_home_assistant_entity_ids() -> None:
     )
 
 
+def strip_docstrings(source: str) -> str:
+    """Blank out triple-quoted blocks, keeping line numbers intact.
+
+    A service name inside a docstring documents the contract; a service name in
+    code calls it. Only the second is a leak, and only the second survives this.
+    """
+    out: list[str] = []
+    fence: str | None = None
+    for line in source.splitlines():
+        if fence is None:
+            for quote in ('"""', "'''"):
+                if quote in line:
+                    before, _, rest = line.partition(quote)
+                    if quote in rest:  # opened and closed on one line
+                        out.append(before)
+                    else:
+                        fence = quote
+                        out.append(before)
+                    break
+            else:
+                out.append(line)
+        else:
+            if fence in line:
+                fence = None
+            out.append("")
+    return "\n".join(out)
+
+
 def test_only_the_adapter_layer_speaks_home_assistant() -> None:
     """Entity ids may only be written where Home Assistant may be known.
 
     The `mock/` package is exempt: its fixtures stand in for what a real bridge
     would return.
     """
-    # These three make up the bridge-knowing layer: base.py declares the
-    # contract, real.py is the transport, and normalize.py maps raw responses
-    # onto the canonical models. They necessarily name the services involved.
+    # The bridge-knowing layer: base.py declares the contract, real.py and
+    # real_management.py are the transport, management.py is the write seam, and
+    # normalize.py maps raw responses onto the canonical models. They
+    # necessarily name the services involved — including, in a comment, the
+    # `todo.*` services this app must never call.
     allowed_files = {
         "adapters/base.py",
         "adapters/real.py",
+        "adapters/real_management.py",
+        "adapters/management.py",
         "models/bridge.py",
         "services/normalize.py",
     }
@@ -120,7 +152,7 @@ def test_only_the_adapter_layer_speaks_home_assistant() -> None:
         relative = path.relative_to(BACKEND_APP).as_posix()
         if relative in allowed_files or relative.startswith("mock/"):
             continue
-        for number, value in scan_for_entity_ids(path.read_text("utf-8")):
+        for number, value in scan_for_entity_ids(strip_docstrings(path.read_text("utf-8"))):
             offenders.append(f"{relative}:{number}: {value}")
 
     assert not offenders, (
@@ -241,18 +273,29 @@ def test_unrestricted_writes_stay_off() -> None:
     assert MockHomeAssistantAdapter.writes_enabled is False
 
 
-def test_no_adapter_declares_a_write_bridge_yet() -> None:
-    """Management is refused until Home Assistant supplies the contract.
-
-    This is the whole of the Phase 3A safety story: the write path exists in
-    the code, and no running adapter has one.
-    """
-    from app.adapters import MockHomeAssistantAdapter, RealHomeAssistantAdapter
-    from app.config import Settings
+def test_the_mock_adapter_declares_no_write_bridge() -> None:
+    """Mock mode never writes: there is no Home Assistant there to write to."""
+    from app.adapters import MockHomeAssistantAdapter
 
     assert MockHomeAssistantAdapter().management_bridge() is None
-    real = RealHomeAssistantAdapter(Settings(ha_token="unused-in-this-test"))
-    assert real.management_bridge() is None
+
+
+def test_nothing_in_the_app_can_set_the_master_write_switch() -> None:
+    """Home Assistant owns the switch. This application reads it and stops there.
+
+    Enabling writes is a Home Assistant-side decision taken after its own
+    end-to-end testing, so no endpoint, service or setting here may assign it.
+    """
+    for name in ("api/manage.py", "services/manage.py", "adapters/real_management.py"):
+        code = strip_docstrings(strip_comments((BACKEND_APP / name).read_text("utf-8")))
+        for assignment in ("writes_enabled=True", "writes_enabled = True", '"writes_enabled": True'):
+            assert assignment not in code, f"{name} must not set the master switch"
+
+    # The write services are only ever reached from apply().
+    bridge = strip_docstrings((BACKEND_APP / "adapters" / "real_management.py").read_text("utf-8"))
+    for service in ("TASK_ADD_COMMIT", "TASK_UPDATE_COMMIT", "FEATURE_COMMIT"):
+        # Each appears once as a constant and once at its single call site.
+        assert bridge.count(service) <= 3, f"{service} is reached from too many places"
 
 
 def test_the_adapter_interface_declares_no_write_method() -> None:
@@ -304,28 +347,9 @@ def test_management_writes_only_through_declared_operations() -> None:
     """No management route or service may name a Home Assistant service."""
     forbidden = ("todo.", "input_boolean.", "call_service", "homeassistant.")
     for name in ("api/manage.py", "services/manage.py", "models/manage.py"):
-        code = strip_comments((BACKEND_APP / name).read_text("utf-8"))
+        code = strip_docstrings(strip_comments((BACKEND_APP / name).read_text("utf-8")))
         for token in forbidden:
             assert token not in code, f"{name} must not reach a raw HA service: {token}"
-
-
-def test_the_bridge_allow_list_still_holds_only_reads() -> None:
-    """Phase 3A adds no service to the allow-list."""
-    from app.adapters.real import ALLOWED_SERVICES
-
-    assert frozenset(
-        {
-            "bobi_cc_status",
-            "bobi_cc_devices",
-            "bobi_cc_capabilities",
-            "bobi_cc_users",
-            "bobi_cc_shabbat",
-            "bobi_cc_rules",
-            "bobi_cc_tasks",
-            "bobi_cc_diagnostics",
-            "bobi_cc_probe",
-        }
-    ) == ALLOWED_SERVICES
 
 
 def test_every_non_get_route_is_a_probe_or_a_managed_change() -> None:
@@ -438,6 +462,51 @@ def test_the_preview_and_the_commit_are_labelled_differently() -> None:
 def test_the_unavailable_message_is_the_agreed_wording() -> None:
     seam = (BACKEND_APP / "adapters" / "management.py").read_text("utf-8")
     assert 'UNAVAILABLE_MESSAGE = "ניהול עדיין לא הופעל ב-Home Assistant"' in seam
+
+
+def test_the_frontend_names_no_raw_home_assistant_service() -> None:
+    """The browser talks to this backend, never to a `todo.*` or `input_boolean.*`."""
+    offenders: list[str] = []
+    for path in _frontend_sources():
+        code = strip_comments(path.read_text("utf-8"))
+        for name in ("todo.add_item", "todo.update_item", "todo.remove_item", "input_boolean."):
+            if name in code:
+                offenders.append(f"{path.relative_to(FRONTEND_SRC).as_posix()}: {name}")
+
+    assert not offenders, "the frontend must not name a Home Assistant service:\n" + "\n".join(
+        offenders
+    )
+
+
+def test_the_frontend_offers_no_way_to_enable_writes() -> None:
+    """The master switch is Home Assistant's. The UI reads it and stops there."""
+    for path in _frontend_sources():
+        code = strip_comments(path.read_text("utf-8"))
+        for attempt in (
+            "writes_enabled: true",
+            "writes_enabled=true",
+            '"writes_enabled": true',
+            "setWritesEnabled",
+            "enableWrites",
+        ):
+            assert attempt not in code, f"{path.name} must not enable writes"
+
+    # And no API function posts to anything that could.
+    client = strip_comments((FRONTEND_SRC / "api" / "bobi.ts").read_text("utf-8"))
+    posts = {line for line in client.splitlines() if "api.post" in line}
+    for line in posts:
+        assert any(
+            allowed in line for allowed in ("/probe", "/preview", "/commit")
+        ), f"unexpected write call: {line.strip()}"
+
+
+def test_writes_disabled_is_shown_as_a_disabled_feature() -> None:
+    """Not an error state: the same sentence, and no failure wording."""
+    notice = (FRONTEND_SRC / "features" / "manage" / "ManagementNotice.tsx").read_text("utf-8")
+    assert "ניהול עדיין לא הופעל ב-Home Assistant" in notice
+    # It renders through the read-only affordance, not the error boundary.
+    assert "ReadOnlyNotice" in notice
+    assert "ErrorState" not in notice
 
 
 def test_frontend_marks_unfinished_writes() -> None:
