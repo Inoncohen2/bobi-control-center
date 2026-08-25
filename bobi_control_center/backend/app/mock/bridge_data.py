@@ -31,7 +31,9 @@ def status_payload() -> dict[str, Any]:
     """
     return {
         "api_version": "1",
-        "ok": True,
+        # The real bridge reports `healthy`, not `ok` — the normalizer resolves
+        # both into one canonical health answer.
+        "healthy": True,
         "version": "bobi-demo-2.0",
         "uptime": "4 ימים",
         "whatsapp": {"connected": True, "status": "WORKING",
@@ -300,18 +302,22 @@ def shabbat_payload() -> dict[str, Any]:
             "havdalah": "19:51",
             "pre_offset_minutes": 20,
         },
+        # Each profile carries its own temperatures, as the real bridge does.
+        # The same air conditioner appearing in two of them must be reported
+        # once, not twice.
         "profiles": {
             "pre_off": {"label": "כיבוי לפני שבת", "active": True, "offset_minutes": 20,
-                        "tokens": ["kitchen_light", "living_room_ac"]},
+                        "tokens": ["kitchen_light", "living_room_ac"],
+                        "ac_temperatures": {"living_room_ac": 24.0, "parents_ac": 23.0}},
             "pre_on": {"label": "הדלקה לפני שבת", "active": True, "offset_minutes": 10,
                        "tokens": ["living_room_light", "garden_light"]},
             "night_off": {"label": "כיבוי לילה", "active": True, "time": "23:30",
-                          "tokens": ["living_room_light", "living_room_ac"]},
+                          "tokens": ["living_room_light", "living_room_ac"],
+                          "ac_temperatures": {"living_room_ac": 24.0, "girls_ac": 25.5}},
             "morning_on": {"label": "הדלקת בוקר", "active": True, "time": "06:30",
                            "tokens": ["kitchen_light", "boiler"]},
         },
         "drafts": {"user_a": {"has_draft": False}, "user_b": {"has_draft": False}},
-        "ac_temperatures": {"living_room_ac": 24, "parents_ac": 23, "girls_ac": 24},
         "device_labels": {
             "kitchen_light": "אור מטבח",
             "living_room_light": "אור סלון",

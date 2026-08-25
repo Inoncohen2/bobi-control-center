@@ -4,6 +4,26 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 2.0.2
+
+Two things the live 2.0.1 install still got wrong.
+
+- **Overall health** — `status.ok` came back `null` while the bridge's own
+  `healthy` flag sat in `details` as the string `"True"`. A canonical
+  `health {status, ok, reason}` now resolves it from authoritative information
+  only: the bridge's own statement first, otherwise the component states, where
+  only an explicit failure counts. A component the bridge could not resolve
+  leaves health `unknown` rather than dragging it to `false`, and `unknown` is
+  rendered as unknown — never as a fault.
+- **Shabbat AC temperatures** — the list was empty because the bridge keeps the
+  temperatures inside each profile, not at the top level. They are collected
+  from wherever they appear and de-duplicated by device. `temperature` is now
+  numeric, with the bridge's own text preserved beside it.
+
+`profile.active`, `profile.time` and `profile.offset_minutes` stay nullable: the
+bridge has no authoritative value for all of them yet, and a guess is worse than
+a null.
+
 ## 2.0.1
 
 Normalization of real bridge responses, after the second live test.

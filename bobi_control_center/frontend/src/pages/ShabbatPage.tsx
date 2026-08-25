@@ -181,7 +181,9 @@ export function ShabbatPage() {
                           {entry.label}
                         </dt>
                         <dd className="text-sm font-medium tabular-nums text-slate-900 dark:text-slate-100">
-                          {entry.temperature}°
+                          {/* A setting the bridge does not express as a number
+                              — "auto", say — is shown as it came. */}
+                          {entry.temperature !== null ? `${entry.temperature}°` : entry.text}
                         </dd>
                       </div>
                     ))}

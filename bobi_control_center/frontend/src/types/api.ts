@@ -83,7 +83,23 @@ export interface ConfigStatus {
   extra: Extra;
 }
 
+/**
+ * Bobi's overall health, resolved server-side.
+ *
+ * `unknown` is a real answer, not a failure: the bridge did not say. Render it
+ * as unknown — never as a problem, and never as a red state.
+ */
+export interface BridgeHealth {
+  /** `healthy` · `degraded` · `unhealthy` · `unknown`. */
+  status: string;
+  /** `null` when genuinely unknown. Never coerced to a boolean. */
+  ok: boolean | null;
+  reason: string | null;
+}
+
 export interface BridgeStatus {
+  /** The resolved overall answer; `ok` below mirrors `health.ok`. */
+  health: BridgeHealth;
   ok: boolean | null;
   version: string | null;
   uptime: string | null;
@@ -268,7 +284,10 @@ export interface ProfileDevice {
 export interface ShabbatAcTemperature {
   id: string;
   label: string;
-  temperature: string;
+  /** Numeric value, or null when the bridge sent something non-numeric. */
+  temperature: number | null;
+  /** Exactly what the bridge sent, so a setting like "auto" still shows. */
+  text: string | null;
 }
 
 export interface ShabbatProfile {

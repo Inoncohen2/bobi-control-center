@@ -58,7 +58,7 @@ Stack traces never leave the process.
 ### `GET /health`
 
 ```json
-{ "ok": true, "app": "bobi-control-center", "version": "2.0.1",
+{ "ok": true, "app": "bobi-control-center", "version": "2.0.2",
   "adapter": "home_assistant", "writes_enabled": false }
 ```
 
@@ -68,7 +68,7 @@ Whether the app is showing real or demo data. Contains no secret.
 
 ```json
 { "adapter": "home_assistant", "connected": true, "writes_enabled": false,
-  "phase": 2, "app_version": "2.0.1", "detail": "מחובר לגשר של בובי" }
+  "phase": 2, "app_version": "2.0.2", "detail": "מחובר לגשר של בובי" }
 ```
 
 ---
@@ -79,6 +79,7 @@ Whether the app is showing real or demo data. Contains no secret.
 
 ```json
 {
+  "health": { "status": "healthy", "ok": true, "reason": "הגשר דיווח: True" },
   "ok": true,
   "version": "…",
   "uptime": "…",
@@ -97,6 +98,21 @@ Whether the app is showing real or demo data. Contains no secret.
   "writes_enabled": false
 }
 ```
+
+`health` is the one resolved answer to "is Bobi alright?", and `ok` mirrors
+`health.ok`. It is derived from authoritative information only: whatever the
+bridge states about itself first — `ok`, `healthy` (which the real bridge sends,
+as a string boolean), or a status word — and otherwise from the component
+states, where **only an explicit failure counts**. A component the bridge could
+not resolve leaves health `unknown`; it never makes it `false`. `unknown` is a
+real answer and the UI renders it as such, never as a fault.
+
+| `status` | `ok` | Meaning |
+| --- | --- | --- |
+| `healthy` | `true` | The bridge said so, or every known component is fine |
+| `degraded` | `false` | Some known component failed |
+| `unhealthy` | `false` | The bridge said so, or every known component failed |
+| `unknown` | `null` | Nothing authoritative was sent — not a failure |
 
 The bridge reports WhatsApp, the AI fallback, the household, feature toggles and
 its own configuration health as separate sections, so they are **first-class
@@ -234,7 +250,9 @@ shows only whether WhatsApp is connected.
                 { "id": "led_salon", "label": "LED סלון" }],
     "extra": {}
   }],
-  "ac_temperatures": [{ "id": "ac_salon", "label": "מזגן סלון", "temperature": "24" }],
+  "ac_temperatures": [
+    { "id": "ac_salon", "label": "מזגן סלון", "temperature": 24.0, "text": "24.0" }
+  ],
   "has_draft": false,
   "draft_owners": [],
   "writes_enabled": false,
@@ -250,8 +268,13 @@ carries the bridge's own key, so a profile the app has never seen still renders.
 A profile lists its devices as the bridge's own short `tokens`, which
 `device_labels` translates. Both halves are kept: `label` is what the screen
 shows, `id` is the token Phase 3 must send back to change the profile. The same
-applies to `ac_temperatures`, so each temperature stays tied to its air
-conditioner rather than to a translated string. `has_draft` is derived from
+applies to `ac_temperatures`. The bridge keeps those **inside the profiles**
+rather than at the top level, so they are collected from the top level, from
+`upcoming` and from every profile, then de-duplicated by device — one air
+conditioner named by three profiles is one entry, and where two profiles
+disagree the first reading is kept rather than the device being listed twice.
+`temperature` is the numeric value, `null` for a setting the bridge does not
+express as a number; `text` always carries what it actually sent. `has_draft` is derived from
 `drafts`. `writes_enabled` is forced to `false`.
 
 ---

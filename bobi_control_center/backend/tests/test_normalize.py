@@ -102,6 +102,78 @@ def test_status_exposes_the_real_sections_rather_than_details_rows() -> None:
     assert result.details == {}
 
 
+# --- overall health ---------------------------------------------------------
+def test_health_is_resolved_from_the_bridges_own_healthy_field() -> None:
+    """The observed bug: `healthy` fell through to details as "True", ok stayed null."""
+    result = normalize.normalize_status({"healthy": True, "whatsapp": {"connected": True}})
+
+    assert result.health.status == "healthy"
+    assert result.health.ok is True
+    # The canonical `ok` now answers the question instead of returning null.
+    assert result.ok is True
+    # …and is not also repeated as a details row.
+    assert "healthy" not in result.details
+
+
+def test_health_reads_a_string_boolean_safely() -> None:
+    """Bobi renders its booleans as Python text, so "True" must not read as unknown."""
+    for spelling in ("True", "true", "yes", 1):
+        result = normalize.normalize_status({"healthy": spelling})
+        assert result.health.ok is True, spelling
+        assert result.health.status == "healthy", spelling
+
+    for spelling in ("False", "false", "no", 0):
+        result = normalize.normalize_status({"healthy": spelling})
+        assert result.health.ok is False, spelling
+        assert result.health.status == "unhealthy", spelling
+
+
+def test_health_is_not_false_just_because_a_component_is_unknown() -> None:
+    """`config` arriving with ok: null is an unknown, not a failure."""
+    result = normalize.normalize_status(
+        {"whatsapp": {"connected": True}, "ai": {"enabled": True}, "config": {"status": "?"}}
+    )
+
+    assert result.health.ok is not False
+    assert result.health.status == "healthy"
+    # The unknown component is still reported honestly as unknown.
+    config = next(c for c in result.components if c.id == "config")
+    assert config.ok is None
+
+
+def test_health_is_unknown_when_nothing_authoritative_was_sent() -> None:
+    result = normalize.normalize_status({"version": "2.4.0"})
+
+    assert result.health.status == "unknown"
+    assert result.health.ok is None
+    assert result.ok is None
+    assert result.health.reason
+
+
+def test_health_is_degraded_when_one_component_actually_failed() -> None:
+    result = normalize.normalize_status(
+        {"whatsapp": {"connected": False}, "ai": {"enabled": True}}
+    )
+
+    assert result.health.status == "degraded"
+    assert result.health.ok is False
+    assert "WhatsApp" in (result.health.reason or "")
+
+
+def test_health_is_unhealthy_when_every_known_component_failed() -> None:
+    result = normalize.normalize_status(
+        {"whatsapp": {"connected": False}, "ai": {"enabled": False}}
+    )
+    assert result.health.status == "unhealthy"
+    assert result.health.ok is False
+
+
+def test_health_never_invents_a_state_from_an_empty_payload() -> None:
+    result = normalize.normalize_status({})
+    assert result.health.status == "unknown"
+    assert result.health.ok is None
+
+
 def test_status_builds_the_health_row_from_the_sections() -> None:
     """The real bridge sends no `components`, so the dashboard needs derived ones."""
     result = normalize.normalize_status(REAL_STATUS)
@@ -535,8 +607,107 @@ def test_shabbat_keeps_each_temperature_tied_to_its_air_conditioner() -> None:
     result = normalize.normalize_shabbat(REAL_SHABBAT)
 
     assert [t.model_dump() for t in result.ac_temperatures] == [
-        {"id": "living_room_ac", "label": "מזגן סלון", "temperature": "24"}
+        {
+            "id": "living_room_ac",
+            "label": "מזגן סלון",
+            "temperature": 24.0,
+            "text": "24",
+        }
     ]
+
+
+def test_shabbat_collects_temperatures_from_the_profiles() -> None:
+    """The observed bug: the bridge keeps them per profile, so the list was empty."""
+    result = normalize.normalize_shabbat(
+        {
+            "profiles": {
+                "pre_off": {"ac_temperatures": {"ac_salon": 24.0, "ac_parents": 23.0}},
+                "night_off": {"ac_temperatures": {"ac_lia": 25.5}},
+            },
+            "device_labels": {
+                "ac_salon": "מזגן סלון",
+                "ac_parents": "מזגן הורים",
+                "ac_lia": "מזגן בנות",
+            },
+        }
+    )
+
+    assert [
+        {"id": t.id, "label": t.label, "temperature": t.temperature}
+        for t in result.ac_temperatures
+    ] == [
+        {"id": "ac_salon", "label": "מזגן סלון", "temperature": 24.0},
+        {"id": "ac_parents", "label": "מזגן הורים", "temperature": 23.0},
+        {"id": "ac_lia", "label": "מזגן בנות", "temperature": 25.5},
+    ]
+
+
+def test_shabbat_de_duplicates_a_temperature_shared_by_two_profiles() -> None:
+    """One air conditioner named by several profiles is still one entry."""
+    result = normalize.normalize_shabbat(
+        {
+            "profiles": {
+                "pre_off": {"ac_temperatures": {"ac_salon": 24.0}},
+                "night_off": {"ac_temperatures": {"ac_salon": 24.0, "ac_lia": 25.5}},
+                "morning_on": {"ac_temperatures": {"ac_salon": 24.0}},
+            }
+        }
+    )
+
+    assert [t.id for t in result.ac_temperatures] == ["ac_salon", "ac_lia"]
+
+
+def test_shabbat_keeps_the_first_reading_when_profiles_contradict() -> None:
+    """A contradiction cannot be resolved here, so it is not reported twice."""
+    result = normalize.normalize_shabbat(
+        {
+            "profiles": [
+                {"kind": "pre_off", "ac_temperatures": {"ac_salon": 24.0}},
+                {"kind": "night_off", "ac_temperatures": {"ac_salon": 21.0}},
+            ]
+        }
+    )
+
+    assert len(result.ac_temperatures) == 1
+    assert result.ac_temperatures[0].temperature == 24.0
+
+
+def test_shabbat_never_fabricates_a_missing_temperature() -> None:
+    result = normalize.normalize_shabbat(
+        {
+            "profiles": {
+                "pre_off": {"ac_temperatures": {"ac_salon": None, "ac_lia": ""}},
+                "night_off": {"tokens": ["kitchen"]},
+            }
+        }
+    )
+    assert result.ac_temperatures == []
+
+
+def test_shabbat_keeps_a_non_numeric_temperature_as_text() -> None:
+    """A setting the bridge does not express as a number is shown, not dropped."""
+    result = normalize.normalize_shabbat(
+        {"profiles": {"pre_off": {"ac_temperatures": {"ac_salon": "auto"}}}}
+    )
+
+    entry = result.ac_temperatures[0]
+    assert entry.temperature is None
+    assert entry.text == "auto"
+
+
+def test_shabbat_still_reads_a_top_level_temperature_map() -> None:
+    result = normalize.normalize_shabbat({"ac_temperatures": {"ac_salon": 24}})
+    assert result.ac_temperatures[0].temperature == 24.0
+
+
+def test_shabbat_leaves_unprovided_profile_fields_null() -> None:
+    """The bridge has no authoritative value for these yet — do not invent one."""
+    result = normalize.normalize_shabbat({"profiles": {"pre_off": {"tokens": ["kitchen"]}}})
+
+    profile = result.profiles[0]
+    assert profile.active is None
+    assert profile.time is None
+    assert profile.offset_minutes is None
 
 
 def test_shabbat_reports_who_has_a_draft() -> None:

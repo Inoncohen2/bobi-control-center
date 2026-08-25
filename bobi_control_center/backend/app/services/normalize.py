@@ -33,6 +33,7 @@ from app.models.bridge import (
     BridgeDevice,
     BridgeDevices,
     BridgeDiagnostics,
+    BridgeHealth,
     BridgeIssue,
     BridgeProbe,
     BridgeRule,
@@ -170,7 +171,8 @@ def _container(payload: Payload, *keys: str) -> tuple[Any, str | None]:
 _PROTOCOL_KEYS = {"api_version", "schema_version"}
 
 _STATUS_MAPPED = {
-    "ok", "version", "uptime", "components", "counts", "writes_enabled", *_PROTOCOL_KEYS,
+    "ok", "healthy", "health", "is_healthy", "state", "status",
+    "version", "uptime", "components", "counts", "writes_enabled", *_PROTOCOL_KEYS,
 }
 
 
@@ -201,16 +203,17 @@ def normalize_status(payload: Payload) -> BridgeStatus:
     features, keys = _feature_flags(payload)
     used |= keys
 
-    ok = _bool(payload.get("ok"))
     components = [
         component
         for item in _as_items(payload.get("components"))
         if (component := _status_component(item))
     ]
+
+    health = _health(payload, components, whatsapp, ai, config)
     if not components:
         # The real bridge sends no component list, so build the dashboard's top
         # row out of the sections it does send.
-        components = _derived_components(ok, whatsapp, ai, config)
+        components = _derived_components(health, whatsapp, ai, config)
 
     counts: dict[str, int] = {}
     raw_counts = payload.get("counts")
@@ -233,7 +236,10 @@ def normalize_status(payload: Payload) -> BridgeStatus:
             details[key] = text
 
     return BridgeStatus(
-        ok=ok,
+        health=health,
+        #: Mirrors `health.ok`, so an existing consumer of `ok` sees the
+        #: resolved answer rather than the null it used to get.
+        ok=health.ok,
         version=_text(_first(payload, "version", "bobi_version", "api_version")),
         uptime=_text(_first(payload, "uptime", "up_since", "started_at")),
         whatsapp=whatsapp,
@@ -245,6 +251,88 @@ def normalize_status(payload: Payload) -> BridgeStatus:
         counts=counts,
         details=details,
         writes_enabled=False,
+    )
+
+
+#: Status words that answer "is Bobi healthy?", mapped to a canonical state.
+_HEALTH_WORDS = {
+    "healthy": "healthy", "ok": "healthy", "true": "healthy", "up": "healthy",
+    "working": "healthy", "online": "healthy", "running": "healthy",
+    "degraded": "degraded", "partial": "degraded", "warning": "degraded",
+    "unhealthy": "unhealthy", "error": "unhealthy", "failed": "unhealthy",
+    "down": "unhealthy", "offline": "unhealthy", "false": "unhealthy",
+    "unknown": "unknown",
+}
+
+
+def _health(
+    payload: Payload,
+    components: list[StatusComponent],
+    whatsapp: WhatsAppStatus | None,
+    ai: AiStatus | None,
+    config: ConfigStatus | None,
+) -> BridgeHealth:
+    """Resolve one overall answer, from authoritative information only.
+
+    The real bridge does not send `ok`. It sends `healthy`, which used to fall
+    through to `details` as the string `"True"` while `ok` stayed null — a
+    question the API asked and then refused to answer.
+
+    Two sources, in order:
+
+    1. **What the bridge says about itself.** `ok`, `healthy`, `is_healthy`, or
+       a status word. `_bool` already reads `"True"`, `"true"` and `1` alike,
+       so a string boolean is handled without a special case.
+    2. **The component states**, where only an *explicit* failure counts. A
+       component the bridge could not resolve — `config` arriving with `ok:
+       null` — leaves health unknown rather than dragging it to false. Nothing
+       is inferred from an absence.
+
+    `unknown` is a real answer, not a failure. It is never coerced to a
+    boolean, and the UI must not render it as a problem.
+    """
+    # 1. The bridge's own statement.
+    stated = _first(payload, "ok", "healthy", "is_healthy")
+    nested = payload.get("health")
+    if stated is None and isinstance(nested, dict):
+        stated = _first(nested, "ok", "healthy", "status", "state", "value")
+    if stated is None:
+        stated = _first(payload, "status", "state")
+
+    if stated is not None and not isinstance(stated, (dict, list)):
+        word = str(stated).strip().lower()
+        state = _HEALTH_WORDS.get(word)
+        if state is None:
+            # Not a health word, but `_bool` may still read it (1, "yes", "on").
+            resolved = _bool(stated)
+            state = "healthy" if resolved else "unhealthy" if resolved is False else None
+        if state is not None:
+            return BridgeHealth(
+                status=state,
+                ok=True if state == "healthy" else False if state == "unhealthy" else None,
+                reason=f"הגשר דיווח: {stated}",
+            )
+
+    # 2. Derived from the components, counting only explicit failures.
+    known = [c for c in components if c.ok is not None] or [
+        c for c in _derived_components(None, whatsapp, ai, config) if c.ok is not None
+    ]
+    failing = [c.name for c in known if c.ok is False]
+
+    if not known:
+        return BridgeHealth(
+            status="unknown", ok=None, reason="הגשר לא דיווח על מצב כללי"
+        )
+    if not failing:
+        return BridgeHealth(
+            status="healthy", ok=True, reason="כל הרכיבים הידועים תקינים"
+        )
+    if len(failing) == len(known):
+        return BridgeHealth(
+            status="unhealthy", ok=False, reason=f"תקלה ב: {', '.join(failing)}"
+        )
+    return BridgeHealth(
+        status="degraded", ok=False, reason=f"תקלה ב: {', '.join(failing)}"
     )
 
 
@@ -514,24 +602,27 @@ def _state_label(status: str | None, ok: bool | None, *, yes: str, no: str) -> s
     return "לא ידוע"
 
 
+#: Hebrew for each canonical health state.
+_HEALTH_LABELS = {
+    "healthy": "פעיל",
+    "degraded": "פעיל חלקית",
+    "unhealthy": "לא תקין",
+    "unknown": "לא ידוע",
+}
+
+
 def _derived_components(
-    ok: bool | None,
+    health: BridgeHealth | None,
     whatsapp: WhatsAppStatus | None,
     ai: AiStatus | None,
     config: ConfigStatus | None,
 ) -> list[StatusComponent]:
-    """The dashboard's health row, built from the sections the bridge sent."""
+    """The dashboard's health row, built from the sections the bridge sent.
+
+    `health` is `None` while health is still being resolved *from* this row —
+    the Bobi card is what health summarises, so including it would be circular.
+    """
     components: list[StatusComponent] = []
-    if ok is not None:
-        components.append(
-            StatusComponent(
-                id="bobi",
-                name="בובי",
-                label="פעיל" if ok else "לא תקין",
-                state="ok" if ok else "error",
-                ok=ok,
-            )
-        )
     if whatsapp is not None:
         components.append(
             StatusComponent(
@@ -564,6 +655,24 @@ def _derived_components(
                 ok=config.ok,
                 detail=config.detail,
             )
+        )
+
+    # Bobi's own card leads the row — but only when there is something to say.
+    # An empty payload must produce an empty screen, not a card invented out of
+    # nothing.
+    if health is not None and (components or health.status != "unknown"):
+        components.insert(
+            0,
+            StatusComponent(
+                id="bobi",
+                name="בובי",
+                label=_HEALTH_LABELS.get(health.status, "לא ידוע"),
+                state=health.status,
+                ok=health.ok,
+                # The reason belongs to `health`, which the dashboard states
+                # once at the top. Repeating it on the card says it twice.
+                detail=None,
+            ),
         )
     return components
 
@@ -949,10 +1058,16 @@ def normalize_probe(payload: Payload, text: str) -> BridgeProbe:
 
 
 # --- shabbat ----------------------------------------------------------------
+#: Where a map of air-conditioner token → temperature may appear. The real
+#: bridge keeps it inside each profile rather than at the top level.
+_AC_TEMPERATURE_KEYS = (
+    "ac_temperatures", "ac_temps", "temperatures", "temps", "ac",
+)
+
 _SHABBAT_MAPPED = {
     "upcoming", "times", "profiles", "drafts", "candle_lighting", "havdalah",
     "parasha", "pre_shabbat_offset_minutes", "pre_offset_minutes",
-    "offset_minutes", "ac_temperatures",
+    "offset_minutes", *_AC_TEMPERATURE_KEYS,
     "device_labels", "labels", "has_draft", "writes_enabled",
     "pre_off_profile", "pre_on_profile", "night_off_profile", "morning_on_profile",
 }
@@ -960,7 +1075,7 @@ _SHABBAT_MAPPED = {
 _PROFILE_MAPPED = {
     "id", "key", "kind", "name", "label", "title", "active", "enabled",
     "time", "at", "offset_minutes", "offset", "devices", "targets", "tokens",
-    "device_tokens",
+    "device_tokens", *_AC_TEMPERATURE_KEYS,
 }
 
 #: Labels for the profile kinds Bobi is known to define. An unknown kind falls
@@ -1020,7 +1135,7 @@ def normalize_shabbat(payload: Payload) -> BridgeShabbat:
         parasha=time_of("parasha", "parsha"),
         pre_shabbat_offset_minutes=pre_offset,
         profiles=profiles,
-        ac_temperatures=_ac_temperatures(payload.get("ac_temperatures"), labels),
+        ac_temperatures=_collect_ac_temperatures(payload, upcoming, profiles_raw, labels),
         has_draft=bool(draft_owners) or bool(_bool(payload.get("has_draft"))),
         draft_owners=draft_owners,
         writes_enabled=False,
@@ -1090,23 +1205,28 @@ def _profile_devices(raw: Any, labels: dict[str, str]) -> list[ProfileDevice]:
     return devices
 
 
-def _ac_temperatures(raw: Any, labels: dict[str, str]) -> list[ShabbatAcTemperature]:
-    """Keep each temperature tied to the air conditioner it belongs to.
+def _collect_ac_temperatures(
+    payload: Payload, upcoming: Payload, profiles_raw: Any, labels: dict[str, str]
+) -> list[ShabbatAcTemperature]:
+    """Gather the air-conditioner temperatures from wherever the bridge keeps them.
 
-    A bare `{token: degrees}` map loses the device as soon as the token is
-    translated for display, so both the token and its label travel with the
-    temperature.
+    The real bridge does not send a top-level `ac_temperatures` map: each
+    profile carries its own, which is why this list came back empty while the
+    values sat unread. They are collected from the top level, from `upcoming`
+    and from every profile, then de-duplicated by device.
+
+    **First value wins**, in that order. Two profiles disagreeing about one air
+    conditioner is a contradiction this layer cannot resolve, and picking a
+    winner arbitrarily — or listing the device twice — would both be worse than
+    reporting the first reading deterministically.
     """
     pairs: list[tuple[str | None, Any]] = []
-    if isinstance(raw, dict):
-        pairs = list(raw.items())
-    elif isinstance(raw, list):
-        for item in raw:
-            if isinstance(item, dict):
-                pairs.append((
-                    _text(_first(item, "id", "token", "device", "key", "entity_id")),
-                    _first(item, "temperature", "temp", "value", "degrees"),
-                ))
+    for source in (payload, upcoming):
+        for key in _AC_TEMPERATURE_KEYS:
+            pairs.extend(_ac_pairs(source.get(key)))
+    for item in _as_items(profiles_raw, id_key="kind"):
+        for key in _AC_TEMPERATURE_KEYS:
+            pairs.extend(_ac_pairs(item.get(key)))
 
     temperatures: list[ShabbatAcTemperature] = []
     seen: set[str] = set()
@@ -1119,10 +1239,34 @@ def _ac_temperatures(raw: Any, labels: dict[str, str]) -> list[ShabbatAcTemperat
             ShabbatAcTemperature(
                 id=token,
                 label=labels.get(token) or _humanize(token),
-                temperature=text,
+                # A setting the bridge does not express as a number — "auto",
+                # say — keeps its text rather than being reported as a value.
+                temperature=_number(value),
+                text=text,
             )
         )
     return temperatures
+
+
+def _ac_pairs(raw: Any) -> list[tuple[str | None, Any]]:
+    """`(device token, temperature)` out of a map or a list of objects.
+
+    Both the token and its label travel with the temperature, because a bare
+    `{token: degrees}` map loses the device the moment the token is translated
+    for display.
+    """
+    if isinstance(raw, dict):
+        return list(raw.items())
+    if isinstance(raw, list):
+        return [
+            (
+                _text(_first(item, "id", "token", "device", "key", "entity_id")),
+                _first(item, "temperature", "temp", "value", "degrees"),
+            )
+            for item in raw
+            if isinstance(item, dict)
+        ]
+    return []
 
 
 def _draft_owners(drafts: Any) -> list[str]:

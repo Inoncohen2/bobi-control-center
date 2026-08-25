@@ -82,6 +82,34 @@ describe('DashboardPage', () => {
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
   });
 
+  it('states the resolved overall health', async () => {
+    vi.stubGlobal('fetch', mockApi(ALL_ROUTES));
+    renderWithProviders(<DashboardPage />);
+
+    expect(await screen.findByText('בובי תקין')).toBeInTheDocument();
+    expect(screen.getByText('כל הרכיבים הידועים תקינים')).toBeInTheDocument();
+  });
+
+  it('renders unknown health as unknown, never as a failure', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockApi({
+        ...ALL_ROUTES,
+        '/api/bobi/status': makeStatus({
+          health: { status: 'unknown', ok: null, reason: 'הגשר לא דיווח על מצב כללי' },
+          ok: null,
+        }),
+      }),
+    );
+    renderWithProviders(<DashboardPage />);
+
+    const banner = await screen.findByText('מצב בובי לא ידוע');
+    // Muted, not the red/amber of a real fault.
+    const badge = banner.closest('span');
+    expect(badge?.className).not.toMatch(/rose|amber/);
+    expect(screen.queryByText('בובי לא תקין')).not.toBeInTheDocument();
+  });
+
   it('keeps entity ids behind the technical disclosure', async () => {
     vi.stubGlobal('fetch', mockApi(ALL_ROUTES));
     renderWithProviders(<DashboardPage />);
@@ -351,6 +379,24 @@ describe('ShabbatPage', () => {
     await screen.findByText('18:52');
     const row = screen.getByText('מזגן סלון').closest('div');
     expect(within(row as HTMLElement).getByText('24°')).toBeInTheDocument();
+  });
+
+  it('shows a non-numeric temperature as the bridge sent it', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockApi({
+        ...ALL_ROUTES,
+        '/api/bobi/shabbat': makeShabbat({
+          ac_temperatures: [
+            { id: 'ac_salon', label: 'מזגן סלון', temperature: null, text: 'auto' },
+          ],
+        }),
+      }),
+    );
+    renderWithProviders(<ShabbatPage />);
+
+    await screen.findByText('18:52');
+    expect(screen.getByText('auto')).toBeInTheDocument();
   });
 
   it('is read-only, with saving disabled', async () => {

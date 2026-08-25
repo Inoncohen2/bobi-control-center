@@ -101,6 +101,36 @@ class ConfigStatus(CanonicalModel):
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
+class BridgeHealth(CanonicalModel):
+    """Bobi's overall health, as one resolved answer.
+
+    The bridge does not always send a field called `ok`; in the real install it
+    reports `healthy` instead, which used to land in `details` as the string
+    `"True"` while `ok` stayed null. So health is resolved here, from
+    authoritative information only:
+
+    * whatever the bridge states about itself wins — `ok`, `healthy`, or a
+      status word;
+    * failing that, it is derived from the component states, where **only an
+      explicit failure counts**. A component whose state is unknown leaves
+      health unknown; it never makes it `false`.
+
+    `unknown` is a real answer and must be rendered as such. It is not a
+    failure, and the UI must never colour it like one.
+    """
+
+    #: `healthy` · `degraded` · `unhealthy` · `unknown`.
+    status: str = "unknown"
+    #: `None` when genuinely unknown — never coerced to a boolean.
+    ok: bool | None = None
+    #: Why, in a sentence a person can read.
+    reason: str | None = None
+
+
+#: The health states, in the order of a worsening system.
+HEALTH_STATES = ("healthy", "degraded", "unhealthy", "unknown")
+
+
 class BridgeStatus(CanonicalModel):
     """Normalized `script.bobi_cc_status`.
 
@@ -108,6 +138,8 @@ class BridgeStatus(CanonicalModel):
     are first-class fields rather than being flattened into `details`.
     """
 
+    #: The resolved overall answer. `ok` below mirrors `health.ok`.
+    health: BridgeHealth = Field(default_factory=BridgeHealth)
     ok: bool | None = None
     version: str | None = None
     uptime: str | None = None
@@ -336,11 +368,19 @@ class ProfileDevice(CanonicalModel):
 
 
 class ShabbatAcTemperature(CanonicalModel):
-    """A temperature tied to the air conditioner it belongs to."""
+    """A temperature tied to the air conditioner it belongs to.
+
+    The bridge keeps these inside the profiles rather than at the top level, so
+    they are collected from wherever they appear and de-duplicated by device.
+    """
 
     id: str
     label: str
-    temperature: str
+    #: The numeric value, for the editing controls Phase 3 will add. `None`
+    #: when the bridge sent something that is not a number — never guessed.
+    temperature: float | None = None
+    #: Exactly what the bridge sent, so a non-numeric setting is still shown.
+    text: str | None = None
 
 
 class ShabbatProfile(CanonicalModel):

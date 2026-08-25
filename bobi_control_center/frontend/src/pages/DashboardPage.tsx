@@ -6,15 +6,63 @@ import { Card, SectionTitle } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { EmptyState, ErrorState, LoadingState } from '@/components/state/QueryBoundary';
 import { useConnection, useDiagnostics, useStatus } from '@/hooks/queries';
-import type { AiStatus, BridgeIssue, FeatureFlag, StatusComponent, UsersSummary } from '@/types/api';
+import type {
+  AiStatus,
+  BridgeHealth,
+  BridgeIssue,
+  FeatureFlag,
+  StatusComponent,
+  UsersSummary,
+} from '@/types/api';
 import { countLabel } from '@/utils/format';
 import { cn } from '@/utils/cn';
 
-/** `ok` is resolved by the backend, so tone follows it directly. */
+/**
+ * `ok` is resolved by the backend, so tone follows it directly.
+ *
+ * `null` means the bridge did not say — that is an unknown, not a failure, and
+ * must never be coloured like one.
+ */
 function componentTone(component: StatusComponent): BadgeTone {
   if (component.ok === true) return 'ok';
   if (component.ok === false) return 'warning';
   return 'muted';
+}
+
+/** Tone for the resolved overall health. `unknown` stays muted. */
+const HEALTH_TONE: Record<string, BadgeTone> = {
+  healthy: 'ok',
+  degraded: 'warning',
+  unhealthy: 'error',
+  unknown: 'muted',
+};
+
+const HEALTH_LABELS: Record<string, string> = {
+  healthy: 'בובי תקין',
+  degraded: 'בובי פעיל חלקית',
+  unhealthy: 'בובי לא תקין',
+  unknown: 'מצב בובי לא ידוע',
+};
+
+/**
+ * The one-line answer to "is Bobi alright?".
+ *
+ * Deliberately says "לא ידוע" rather than staying silent when the bridge did
+ * not report: an unanswered question is information too, and it reads very
+ * differently from a fault.
+ */
+function HealthBanner({ health }: { health: BridgeHealth }) {
+  const tone = HEALTH_TONE[health.status] ?? 'muted';
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-3">
+      <Badge tone={tone} dot>
+        {HEALTH_LABELS[health.status] ?? 'מצב בובי לא ידוע'}
+      </Badge>
+      {health.reason ? (
+        <p className="text-sm text-slate-500 dark:text-slate-400">{health.reason}</p>
+      ) : null}
+    </div>
+  );
 }
 
 function HealthCard({ component }: { component: StatusComponent }) {
@@ -242,6 +290,7 @@ export function DashboardPage() {
             <h2 id="health-heading" className="sr-only">
               מצב רכיבי המערכת
             </h2>
+            <HealthBanner health={status.data.health} />
             {status.data.components.length === 0 ? (
               <EmptyState title="אין מידע על רכיבי המערכת" />
             ) : (

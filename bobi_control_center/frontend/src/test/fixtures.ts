@@ -21,7 +21,7 @@ export function makeConnection(overrides: Partial<ConnectionInfo> = {}): Connect
     connected: true,
     writes_enabled: false,
     phase: 2,
-    app_version: '2.0.1',
+    app_version: '2.0.2',
     detail: 'מחובר לגשר של בובי',
     ...overrides,
   };
@@ -29,6 +29,7 @@ export function makeConnection(overrides: Partial<ConnectionInfo> = {}): Connect
 
 export function makeStatus(overrides: Partial<BridgeStatus> = {}): BridgeStatus {
   return {
+    health: { status: 'healthy', ok: true, reason: 'כל הרכיבים הידועים תקינים' },
     ok: true,
     version: '1.2.3',
     uptime: '4 ימים',
@@ -57,7 +58,14 @@ export function makeStatus(overrides: Partial<BridgeStatus> = {}): BridgeStatus 
     // Derived by the backend from the sections above, as the real bridge sends
     // no component list of its own.
     components: [
-      { id: 'bobi', name: 'בובי', label: 'פעיל', state: 'ok', ok: true, detail: null },
+      {
+        id: 'bobi',
+        name: 'בובי',
+        label: 'פעיל',
+        state: 'healthy',
+        ok: true,
+        detail: null,
+      },
       { id: 'whatsapp', name: 'WhatsApp', label: 'תקין', state: 'WORKING', ok: true, detail: null },
       {
         id: 'ai',
@@ -269,7 +277,9 @@ export function makeShabbat(overrides: Partial<BridgeShabbat> = {}): BridgeShabb
         extra: {},
       },
     ],
-    ac_temperatures: [{ id: 'living_room_ac', label: 'מזגן סלון', temperature: '24' }],
+    ac_temperatures: [
+      { id: 'living_room_ac', label: 'מזגן סלון', temperature: 24, text: '24' },
+    ],
     has_draft: false,
     draft_owners: [],
     writes_enabled: false,
