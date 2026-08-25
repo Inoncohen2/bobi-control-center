@@ -1,101 +1,78 @@
 import { useMemo, useState } from 'react';
-import { AlertTriangle, Settings2, Sparkles } from 'lucide-react';
+import { Cpu, Sparkles } from 'lucide-react';
 
-import { Badge, healthTone } from '@/components/ui/Badge';
-import { Card } from '@/components/ui/Card';
-import { IconButton } from '@/components/ui/Button';
-import { AdvancedDetails, AdvancedDisclosure } from '@/components/ui/Advanced';
+import { Badge } from '@/components/ui/Badge';
+import { Card, SectionTitle } from '@/components/ui/Card';
+import { AdvancedDisclosure, TechnicalDetails } from '@/components/ui/Advanced';
 import { Modal } from '@/components/ui/Modal';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { Toggle } from '@/components/ui/Toggle';
-import { EmptyState, ErrorState, QueryBoundary } from '@/components/state/QueryBoundary';
-import { useCapabilities, useToggleCapability } from '@/hooks/queries';
-import type { Capability } from '@/types/api';
-import { timeAgo } from '@/utils/format';
-import { iconFor } from '@/utils/icons';
+import { NextPhaseBadge, ReadOnlyNotice, ReadOnlyToggle } from '@/components/ui/ReadOnly';
+import { EmptyState, QueryBoundary } from '@/components/state/QueryBoundary';
+import { useCapabilities } from '@/hooks/queries';
+import type { BridgeCapability, CapabilityToggle } from '@/types/api';
+import { RISK_LABELS, RISK_TONE } from '@/utils/format';
 
-function SettingRow({ label, value, help }: { label: string; value: string; help?: string | null }) {
-  return (
-    <div className="border-b border-slate-100 py-2.5 last:border-0 dark:border-slate-700/60">
-      <div className="flex items-baseline justify-between gap-4">
-        <dt className="text-sm text-slate-500 dark:text-slate-400">{label}</dt>
-        <dd className="text-sm font-medium text-slate-900 dark:text-slate-100">{value}</dd>
-      </div>
-      {help ? <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{help}</p> : null}
-    </div>
-  );
-}
+/** Fallback grouping when the registry entry carries no `group`. */
+const UNGROUPED = 'יכולות נוספות';
 
-function formatSettingValue(value: unknown): string {
-  if (typeof value === 'boolean') return value ? 'כן' : 'לא';
-  if (value === null || value === undefined) return '—';
-  return String(value);
+const TECHNICAL_FIELDS: Array<[string, string]> = [
+  ['handler', 'Handler'],
+  ['id', 'מזהה'],
+  ['local', 'מעובד מקומית'],
+  ['local_after_parse', 'מקומי אחרי פירוק'],
+  ['risk', 'רמת סיכון'],
+];
+
+function capabilityKey(capability: BridgeCapability, index: number): string {
+  return capability.id ?? capability.handler ?? capability.label ?? `capability-${index}`;
 }
 
 function CapabilityDetail({
   capability,
   onClose,
-  onToggle,
-  pending,
 }: {
-  capability: Capability;
+  capability: BridgeCapability;
   onClose: () => void;
-  onToggle: (enabled: boolean) => void;
-  pending: boolean;
 }) {
-  const Icon = iconFor(capability.icon);
+  const risk = (capability.risk ?? '').toLowerCase();
 
   return (
-    <Modal open onClose={onClose} title={capability.name} description={capability.description}>
-      <div className="flex items-center justify-between rounded-xl bg-slate-50 p-3 dark:bg-slate-900/40">
-        <div className="flex items-center gap-3">
-          <Icon aria-hidden="true" size={20} className="text-bobi-600 dark:text-bobi-400" />
-          <div>
-            <p className="text-sm font-medium text-slate-900 dark:text-slate-100">
-              פעיל: {capability.enabled ? 'כן' : 'לא'}
-            </p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              שימוש אחרון: {timeAgo(capability.last_used)}
-            </p>
-          </div>
-        </div>
-        <Toggle
-          checked={capability.enabled}
-          onChange={onToggle}
-          disabled={pending}
-          label={`הפעלה או כיבוי של ${capability.name}`}
-        />
+    <Modal
+      open
+      onClose={onClose}
+      title={capability.label ?? capability.id ?? 'יכולת'}
+      description={capability.example ? `לדוגמה: ${capability.example}` : undefined}
+    >
+      <div className="flex flex-wrap gap-2">
+        {capability.risk ? (
+          <Badge tone={RISK_TONE[risk] ?? 'muted'} dot>
+            {RISK_LABELS[risk] ?? capability.risk}
+          </Badge>
+        ) : null}
+        {capability.local === true ? <Badge tone="info">מעובד מקומית</Badge> : null}
+        {capability.local_after_parse === true ? (
+          <Badge tone="info">מקומי אחרי פירוק</Badge>
+        ) : null}
+        {capability.local === false ? <Badge tone="muted">נעזר בשירות חיצוני</Badge> : null}
       </div>
 
-      {capability.warning ? (
-        <p className="mt-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-          <AlertTriangle aria-hidden="true" size={16} className="mt-0.5 shrink-0" />
-          {capability.warning}
-        </p>
+      {capability.example ? (
+        <div className="mt-4 rounded-xl bg-slate-50 p-3 dark:bg-slate-900/40">
+          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
+            דוגמה למשפט שבובי יבין
+          </p>
+          <p className="mt-1 text-sm text-slate-800 dark:text-slate-200">
+            „{capability.example}”
+          </p>
+        </div>
       ) : null}
 
-      {capability.settings.length > 0 ? (
-        <div className="mt-4">
-          <h3 className="mb-1 text-sm font-semibold text-slate-900 dark:text-slate-100">הגדרות</h3>
-          <dl>
-            {capability.settings.map((setting) => (
-              <SettingRow
-                key={setting.key}
-                label={setting.label}
-                value={formatSettingValue(setting.value)}
-                help={setting.help}
-              />
-            ))}
-          </dl>
-        </div>
-      ) : (
-        <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
-          ליכולת הזו אין הגדרות שניתן לשנות.
-        </p>
-      )}
-
-      <AdvancedDisclosure>
-        <AdvancedDetails advanced={capability.advanced} />
+      <AdvancedDisclosure title="פרטים טכניים">
+        <TechnicalDetails
+          source={capability as unknown as Record<string, unknown>}
+          known={TECHNICAL_FIELDS}
+          hide={['label', 'example', 'group']}
+        />
       </AdvancedDisclosure>
     </Modal>
   );
@@ -104,118 +81,110 @@ function CapabilityDetail({
 function CapabilityCard({
   capability,
   onOpen,
-  onToggle,
-  pending,
 }: {
-  capability: Capability;
+  capability: BridgeCapability;
   onOpen: () => void;
-  onToggle: (enabled: boolean) => void;
-  pending: boolean;
 }) {
-  const Icon = iconFor(capability.icon);
+  const risk = (capability.risk ?? '').toLowerCase();
 
   return (
     <Card interactive as="li" className="flex flex-col">
-      <div className="flex items-start gap-3">
-        <span
-          aria-hidden="true"
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-bobi-50 text-bobi-600 dark:bg-bobi-500/15 dark:text-bobi-300"
-        >
-          <Icon size={20} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <h3 className="font-semibold text-slate-900 dark:text-slate-100">{capability.name}</h3>
-          <p className="mt-0.5 text-sm leading-relaxed text-slate-500 dark:text-slate-400">
-            {capability.description}
+      <button type="button" onClick={onOpen} className="flex-1 text-right">
+        <h3 className="font-semibold text-slate-900 dark:text-slate-100">
+          {capability.label ?? capability.id ?? 'יכולת'}
+        </h3>
+        {capability.example ? (
+          <p className="mt-1 text-sm leading-relaxed text-slate-500 dark:text-slate-400">
+            „{capability.example}”
           </p>
-        </div>
-        <Toggle
-          checked={capability.enabled}
-          onChange={onToggle}
-          disabled={pending}
-          size="sm"
-          label={`הפעלה או כיבוי של ${capability.name}`}
-        />
-      </div>
+        ) : null}
+      </button>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Badge tone={capability.enabled ? healthTone[capability.state] : 'muted'} dot>
-          {capability.enabled ? capability.state_label : 'כבוי'}
-        </Badge>
-        {capability.warning ? (
-          <Badge tone="warning">
-            <AlertTriangle aria-hidden="true" size={12} />
-            אזהרה
+        {capability.risk ? (
+          <Badge tone={RISK_TONE[risk] ?? 'muted'} dot>
+            {RISK_LABELS[risk] ?? capability.risk}
           </Badge>
         ) : null}
-      </div>
-
-      {capability.warning ? (
-        <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">{capability.warning}</p>
-      ) : null}
-
-      <div className="mt-auto flex items-center justify-between pt-3">
-        <span className="text-xs text-slate-400 dark:text-slate-500">
-          {timeAgo(capability.last_used)}
-        </span>
-        <IconButton
-          label={`הגדרות של ${capability.name}`}
-          icon={<Settings2 size={16} />}
-          onClick={onOpen}
-        />
+        {capability.local === false ? <Badge tone="muted">שירות חיצוני</Badge> : null}
       </div>
     </Card>
   );
 }
 
+function ToggleRow({ toggle }: { toggle: CapabilityToggle }) {
+  const label = toggle.label ?? toggle.name ?? toggle.id ?? 'מתג';
+  const on = toggle.enabled ?? (toggle.state ?? '').toLowerCase() === 'on';
+
+  return (
+    <li className="flex items-center justify-between gap-3 px-4 py-3">
+      <div className="min-w-0">
+        <p className="font-medium text-slate-900 dark:text-slate-100">{label}</p>
+        <p className="text-xs text-slate-500 dark:text-slate-400">
+          {on ? 'מופעל' : 'כבוי'}
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <NextPhaseBadge />
+        <ReadOnlyToggle on={on} label={label} />
+      </div>
+    </li>
+  );
+}
+
 export function CapabilitiesPage() {
   const query = useCapabilities();
-  const toggle = useToggleCapability();
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [openKey, setOpenKey] = useState<string | null>(null);
 
+  // Memoised so the `?? []` fallback does not produce a fresh array on every
+  // render and invalidate the grouping below.
+  const capabilities = useMemo(() => query.data?.capabilities ?? [], [query.data]);
+
+  /** Grouped dynamically: whatever groups the registry names are the groups. */
   const grouped = useMemo(() => {
-    const groups = new Map<string, Capability[]>();
-    for (const capability of query.data ?? []) {
-      const existing = groups.get(capability.group);
+    const groups = new Map<string, BridgeCapability[]>();
+    capabilities.forEach((capability) => {
+      const group = capability.group ?? UNGROUPED;
+      const existing = groups.get(group);
       if (existing) existing.push(capability);
-      else groups.set(capability.group, [capability]);
-    }
+      else groups.set(group, [capability]);
+    });
     return [...groups.entries()];
-  }, [query.data]);
+  }, [capabilities]);
 
-  const openCapability = (query.data ?? []).find((item) => item.id === openId) ?? null;
+  const openCapability =
+    capabilities.find((capability, index) => capabilityKey(capability, index) === openKey) ?? null;
 
   return (
     <>
       <PageHeader
         title="יכולות"
-        description="מה בובי יודע לעשות. אפשר לכבות יכולת שלא צריך."
+        description="מה בובי יודע לעשות, לפי הרישום הקנוני שלו."
       />
 
-      {toggle.isError ? (
-        <div className="mb-4">
-          <ErrorState error={toggle.error} fallbackMessage="לא הצלחתי לשנות את היכולת" />
-        </div>
-      ) : null}
+      <ReadOnlyNotice className="mb-4">
+        רשימת היכולות והמתגים מוצגים לקריאה בלבד. שינוי מצב יהיה זמין בשלב הבא.
+      </ReadOnlyNotice>
 
       <QueryBoundary
         isLoading={query.isLoading}
         error={query.error}
         data={query.data}
-        errorMessage="לא הצלחתי לטעון את היכולות"
+        errorMessage="לא הצלחתי לקבל את רשימת היכולות מ-Home Assistant"
+        loadingLabel="טוען יכולות…"
         onRetry={() => void query.refetch()}
-        isEmpty={(data) => data.length === 0}
+        isEmpty={(data) => data.capabilities.length === 0 && data.toggles.length === 0}
         empty={
           <EmptyState
-            title="עדיין אין יכולות מוגדרות"
-            description="כשבובי יחובר, היכולות שלו יופיעו כאן."
+            title="אין כרגע יכולות רשומות"
+            description="כשבובי ירשום יכולות, הן יופיעו כאן."
             icon={<Sparkles size={32} />}
           />
         }
       >
-        {() => (
-          <div className="space-y-7">
-            {grouped.map(([group, capabilities]) => (
+        {(data) => (
+          <div className="space-y-8">
+            {grouped.map(([group, groupCapabilities]) => (
               <section key={group} aria-labelledby={`group-${group}`}>
                 <h2
                   id={`group-${group}`}
@@ -224,29 +193,46 @@ export function CapabilitiesPage() {
                   {group}
                 </h2>
                 <ul className="grid gap-3 sm:grid-cols-2">
-                  {capabilities.map((capability) => (
-                    <CapabilityCard
-                      key={capability.id}
-                      capability={capability}
-                      pending={toggle.isPending && toggle.variables?.id === capability.id}
-                      onOpen={() => setOpenId(capability.id)}
-                      onToggle={(enabled) => toggle.mutate({ id: capability.id, enabled })}
-                    />
-                  ))}
+                  {groupCapabilities.map((capability) => {
+                    const index = capabilities.indexOf(capability);
+                    const key = capabilityKey(capability, index);
+                    return (
+                      <CapabilityCard
+                        key={key}
+                        capability={capability}
+                        onOpen={() => setOpenKey(key)}
+                      />
+                    );
+                  })}
                 </ul>
               </section>
             ))}
+
+            {data.toggles.length > 0 ? (
+              <section aria-labelledby="toggles-heading">
+                <SectionTitle>
+                  <span id="toggles-heading">מתגים ראשיים</span>
+                </SectionTitle>
+                <Card className="p-0">
+                  <ul className="divide-y divide-slate-100 dark:divide-slate-700/60">
+                    {data.toggles.map((toggle, index) => (
+                      <ToggleRow key={toggle.id ?? index} toggle={toggle} />
+                    ))}
+                  </ul>
+                </Card>
+              </section>
+            ) : null}
+
+            <p className="flex items-center justify-center gap-2 text-xs text-slate-400 dark:text-slate-500">
+              <Cpu aria-hidden="true" size={13} />
+              {capabilities.length} יכולות רשומות
+            </p>
           </div>
         )}
       </QueryBoundary>
 
       {openCapability ? (
-        <CapabilityDetail
-          capability={openCapability}
-          onClose={() => setOpenId(null)}
-          pending={toggle.isPending}
-          onToggle={(enabled) => toggle.mutate({ id: openCapability.id, enabled })}
-        />
+        <CapabilityDetail capability={openCapability} onClose={() => setOpenKey(null)} />
       ) : null}
     </>
   );

@@ -100,7 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 def _register_security_headers(app: FastAPI) -> None:
     @app.middleware("http")
-    async def security_headers(request: Request, call_next):  # noqa: ANN001, ANN202
+    async def security_headers(request: Request, call_next):
         response = await call_next(request)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "no-referrer")

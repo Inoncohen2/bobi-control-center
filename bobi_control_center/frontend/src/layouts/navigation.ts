@@ -1,9 +1,8 @@
 import {
   Activity,
   AlertTriangle,
-  Bell,
-  Bot,
-  CalendarCheck,
+  Boxes,
+  CheckSquare,
   Flame,
   Home,
   Settings,
@@ -21,17 +20,15 @@ export interface NavItem {
   primary?: boolean;
 }
 
+/** Every destination maps to a `bobi_cc_*` bridge service. */
 export const NAV_ITEMS: NavItem[] = [
   { to: '/', label: 'בית', icon: Home, primary: true },
+  { to: '/devices', label: 'מכשירים', icon: Boxes, primary: true },
   { to: '/capabilities', label: 'יכולות', icon: Sparkles },
-  { to: '/devices', label: 'מכשירים', icon: Bot, primary: true },
-  { to: '/automations', label: 'אוטומציות', icon: Timer, primary: true },
+  { to: '/rules', label: 'כללים חכמים', icon: Timer, primary: true },
   { to: '/shabbat', label: 'שעון שבת', icon: Flame, primary: true },
-  { to: '/notifications', label: 'הודעות חכמות', icon: Bell },
-  { to: '/tasks', label: 'משימות ויומן', icon: CalendarCheck },
+  { to: '/tasks', label: 'משימות', icon: CheckSquare },
   { to: '/users', label: 'משתמשים', icon: Users },
-  // "בדיקות" leads to the manual Test Center; the automated regression suites
-  // live at /tests and are linked from there.
   { to: '/test-center', label: 'בדיקות', icon: Activity },
   { to: '/diagnostics', label: 'תקלות', icon: AlertTriangle },
   { to: '/settings', label: 'הגדרות', icon: Settings },

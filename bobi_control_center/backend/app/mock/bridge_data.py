@@ -14,7 +14,7 @@ from typing import Any
 from app.timeutil import days_ahead, hhmm, hours_ago, minutes_ago, now
 
 
-def _iso(value) -> str:  # noqa: ANN001 - datetime
+def _iso(value) -> str:
     return value.isoformat()
 
 

@@ -1,10 +1,9 @@
 import type { ReactNode } from 'react';
 import { cn } from '@/utils/cn';
-import type { HealthState, Severity } from '@/types/api';
 
-type Tone = 'neutral' | 'ok' | 'warning' | 'error' | 'info' | 'muted';
+export type BadgeTone = 'neutral' | 'ok' | 'warning' | 'error' | 'info' | 'muted';
 
-const TONES: Record<Tone, string> = {
+const TONES: Record<BadgeTone, string> = {
   neutral: 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200',
   ok: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
   warning: 'bg-amber-50 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300',
@@ -13,9 +12,7 @@ const TONES: Record<Tone, string> = {
   muted: 'bg-slate-100 text-slate-500 dark:bg-slate-700/60 dark:text-slate-400',
 };
 
-/**
- * A dot accompanies the colour so state is never conveyed by colour alone.
- */
+/** A dot accompanies the colour so state is never conveyed by colour alone. */
 export function Badge({
   children,
   tone = 'neutral',
@@ -23,7 +20,7 @@ export function Badge({
   className,
 }: {
   children: ReactNode;
-  tone?: Tone;
+  tone?: BadgeTone;
   dot?: boolean;
   className?: string;
 }) {
@@ -40,16 +37,3 @@ export function Badge({
     </span>
   );
 }
-
-export const severityTone: Record<Severity, Tone> = {
-  ok: 'ok',
-  warning: 'warning',
-  error: 'error',
-};
-
-export const healthTone: Record<HealthState, Tone> = {
-  online: 'ok',
-  degraded: 'warning',
-  offline: 'error',
-  unknown: 'muted',
-};

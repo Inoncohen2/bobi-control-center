@@ -1,8 +1,8 @@
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["backend"]
-exclude = [".venv", "node_modules", "dist", "frontend"]
+src = ["bobi_control_center/backend"]
+exclude = [".venv", "node_modules", "dist", "bobi_control_center/frontend"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF"]
@@ -20,5 +20,5 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"backend/app/mock/*" = ["E501"]
-"backend/tests/*" = ["E501"]
+"bobi_control_center/backend/app/mock/*" = ["E501"]
+"bobi_control_center/backend/tests/*" = ["E501"]

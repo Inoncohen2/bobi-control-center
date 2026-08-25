@@ -3,73 +3,26 @@ import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { TestCenterPage } from './TestCenterPage';
+import { makeProbe } from '@/test/fixtures';
 import { renderWithProviders } from '@/test/utils';
-import type { ProbeResult } from '@/types/api';
+import type { BridgeProbe } from '@/types/api';
 
-const probeResult: ProbeResult = {
-  original_text: 'כבה מזגן הורים ב-1:30 בלילה',
-  normalized_text: 'כבה מזגן הורים ב 1:30 בלילה',
-  family: 'schedule',
-  domain: 'climate',
-  action: 'turn_off',
-  target: {
-    id: 'parents_ac',
-    name: 'מזגן הורים',
-    room: 'חדר הורים',
-    matched_alias: 'מזגן הורים',
-    confidence: 0.87,
-  },
-  schedule: {
-    kind: 'one_time',
-    time: '01:30',
-    date: '2026-08-26',
-    days: [],
-    description: 'מחר בשעה 01:30',
-  },
-  skill: 'local_schedule',
-  safe: true,
-  would_execute: false,
-  warnings: ['הפעולה מתוזמנת לשעת לילה מאוחרת.'],
-  steps: [
-    { id: 'text', label: 'טקסט', status: 'ok', value: 'כבה מזגן הורים ב-1:30 בלילה', detail: null },
-    { id: 'normalize', label: 'נרמול', status: 'ok', value: 'כבה מזגן הורים ב 1:30 בלילה', detail: null },
-    { id: 'understand', label: 'הבנה', status: 'ok', value: 'תזמון', detail: 'לכבות' },
-    { id: 'target', label: 'יעד', status: 'ok', value: 'מזגן הורים', detail: null },
-    { id: 'time', label: 'זמן', status: 'ok', value: '01:30', detail: 'מחר בשעה 01:30' },
-    { id: 'skill', label: 'Skill', status: 'ok', value: 'local_schedule', detail: null },
-    { id: 'safety', label: 'בדיקת בטיחות', status: 'ok', value: 'בטוח', detail: 'לא בוצעה שום פעולה' },
-  ],
-  confidence: 0.93,
-  duration_ms: 4,
-};
-
-function stubFetch(result: ProbeResult = probeResult) {
-  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = input.toString();
-    if (url.includes('/probe/history')) {
-      return new Response(JSON.stringify({ entries: [] }), {
+function stubProbe(result: BridgeProbe = makeProbe()) {
+  // Parameters are declared so `mock.calls` stays typed for the assertions.
+  const fetchMock = vi.fn(
+    async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify(result), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    if (init?.method === 'POST') {
-      return new Response(JSON.stringify(result), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    return new Response(JSON.stringify({ entries: [] }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  });
+      }),
+  );
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 }
 
 describe('TestCenterPage', () => {
-  it('renders the input and the safety promise up front', () => {
-    stubFetch();
+  it('states the safety promise before anything is submitted', () => {
+    stubProbe();
     renderWithProviders(<TestCenterPage />);
 
     expect(screen.getByLabelText('כתוב משהו שהיית שולח לבובי')).toBeInTheDocument();
@@ -78,14 +31,25 @@ describe('TestCenterPage', () => {
   });
 
   it('will not submit an empty request', () => {
-    stubFetch();
+    stubProbe();
     renderWithProviders(<TestCenterPage />);
     expect(screen.getByRole('button', { name: /בדוק בלי לבצע/ })).toBeDisabled();
   });
 
-  it('renders the full pipeline and states plainly that nothing ran', async () => {
+  it('displays the required probe-only banner prominently', async () => {
     const user = userEvent.setup();
-    stubFetch();
+    stubProbe();
+    renderWithProviders(<TestCenterPage />);
+
+    await user.type(screen.getByLabelText('כתוב משהו שהיית שולח לבובי'), 'כבה מזגן הורים');
+    await user.click(screen.getByRole('button', { name: /בדוק בלי לבצע/ }));
+
+    expect(await screen.findByText('בדיקה בלבד — לא בוצעה שום פעולה')).toBeInTheDocument();
+  });
+
+  it('builds the pipeline from the bridge fields', async () => {
+    const user = userEvent.setup();
+    stubProbe();
     renderWithProviders(<TestCenterPage />);
 
     await user.type(
@@ -94,75 +58,130 @@ describe('TestCenterPage', () => {
     );
     await user.click(screen.getByRole('button', { name: /בדוק בלי לבצע/ }));
 
-    // The safety banner is the most important thing on the page.
-    expect(await screen.findByText('✅ בדיקה בלבד')).toBeInTheDocument();
-    expect(
-      screen.getByText('לא בוצעה שום פעולה. אף מכשיר לא הופעל ואף תזמון לא נוצר.'),
-    ).toBeInTheDocument();
+    await screen.findByText('בדיקה בלבד — לא בוצעה שום פעולה');
 
-    // Every pipeline stage is rendered, in order.
-    for (const label of ['טקסט', 'נרמול', 'הבנה', 'יעד', 'זמן', 'Skill', 'בדיקת בטיחות']) {
-      expect(screen.getByText(label)).toBeInTheDocument();
-    }
-
-    // The resolved detail the user cares about. Scoped to the pipeline, since
-    // the collapsed raw-JSON block repeats these values.
     const pipeline = screen.getByText('בדיקת בטיחות').closest('ol') as HTMLElement;
+    for (const label of ['טקסט', 'הבנה', 'יעד', 'תזמון', 'Skill', 'בדיקת בטיחות']) {
+      expect(within(pipeline).getByText(label)).toBeInTheDocument();
+    }
     expect(within(pipeline).getByText('מזגן הורים')).toBeInTheDocument();
-    expect(within(pipeline).getByText('01:30')).toBeInTheDocument();
     expect(within(pipeline).getByText('local_schedule')).toBeInTheDocument();
-
-    // Warnings are surfaced, not buried.
-    expect(screen.getByText('הפעולה מתוזמנת לשעת לילה מאוחרת.')).toBeInTheDocument();
+    expect(within(pipeline).getByText('לא בוצעה שום פעולה')).toBeInTheDocument();
   });
 
-  it('sends the typed text to the probe endpoint', async () => {
+  it('shows what Bobi understood', async () => {
     const user = userEvent.setup();
-    const fetchMock = stubFetch();
+    stubProbe();
+    renderWithProviders(<TestCenterPage />);
+
+    await user.type(screen.getByLabelText('כתוב משהו שהיית שולח לבובי'), 'כבה מזגן הורים');
+    await user.click(screen.getByRole('button', { name: /בדוק בלי לבצע/ }));
+
+    const heading = await screen.findByText('מה בובי הבין');
+    // Scoped to the table: the pipeline shows the same values above it.
+    const table = heading.closest('div') as HTMLElement;
+    expect(within(table).getByText('כוונה')).toBeInTheDocument();
+    expect(within(table).getByText('device_control')).toBeInTheDocument();
+  });
+
+  it('reports a request the bridge did not understand', async () => {
+    const user = userEvent.setup();
+    stubProbe(
+      makeProbe({
+        handled: false,
+        status: 'not_understood',
+        terminal: false,
+        skill: null,
+        understanding: null,
+        schedule_valid: null,
+        schedule_reason: 'לא זוהתה כוונה בטקסט',
+        schedule_kind: null,
+      }),
+    );
+    renderWithProviders(<TestCenterPage />);
+
+    await user.type(screen.getByLabelText('כתוב משהו שהיית שולח לבובי'), 'קשקוש');
+    await user.click(screen.getByRole('button', { name: /בדוק בלי לבצע/ }));
+
+    // Rendered both as a badge and as a pipeline stage value.
+    expect((await screen.findAllByText('לא הובן')).length).toBeGreaterThan(0);
+    // Even an unhandled request still says nothing was executed.
+    expect(screen.getByText('בדיקה בלבד — לא בוצעה שום פעולה')).toBeInTheDocument();
+  });
+
+  it('surfaces an invalid schedule as a failed pipeline stage', async () => {
+    const user = userEvent.setup();
+    stubProbe(
+      makeProbe({
+        schedule_valid: false,
+        schedule_reason: 'שעה לא תקינה',
+        schedule_kind: null,
+      }),
+    );
+    renderWithProviders(<TestCenterPage />);
+
+    await user.type(screen.getByLabelText('כתוב משהו שהיית שולח לבובי'), 'כבה ב-99:99');
+    await user.click(screen.getByRole('button', { name: /בדוק בלי לבצע/ }));
+
+    expect(await screen.findByText('תזמון לא תקין')).toBeInTheDocument();
+    expect(screen.getAllByText('שעה לא תקינה').length).toBeGreaterThan(0);
+  });
+
+  it('posts the typed text to the probe endpoint', async () => {
+    const user = userEvent.setup();
+    const fetchMock = stubProbe();
     renderWithProviders(<TestCenterPage />);
 
     await user.type(screen.getByLabelText('כתוב משהו שהיית שולח לבובי'), 'תדליק את אור המטבח');
     await user.click(screen.getByRole('button', { name: /בדוק בלי לבצע/ }));
 
-    await screen.findByText('✅ בדיקה בלבד');
-    const posted = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST');
-    expect(posted?.[0]?.toString()).toContain('/api/bobi/probe');
-    expect(posted?.[1]?.body).toBe(JSON.stringify({ text: 'תדליק את אור המטבח' }));
+    await screen.findByText('בדיקה בלבד — לא בוצעה שום פעולה');
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(String(url)).toContain('/api/bobi/probe');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({ text: 'תדליק את אור המטבח' }));
   });
 
-  it('marks a sensitive request as needing approval', async () => {
+  it('offers no execute control of any kind', async () => {
     const user = userEvent.setup();
-    stubFetch({ ...probeResult, safe: false });
+    stubProbe();
     renderWithProviders(<TestCenterPage />);
 
-    await user.type(screen.getByLabelText('כתוב משהו שהיית שולח לבובי'), 'תדליק את הדוד');
+    await user.type(screen.getByLabelText('כתוב משהו שהיית שולח לבובי'), 'כבה מזגן הורים');
     await user.click(screen.getByRole('button', { name: /בדוק בלי לבצע/ }));
+    await screen.findByText('בדיקה בלבד — לא בוצעה שום פעולה');
 
-    expect(await screen.findByText('דורש אישור')).toBeInTheDocument();
-    // Even an unsafe request never claims it would execute.
-    expect(screen.getByText('✅ בדיקה בלבד')).toBeInTheDocument();
+    // The probe button is the only submit control, and it says so.
+    const submitButtons = screen
+      .getAllByRole('button')
+      .map((button) => button.textContent ?? '')
+      .filter((name) => /בצע|הפעל|שלח/.test(name));
+    expect(submitButtons).toEqual(['בדוק בלי לבצע']);
   });
 
-  it('offers the raw result as copyable JSON', async () => {
+  it('reports a bridge failure without a traceback', async () => {
     const user = userEvent.setup();
-    stubFetch();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              code: 'bridge_service_missing',
+              message: 'שירות הגשר script.bobi_cc_probe לא נמצא ב-Home Assistant',
+              details: {},
+            }),
+            { status: 502, headers: { 'Content-Type': 'application/json' } },
+          ),
+      ),
+    );
     renderWithProviders(<TestCenterPage />);
 
     await user.type(screen.getByLabelText('כתוב משהו שהיית שולח לבובי'), 'בדיקה');
     await user.click(screen.getByRole('button', { name: /בדוק בלי לבצע/ }));
 
-    expect(await screen.findByText('תוצאה מלאה (JSON)')).toBeInTheDocument();
-  });
-
-  it('runs an example when one is clicked', async () => {
-    const user = userEvent.setup();
-    const fetchMock = stubFetch();
-    renderWithProviders(<TestCenterPage />);
-
-    await user.click(screen.getByRole('button', { name: 'מה הטמפרטורה בסלון' }));
-
-    await screen.findByText('✅ בדיקה בלבד');
-    const posted = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST');
-    expect(posted?.[1]?.body).toContain('מה הטמפרטורה בסלון');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('לא הצלחתי לקבל נתונים מ-Home Assistant');
+    expect(alert.textContent).not.toMatch(/Traceback|KeyError/);
   });
 });

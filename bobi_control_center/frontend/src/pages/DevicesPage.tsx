@@ -1,26 +1,27 @@
 import { useMemo, useState } from 'react';
-import { Search, SlidersHorizontal, X } from 'lucide-react';
+import { Boxes, Search, SlidersHorizontal, X } from 'lucide-react';
 
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Chip } from '@/components/ui/Field';
-import { AdvancedDetails, AdvancedDisclosure } from '@/components/ui/Advanced';
+import { AdvancedDisclosure, TechnicalDetails } from '@/components/ui/Advanced';
 import { Modal } from '@/components/ui/Modal';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { ReadOnlyNotice } from '@/components/ui/ReadOnly';
 import { EmptyState, QueryBoundary } from '@/components/state/QueryBoundary';
 import { useDevices } from '@/hooks/queries';
 import {
   EMPTY_FILTERS,
+  areasOf,
   filterDevices,
-  groupByRoom,
+  groupByArea,
   hasActiveFilters,
   type AvailabilityFilter,
   type DeviceFilters,
 } from '@/features/devices/filter';
-import type { Device, DeviceCategory } from '@/types/api';
-import { CATEGORY_LABELS } from '@/utils/format';
-import { iconFor } from '@/utils/icons';
+import { DEVICE_SCOPES, type BridgeDevice, type DeviceScope } from '@/types/api';
+import { SCOPE_LABELS, deviceName, isAvailable, stateLabel, timeAgo } from '@/utils/format';
 
 const AVAILABILITY_OPTIONS: Array<{ value: AvailabilityFilter; label: string }> = [
   { value: 'all', label: 'הכול' },
@@ -28,71 +29,97 @@ const AVAILABILITY_OPTIONS: Array<{ value: AvailabilityFilter; label: string }> 
   { value: 'unavailable', label: 'לא זמינים' },
 ];
 
-function DeviceDetail({ device, onClose }: { device: Device; onClose: () => void }) {
-  const Icon = iconFor(device.icon);
+/** Technical fields, shown only inside the Advanced disclosure. */
+const TECHNICAL_FIELDS: Array<[string, string]> = [
+  ['entity_id', 'מזהה טכני'],
+  ['handler', 'Handler'],
+  ['domain', 'Domain'],
+  ['group', 'קבוצה'],
+  ['semantic_scopes', 'קטגוריות'],
+  ['controllable', 'ניתן לשליטה'],
+  ['logical_controllable', 'שליטה לוגית'],
+  ['last_changed', 'שינוי אחרון'],
+];
+
+function DeviceDetail({ device, onClose }: { device: BridgeDevice; onClose: () => void }) {
+  const available = isAvailable(device.state);
 
   return (
-    <Modal open onClose={onClose} title={device.display_name}>
-      <div className="flex items-center gap-3 rounded-xl bg-slate-50 p-3 dark:bg-slate-900/40">
-        <Icon aria-hidden="true" size={22} className="text-bobi-600 dark:text-bobi-400" />
-        <div>
-          <p className="text-sm font-medium text-slate-900 dark:text-slate-100">
-            {device.state_label}
+    <Modal open onClose={onClose} title={deviceName(device)}>
+      <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-900/40">
+        <Badge tone={available ? 'ok' : 'error'} dot>
+          {stateLabel(device.state)}
+        </Badge>
+        {device.last_changed ? (
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            השתנה {timeAgo(device.last_changed)}
           </p>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            {device.available ? 'המכשיר זמין' : 'המכשיר אינו זמין כרגע'}
-          </p>
-        </div>
+        ) : null}
       </div>
 
       <dl className="mt-4 space-y-3">
         <div>
           <dt className="text-sm text-slate-500 dark:text-slate-400">שם בבובי</dt>
-          <dd className="font-medium text-slate-900 dark:text-slate-100">{device.display_name}</dd>
+          <dd className="font-medium text-slate-900 dark:text-slate-100">{deviceName(device)}</dd>
         </div>
-        <div>
-          <dt className="text-sm text-slate-500 dark:text-slate-400">חדר</dt>
-          <dd className="font-medium text-slate-900 dark:text-slate-100">{device.room}</dd>
-        </div>
-        <div>
-          <dt className="text-sm text-slate-500 dark:text-slate-400">סוג</dt>
-          <dd className="font-medium text-slate-900 dark:text-slate-100">
-            {CATEGORY_LABELS[device.category]}
-          </dd>
-        </div>
-        <div>
-          <dt className="mb-1 text-sm text-slate-500 dark:text-slate-400">
-            כינויים שבובי מבין
-          </dt>
-          <dd className="flex flex-wrap gap-1.5">
-            {device.aliases.map((alias) => (
-              <Badge key={alias} tone="info">
-                {alias}
-              </Badge>
-            ))}
-          </dd>
-        </div>
-        <div>
-          <dt className="mb-1 text-sm text-slate-500 dark:text-slate-400">יכולות</dt>
-          <dd className="flex flex-wrap gap-1.5">
-            {device.capabilities.map((capability) => (
-              <Badge key={capability} tone="neutral">
-                {capability}
-              </Badge>
-            ))}
-          </dd>
-        </div>
+        {device.area ? (
+          <div>
+            <dt className="text-sm text-slate-500 dark:text-slate-400">חדר</dt>
+            <dd className="font-medium text-slate-900 dark:text-slate-100">{device.area}</dd>
+          </div>
+        ) : null}
+
+        {device.aliases.length > 0 ? (
+          <div>
+            <dt className="mb-1 text-sm text-slate-500 dark:text-slate-400">
+              כינויים שבובי מבין
+            </dt>
+            <dd className="flex flex-wrap gap-1.5">
+              {device.aliases.map((alias) => (
+                <Badge key={alias} tone="info">
+                  {alias}
+                </Badge>
+              ))}
+            </dd>
+          </div>
+        ) : null}
+
+        {device.capabilities.length > 0 ? (
+          <div>
+            <dt className="mb-1 text-sm text-slate-500 dark:text-slate-400">יכולות</dt>
+            <dd className="flex flex-wrap gap-1.5">
+              {device.capabilities.map((capability) => (
+                <Badge key={capability} tone="neutral">
+                  {capability}
+                </Badge>
+              ))}
+            </dd>
+          </div>
+        ) : null}
+
+        {device.limits && (device.limits.min !== null || device.limits.max !== null) ? (
+          <div>
+            <dt className="text-sm text-slate-500 dark:text-slate-400">טווח מותר</dt>
+            <dd className="font-medium text-slate-900 dark:text-slate-100">
+              {device.limits.min ?? '—'}–{device.limits.max ?? '—'}
+            </dd>
+          </div>
+        ) : null}
       </dl>
 
-      <AdvancedDisclosure title="מידע טכני">
-        <AdvancedDetails advanced={device.advanced} />
+      <AdvancedDisclosure title="פרטים טכניים">
+        <TechnicalDetails
+          source={device as unknown as Record<string, unknown>}
+          known={TECHNICAL_FIELDS}
+          hide={['name', 'canonical', 'area', 'state', 'aliases', 'capabilities', 'limits']}
+        />
       </AdvancedDisclosure>
     </Modal>
   );
 }
 
-function DeviceCard({ device, onOpen }: { device: Device; onOpen: () => void }) {
-  const Icon = iconFor(device.icon);
+function DeviceCard({ device, onOpen }: { device: BridgeDevice; onOpen: () => void }) {
+  const available = isAvailable(device.state);
 
   return (
     <li>
@@ -101,31 +128,16 @@ function DeviceCard({ device, onOpen }: { device: Device; onOpen: () => void }) 
         onClick={onOpen}
         className="w-full rounded-2xl border border-slate-200/80 bg-white p-4 text-right shadow-card transition-shadow hover:shadow-lift focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bobi-600 dark:border-slate-700/60 dark:bg-slate-800/60"
       >
-        <div className="flex items-start gap-3">
-          <span
-            aria-hidden="true"
-            className={
-              device.available
-                ? 'flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-bobi-50 text-bobi-600 dark:bg-bobi-500/15 dark:text-bobi-300'
-                : 'flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-400 dark:bg-slate-700 dark:text-slate-500'
-            }
-          >
-            <Icon size={20} />
-          </span>
-          <div className="min-w-0 flex-1">
-            {/* Wrap rather than truncate: a cut-off device name is unusable, and
-                two columns on a phone leave little room. */}
-            <p className="line-clamp-2 font-medium leading-snug text-slate-900 dark:text-slate-100">
-              {device.display_name}
-            </p>
-            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-              {CATEGORY_LABELS[device.category]}
-            </p>
-          </div>
-        </div>
+        {/* The user-facing name only — never the entity id. */}
+        <p className="line-clamp-2 font-medium leading-snug text-slate-900 dark:text-slate-100">
+          {deviceName(device)}
+        </p>
+        {device.group ? (
+          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{device.group}</p>
+        ) : null}
         <div className="mt-3">
-          <Badge tone={device.available ? 'ok' : 'error'} dot>
-            {device.state_label}
+          <Badge tone={available ? 'ok' : 'error'} dot>
+            {stateLabel(device.state)}
           </Badge>
         </div>
       </button>
@@ -134,31 +146,40 @@ function DeviceCard({ device, onOpen }: { device: Device; onOpen: () => void }) 
 }
 
 export function DevicesPage() {
-  const query = useDevices();
+  const [scope, setScope] = useState<DeviceScope>('all');
+  const [includeUnavailable, setIncludeUnavailable] = useState(true);
   const [filters, setFilters] = useState<DeviceFilters>(EMPTY_FILTERS);
   const [openId, setOpenId] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const visible = useMemo(
-    () => filterDevices(query.data?.devices ?? [], filters),
-    [query.data, filters],
-  );
-  const grouped = useMemo(
-    () => groupByRoom(visible, query.data?.rooms ?? []),
-    [visible, query.data],
-  );
+  const query = useDevices(scope, includeUnavailable);
+  const devices = useMemo(() => query.data?.devices ?? [], [query.data]);
 
-  const openDevice = (query.data?.devices ?? []).find((device) => device.id === openId) ?? null;
+  const visible = useMemo(() => filterDevices(devices, filters), [devices, filters]);
+  const grouped = useMemo(() => groupByArea(visible), [visible]);
+  const areas = useMemo(() => areasOf(devices), [devices]);
+
+  const openDevice = devices.find((device) => device.entity_id === openId) ?? null;
   const filtersActive = hasActiveFilters(filters);
 
   return (
     <>
-      <PageHeader
-        title="מכשירים"
-        description="כל מה שבובי מכיר בבית, מסודר לפי חדרים."
-      />
+      <PageHeader title="מכשירים" description="הקטלוג של בובי, מסודר לפי חדרים." />
+
+      <ReadOnlyNotice className="mb-4">
+        שליטה במכשירים מהממשק תהיה זמינה בשלב הבא. כרגע זו תצוגה בלבד.
+      </ReadOnlyNotice>
 
       <div className="mb-4 space-y-3">
+        {/* Scope is a bridge parameter, so changing it refetches. */}
+        <div className="flex flex-wrap gap-2">
+          {DEVICE_SCOPES.map((value) => (
+            <Chip key={value} selected={scope === value} onClick={() => setScope(value)}>
+              {SCOPE_LABELS[value] ?? value}
+            </Chip>
+          ))}
+        </div>
+
         <div className="flex gap-2">
           <div className="relative flex-1">
             <Search
@@ -193,49 +214,23 @@ export function DevicesPage() {
               <p className="mb-2 text-sm font-medium text-slate-700 dark:text-slate-300">חדר</p>
               <div className="flex flex-wrap gap-2">
                 <Chip
-                  selected={filters.room === null}
-                  onClick={() => setFilters((current) => ({ ...current, room: null }))}
+                  selected={filters.area === null}
+                  onClick={() => setFilters((current) => ({ ...current, area: null }))}
                 >
                   כל החדרים
                 </Chip>
-                {(query.data?.rooms ?? []).map((room) => (
+                {areas.map((area) => (
                   <Chip
-                    key={room}
-                    selected={filters.room === room}
+                    key={area}
+                    selected={filters.area === area}
                     onClick={() =>
                       setFilters((current) => ({
                         ...current,
-                        room: current.room === room ? null : room,
+                        area: current.area === area ? null : area,
                       }))
                     }
                   >
-                    {room}
-                  </Chip>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <p className="mb-2 text-sm font-medium text-slate-700 dark:text-slate-300">סוג</p>
-              <div className="flex flex-wrap gap-2">
-                <Chip
-                  selected={filters.category === null}
-                  onClick={() => setFilters((current) => ({ ...current, category: null }))}
-                >
-                  הכול
-                </Chip>
-                {(query.data?.categories ?? []).map((category: DeviceCategory) => (
-                  <Chip
-                    key={category}
-                    selected={filters.category === category}
-                    onClick={() =>
-                      setFilters((current) => ({
-                        ...current,
-                        category: current.category === category ? null : category,
-                      }))
-                    }
-                  >
-                    {CATEGORY_LABELS[category]}
+                    {area}
                   </Chip>
                 ))}
               </div>
@@ -258,6 +253,16 @@ export function DevicesPage() {
               </div>
             </div>
 
+            <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+              <input
+                type="checkbox"
+                checked={includeUnavailable}
+                onChange={(event) => setIncludeUnavailable(event.target.checked)}
+                className="h-4 w-4 rounded border-slate-300 text-bobi-600 focus:ring-bobi-500"
+              />
+              לכלול מכשירים שאינם זמינים (נשלף מבובי)
+            </label>
+
             {filtersActive ? (
               <Button
                 variant="ghost"
@@ -276,20 +281,24 @@ export function DevicesPage() {
         isLoading={query.isLoading}
         error={query.error}
         data={query.data}
-        errorMessage="לא הצלחתי לטעון את המכשירים"
+        errorMessage="לא הצלחתי לקבל את רשימת המכשירים מ-Home Assistant"
+        loadingLabel="טוען מכשירים…"
         onRetry={() => void query.refetch()}
       >
         {() =>
           visible.length === 0 ? (
             <EmptyState
               title={
-                filtersActive ? 'לא נמצאו מכשירים שמתאימים לסינון' : 'בובי עדיין לא מכיר מכשירים'
+                filtersActive || scope !== 'all'
+                  ? 'לא נמצאו מכשירים שמתאימים לסינון'
+                  : 'בובי עדיין לא מכיר מכשירים'
               }
               description={
-                filtersActive
+                filtersActive || scope !== 'all'
                   ? 'אפשר לנקות את הסינון ולנסות שוב.'
-                  : 'כשיתחברו מכשירים לבית, הם יופיעו כאן.'
+                  : undefined
               }
+              icon={<Boxes size={32} />}
               action={
                 filtersActive ? (
                   <Button variant="secondary" onClick={() => setFilters(EMPTY_FILTERS)}>
@@ -300,21 +309,23 @@ export function DevicesPage() {
             />
           ) : (
             <div className="space-y-7">
-              {grouped.map(([room, devices]) => (
-                <section key={room} aria-labelledby={`room-${room}`}>
+              {grouped.map(([area, areaDevices]) => (
+                <section key={area} aria-labelledby={`area-${area}`}>
                   <h2
-                    id={`room-${room}`}
+                    id={`area-${area}`}
                     className="mb-3 flex items-baseline gap-2 text-sm font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500"
                   >
-                    {room}
-                    <span className="text-xs font-normal normal-case">({devices.length})</span>
+                    {area}
+                    <span className="text-xs font-normal normal-case">
+                      ({areaDevices.length})
+                    </span>
                   </h2>
                   <ul className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-                    {devices.map((device) => (
+                    {areaDevices.map((device, index) => (
                       <DeviceCard
-                        key={device.id}
+                        key={device.entity_id ?? `${area}-${index}`}
                         device={device}
-                        onOpen={() => setOpenId(device.id)}
+                        onOpen={() => setOpenId(device.entity_id)}
                       />
                     ))}
                   </ul>

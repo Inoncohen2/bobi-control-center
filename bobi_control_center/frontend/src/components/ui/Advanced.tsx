@@ -1,13 +1,15 @@
 /**
- * The "מתקדם" disclosure.
+ * The "מתקדם / פרטים טכניים" disclosure.
  *
- * This is the only sanctioned way to surface Home Assistant identifiers to a
- * user: collapsed by default, and never something the UI branches on.
+ * This is the only sanctioned way to surface an `entity_id`, a `handler`, or any
+ * other technical value. Collapsed by default, and never something the UI
+ * branches on.
  */
 
 import type { ReactNode } from 'react';
 import { ChevronLeft } from 'lucide-react';
-import type { Advanced as AdvancedData } from '@/types/api';
+
+import { displayValue } from '@/utils/format';
 
 export function AdvancedDisclosure({
   title = 'מתקדם',
@@ -31,37 +33,59 @@ export function AdvancedDisclosure({
   );
 }
 
-function Row({ label, value }: { label: string; value: ReactNode }) {
+export function TechnicalRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-4 py-1 text-sm">
       <dt className="shrink-0 text-slate-500 dark:text-slate-400">{label}</dt>
-      <dd dir="ltr" className="min-w-0 break-all text-left font-mono text-xs text-slate-700 dark:text-slate-300">
+      <dd
+        dir="ltr"
+        className="min-w-0 break-all text-left font-mono text-xs text-slate-700 dark:text-slate-300"
+      >
         {value}
       </dd>
     </div>
   );
 }
 
-/** Renders an `advanced` block verbatim. Display only. */
-export function AdvancedDetails({ advanced }: { advanced: AdvancedData }) {
-  const hasRaw = Object.keys(advanced.raw ?? {}).length > 0;
+/**
+ * Render a bridge object's technical fields.
+ *
+ * `known` names the fields to show with friendly labels; everything else the
+ * bridge sent is listed under "שדות נוספים" so a growing registry surfaces here
+ * rather than disappearing.
+ */
+export function TechnicalDetails({
+  source,
+  known,
+  hide = [],
+}: {
+  source: Record<string, unknown>;
+  known: Array<[key: string, label: string]>;
+  /** Keys already rendered in the normal UI, so they are not repeated. */
+  hide?: string[];
+}) {
+  const knownKeys = new Set([...known.map(([key]) => key), ...hide]);
+  const extras = Object.entries(source).filter(
+    ([key, value]) =>
+      !knownKeys.has(key) && value !== null && value !== undefined && value !== '',
+  );
 
   return (
     <dl className="divide-y divide-slate-100 dark:divide-slate-700/60">
-      {advanced.entity_id ? <Row label="מזהה טכני" value={advanced.entity_id} /> : null}
-      {advanced.object_id ? <Row label="מזהה פנימי" value={advanced.object_id} /> : null}
-      {advanced.integration ? <Row label="אינטגרציה" value={advanced.integration} /> : null}
-      {advanced.notes.length > 0 ? (
-        <Row label="הערות" value={advanced.notes.join(' · ')} />
-      ) : null}
-      {hasRaw ? (
+      {known.map(([key, label]) => {
+        const value = source[key];
+        if (value === null || value === undefined || value === '') return null;
+        return <TechnicalRow key={key} label={label} value={displayValue(value)} />;
+      })}
+
+      {extras.length > 0 ? (
         <div className="pt-2">
-          <p className="mb-1 text-sm text-slate-500 dark:text-slate-400">מאפיינים</p>
+          <p className="mb-1 text-sm text-slate-500 dark:text-slate-400">שדות נוספים</p>
           <pre
             dir="ltr"
             className="overflow-x-auto rounded-lg bg-slate-50 p-2 text-left text-xs text-slate-700 dark:bg-slate-900/50 dark:text-slate-300"
           >
-            {JSON.stringify(advanced.raw, null, 2)}
+            {JSON.stringify(Object.fromEntries(extras), null, 2)}
           </pre>
         </div>
       ) : null}

@@ -35,8 +35,13 @@ class HomeAssistantAdapter(ABC):
     writes_enabled: bool = False
 
     # --- lifecycle --------------------------------------------------------
-    async def aclose(self) -> None:
-        """Release any client resources. No-op unless overridden."""
+    async def aclose(self) -> None:  # noqa: B027 - optional hook, not abstract
+        """Release any client resources.
+
+        Deliberately concrete and empty: only an adapter that holds a network
+        client needs to close anything, and the mock must not be forced to
+        implement a no-op.
+        """
 
     @abstractmethod
     async def connection_info(self) -> ConnectionInfo:

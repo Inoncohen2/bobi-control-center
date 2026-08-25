@@ -1,36 +1,13 @@
-/**
- * Hebrew display formatting.
- *
- * Anything derived from domain rules (does a window cross midnight, what does an
- * automation do) is computed by the backend. This file only formats values for
- * display.
- */
-
-import type { DeviceCategory, Severity } from '@/types/api';
-
-/** 0 = Sunday, matching the Hebrew week used across the app. */
-export const HEBREW_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'] as const;
-export const HEBREW_DAYS_SHORT = ['א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ש'] as const;
-
-export function formatDays(days: number[]): string {
-  if (days.length === 0) return '';
-  const sorted = [...days].sort((a, b) => a - b);
-  if (sorted.length === 7) return 'כל יום';
-  if (sorted.join() === '0,1,2,3,4') return 'ראשון–חמישי';
-  if (sorted.join() === '5,6') return 'סוף שבוע';
-
-  const names = sorted.map((day) => HEBREW_DAYS[day] ?? '').filter(Boolean);
-  if (names.length === 1) return names[0] as string;
-  return `${names.slice(0, -1).join(', ')} ו${names[names.length - 1]}`;
-}
+/** Hebrew display formatting for bridge values. */
 
 /** Relative time in Hebrew, e.g. "לפני 5 דקות". */
-export function timeAgo(iso: string | null): string {
+export function timeAgo(iso: string | null | undefined): string {
   if (!iso) return 'מעולם לא';
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return '';
 
   const minutes = Math.round((Date.now() - then) / 60_000);
+  if (minutes < 0) return 'עוד מעט';
   if (minutes < 1) return 'הרגע';
   if (minutes < 60) return `לפני ${minutes} דקות`;
 
@@ -45,7 +22,7 @@ export function timeAgo(iso: string | null): string {
   return months === 1 ? 'לפני חודש' : `לפני ${months} חודשים`;
 }
 
-export function formatDateTime(iso: string | null): string {
+export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return '';
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '';
@@ -57,69 +34,132 @@ export function formatDateTime(iso: string | null): string {
   }).format(date);
 }
 
-export function formatTime(iso: string | null): string {
+export function formatDate(iso: string | null | undefined): string {
   if (!iso) return '';
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '';
-  return new Intl.DateTimeFormat('he-IL', { hour: '2-digit', minute: '2-digit' }).format(date);
+  return new Intl.DateTimeFormat('he-IL', { day: 'numeric', month: 'long' }).format(date);
 }
 
-export const CATEGORY_LABELS: Record<DeviceCategory, string> = {
-  light: 'תאורה',
-  climate: 'מזגן',
-  camera: 'מצלמה',
-  cover: 'תריס',
-  switch: 'שקע',
-  boiler: 'דוד',
-  vacuum: 'שואב',
-  sensor: 'חיישן',
+/** Human label for a device or entity state coming from Home Assistant. */
+const STATE_LABELS: Record<string, string> = {
+  on: 'דולק',
+  off: 'כבוי',
+  open: 'פתוח',
+  closed: 'סגור',
+  cool: 'מקרר',
+  heat: 'מחמם',
+  fan_only: 'מאוורר',
+  dry: 'מייבש',
+  auto: 'אוטומטי',
+  docked: 'בעמדת טעינה',
+  cleaning: 'מנקה',
+  returning: 'חוזר לעמדה',
+  recording: 'מקליט',
+  streaming: 'משדר',
+  idle: 'ממתין',
+  home: 'בבית',
+  not_home: 'לא בבית',
+  unavailable: 'לא זמין',
+  unknown: 'לא ידוע',
 };
 
-export const SEVERITY_LABELS: Record<Severity, string> = {
-  ok: 'תקין',
-  warning: 'אזהרה',
+export function stateLabel(state: string | null | undefined): string {
+  if (!state) return 'לא ידוע';
+  const known = STATE_LABELS[state.toLowerCase()];
+  if (known) return known;
+  // Numeric sensor readings pass through unchanged.
+  return state;
+}
+
+export function isAvailable(state: string | null | undefined): boolean {
+  const value = (state ?? '').toLowerCase();
+  return value !== '' && value !== 'unavailable' && value !== 'unknown';
+}
+
+/** The user-facing name of a device. Never the entity id. */
+export function deviceName(device: {
+  canonical?: string | null;
+  name?: string | null;
+  entity_id?: string | null;
+}): string {
+  return device.canonical || device.name || device.entity_id || 'מכשיר ללא שם';
+}
+
+export const SCOPE_LABELS: Record<string, string> = {
+  all: 'הכול',
+  lighting: 'תאורה',
+  climate: 'מיזוג',
+  cameras: 'מצלמות',
+  battery: 'סוללות',
+  temperature: 'טמפרטורה',
+  humidity: 'לחות',
+  vacuum: 'שואב',
+  people: 'אנשים',
+  switches: 'שקעים',
+  scent: 'ריח',
+};
+
+export const RISK_LABELS: Record<string, string> = {
+  low: 'סיכון נמוך',
+  medium: 'סיכון בינוני',
+  high: 'סיכון גבוה',
+};
+
+export const RISK_TONE: Record<string, 'ok' | 'warning' | 'error' | 'muted'> = {
+  low: 'ok',
+  medium: 'warning',
+  high: 'error',
+};
+
+/** Statistic labels for the dashboard's `counts` map. */
+export const COUNT_LABELS: Record<string, string> = {
+  devices: 'מכשירים',
+  capabilities: 'יכולות',
+  rules: 'כללים חכמים',
+  open_tasks: 'משימות פתוחות',
+  tasks: 'משימות',
+  issues: 'בעיות פתוחות',
+  automations: 'אוטומציות',
+  schedules: 'תזמונים',
+  users: 'משתמשים',
+};
+
+export function countLabel(key: string): string {
+  return COUNT_LABELS[key] ?? key.replace(/_/g, ' ');
+}
+
+/** Probe status → Hebrew. Unknown statuses fall through readably. */
+export const PROBE_STATUS_LABELS: Record<string, string> = {
+  ok: 'הובן',
+  not_understood: 'לא הובן',
+  target_not_found: 'לא נמצא יעד',
+  invalid_schedule: 'תזמון לא תקין',
   error: 'שגיאה',
 };
 
-export const AUTOMATION_TYPE_LABELS: Record<string, string> = {
+export function probeStatusLabel(status: string | null | undefined): string {
+  if (!status) return 'לא ידוע';
+  return PROBE_STATUS_LABELS[status] ?? status;
+}
+
+export const SCHEDULE_KIND_LABELS: Record<string, string> = {
   one_time: 'חד־פעמי',
   daily: 'יומי',
   weekly: 'שבועי',
-  time_window: 'טווח שעות',
-  multi_time: 'כמה שעות',
-  conditional: 'מותנה',
-  smart_notification: 'התראה חכמה',
+  immediate: 'מיידי',
+  recurring: 'חוזר',
 };
 
-export const SOURCE_LABELS: Record<string, string> = {
-  web: 'ממשק ניהול',
-  whatsapp: 'WhatsApp',
-  automation: 'אוטומציה',
-  system: 'מערכת',
-};
+export function scheduleKindLabel(kind: string | null | undefined): string {
+  if (!kind) return '—';
+  return SCHEDULE_KIND_LABELS[kind] ?? kind;
+}
 
-export const PROBE_FAMILY_LABELS: Record<string, string> = {
-  schedule: 'תזמון',
-  control: 'שליטה',
-  query: 'שאלה',
-  task: 'משימה',
-  calendar: 'יומן',
-  notification: 'התראה',
-  shabbat: 'שעון שבת',
-  unknown: 'לא זוהה',
-};
-
-export const SHABBAT_DAY_LABELS: Record<string, string> = {
-  friday: 'שישי',
-  saturday: 'שבת',
-};
-
-/** "3 שעות ו-30 דקות" for a cooldown or lead time given in minutes. */
-export function formatMinutes(minutes: number): string {
-  if (minutes <= 0) return 'ללא';
-  if (minutes < 60) return `${minutes} דקות`;
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  const hoursLabel = hours === 1 ? 'שעה' : `${hours} שעות`;
-  return rest ? `${hoursLabel} ו-${rest} דקות` : hoursLabel;
+/** Format a value from an open-ended bridge object for display. */
+export function displayValue(value: unknown): string {
+  if (value === null || value === undefined) return '—';
+  if (typeof value === 'boolean') return value ? 'כן' : 'לא';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
 }
