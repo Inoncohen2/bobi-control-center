@@ -56,11 +56,18 @@ def validate_draft(draft: ShabbatDraft) -> None:
                 )
 
 
+#: Unicode bidi isolates. The label is embedded in Hebrew (RTL) sentences, and
+#: without an explicit LTR isolate the "→" is a neutral character that renders
+#: pointing against the reading order, i.e. end-to-start.
+LRI, PDI = "⁦", "⁩"
+
+
 def range_label(start: str, end: str) -> str:
     """'17:42 → 23:30' or '22:00 → 01:00 + יום הבא'."""
+    window = f"{LRI}{start} → {end}{PDI}"
     if crosses_midnight(start, end):
-        return f"{start} → {end} + יום הבא"
-    return f"{start} → {end}"
+        return f"{window} + יום הבא"
+    return window
 
 
 def build_preview_lines(draft: ShabbatDraft) -> tuple[list[PreviewLine], list[str]]:

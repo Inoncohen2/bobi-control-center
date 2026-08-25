@@ -34,8 +34,19 @@ def test_duration_spans_midnight_correctly() -> None:
 
 
 def test_range_label_marks_the_next_day() -> None:
-    assert range_label("22:00", "01:00") == "22:00 → 01:00 + יום הבא"
-    assert range_label("17:42", "23:30") == "17:42 → 23:30"
+    from app.services.shabbat import LRI, PDI
+
+    assert range_label("22:00", "01:00") == f"{LRI}22:00 → 01:00{PDI} + יום הבא"
+    assert range_label("17:42", "23:30") == f"{LRI}17:42 → 23:30{PDI}"
+
+
+def test_range_label_isolates_the_arrow_for_rtl() -> None:
+    """The window must be bidi-isolated so the arrow points start-to-end."""
+    from app.services.shabbat import LRI, PDI
+
+    label = range_label("22:00", "01:00")
+    assert label.startswith(LRI)
+    assert label.index(PDI) > label.index("→")
 
 
 def test_recompute_sets_the_flag_on_every_range() -> None:

@@ -175,6 +175,11 @@ def enrich(automation: Automation) -> Automation:
 
 
 def window_label(start: str, end: str) -> str:
-    """'22:00 → 01:00 · 3 שעות' — used by previews."""
+    """'22:00 → 01:00 · 3 שעות' — used by previews.
+
+    The time window is wrapped in Unicode LTR isolates so the arrow keeps
+    pointing start-to-end inside the surrounding Hebrew (RTL) text.
+    """
     suffix = " + יום הבא" if crosses_midnight(start, end) else ""
-    return f"{start} → {end}{suffix} · {duration_label(start, end)}"
+    window = f"⁦{start} → {end}⁩"
+    return f"{window}{suffix} · {duration_label(start, end)}"

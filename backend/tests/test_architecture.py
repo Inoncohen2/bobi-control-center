@@ -30,21 +30,54 @@ HA_DOMAIN_PATTERN = re.compile(
 FRONTEND_ALLOWLIST = {"types/api.ts"}
 
 
+#: String and template literals. A hard-coded entity id is necessarily quoted,
+#: which is what separates it from property access like ``automation.start_time``.
+_ANY_LITERAL = re.compile(r"""(['"`])(.*?)\1""")
+
+
+def scan_for_entity_ids(source: str) -> list[tuple[int, str]]:
+    """Return ``(line_number, literal)`` for every entity id in a source file.
+
+    Only quoted literals are considered, and comment lines are skipped.
+    """
+    found: list[tuple[int, str]] = []
+    for number, line in enumerate(source.splitlines(), start=1):
+        stripped = line.strip()
+        if stripped.startswith(("//", "*", "#")):
+            continue
+        for _, value in _ANY_LITERAL.findall(line):
+            if _ENTITY_ID_IN_STRING.match(value.strip()):
+                found.append((number, value))
+    return found
+
+
 def _frontend_sources() -> list[Path]:
+    """Application sources only.
+
+    Tests and their fixtures are excluded: a fixture stands in for an API
+    response, so it may legitimately contain the entity ids that a real response
+    would carry — the same reason the backend's ``mock/`` package is exempt.
+    """
     if not FRONTEND_SRC.is_dir():
         return []
     return [
         path
         for path in FRONTEND_SRC.rglob("*")
-        if path.suffix in {".ts", ".tsx"} and ".test." not in path.name
+        if path.suffix in {".ts", ".tsx"}
+        and ".test." not in path.name
+        and "test" not in path.relative_to(FRONTEND_SRC).parts
     ]
 
 
 def test_frontend_never_hardcodes_home_assistant_entity_ids() -> None:
     """The core architectural rule of the project.
 
-    The frontend may *render* an ``advanced.entity_id`` it was handed by the
-    API, but it must never contain one as a literal or branch on one.
+    The frontend may *render* an ``advanced.entity_id`` handed to it by the API,
+    but it must never contain one as a literal or branch on one.
+
+    Only string and template literals are scanned: a hard-coded entity id is
+    necessarily quoted, whereas ``automation.start_time`` is ordinary property
+    access on a typed model and must not trip the guard.
     """
     sources = _frontend_sources()
     if not sources:
@@ -55,13 +88,8 @@ def test_frontend_never_hardcodes_home_assistant_entity_ids() -> None:
         relative = path.relative_to(FRONTEND_SRC).as_posix()
         if relative in FRONTEND_ALLOWLIST:
             continue
-        for number, line in enumerate(path.read_text("utf-8").splitlines(), start=1):
-            stripped = line.strip()
-            if stripped.startswith("//") or stripped.startswith("*"):
-                continue
-            match = HA_DOMAIN_PATTERN.search(line)
-            if match:
-                offenders.append(f"{relative}:{number}: {match.group(0)}")
+        for number, value in scan_for_entity_ids(path.read_text("utf-8")):
+            offenders.append(f"{relative}:{number}: {value}")
 
     assert not offenders, (
         "Home Assistant identifiers must not appear in frontend code:\n"
@@ -69,11 +97,33 @@ def test_frontend_never_hardcodes_home_assistant_entity_ids() -> None:
     )
 
 
+def test_the_frontend_guard_actually_catches_a_violation() -> None:
+    """Guard the guard, so a future refactor cannot quietly neuter it."""
+    violating = "\n".join(
+        [
+            "const entity = 'climate.demo_living_room_ac';",
+            'const helper = "input_text.bobi_local_schedule";',
+            "const script = `script.bobi_local_schedule_parse`;",
+        ]
+    )
+    assert len(scan_for_entity_ids(violating)) == 3
+
+    # Ordinary frontend code must not trip it.
+    clean = "\n".join(
+        [
+            "const when = automation.start_time;",
+            "if (automation.crosses_midnight) return null;",
+            "await api.post('/api/bobi/shabbat/confirm', { token });",
+            "const op = 'automation.save';",
+            "// climate.demo_living_room_ac in a comment is fine",
+        ]
+    )
+    assert scan_for_entity_ids(clean) == []
+
+
 #: An entity id inside a string literal, e.g. "climate.demo_living_room_ac".
-#: The trailing ``_`` requirement is what separates a real entity id from
-#: ordinary python attribute access such as ``automation.summary`` or an
-#: operation name such as ``"automation.save"``.
-_STRING_LITERAL = re.compile(r"""(['"])(.*?)\1""")
+#: Requiring an underscore in the object id keeps operation names such as
+#: ``"automation.save"`` and file names such as ``"camera.png"`` from matching.
 _ENTITY_ID_IN_STRING = re.compile(
     r"^(?:light|switch|climate|sensor|binary_sensor|camera|cover|vacuum|"
     r"media_player|input_text|input_boolean|input_number|input_datetime|"
@@ -104,10 +154,8 @@ def test_only_the_adapter_layer_speaks_home_assistant() -> None:
         relative = path.relative_to(BACKEND_APP).as_posix()
         if relative in allowed_files or relative.startswith("mock/"):
             continue
-        for number, line in enumerate(path.read_text("utf-8").splitlines(), start=1):
-            for _, literal in _STRING_LITERAL.findall(line):
-                if _ENTITY_ID_IN_STRING.match(literal.strip()):
-                    offenders.append(f"{relative}:{number}: {literal}")
+        for number, value in scan_for_entity_ids(path.read_text("utf-8")):
+            offenders.append(f"{relative}:{number}: {value}")
 
     assert not offenders, (
         "Home Assistant identifiers outside the adapter layer:\n" + "\n".join(offenders)

@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-slate-50 font-sans text-slate-900 antialiased dark:bg-slate-900 dark:text-slate-100;
+    /* Prevent the iOS rubber-band from revealing a mismatched background. */
+    overscroll-behavior-y: none;
+  }
+
+  /* A visible focus ring everywhere is a hard accessibility requirement. */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-bobi-600;
+  }
+
+  /* Numbers and technical identifiers read left-to-right inside RTL text. */
+  [dir='ltr'] {
+    text-align: left;
+  }
+}
+
+@layer utilities {
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
