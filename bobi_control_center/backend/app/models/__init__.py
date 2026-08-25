@@ -1,7 +1,7 @@
 """Typed models for the Bobi Control Center API.
 
-Phase 2 has a single model family: the bridge contract in `bridge.py`, which
-both adapters satisfy.
+Phase 2 has a single model family: the canonical contract in `bridge.py`, which
+`app/services/normalize.py` maps the raw bridge response onto.
 """
 
 from .bridge import (
@@ -12,7 +12,6 @@ from .bridge import (
     BridgeDevices,
     BridgeDiagnostics,
     BridgeIssue,
-    BridgeModel,
     BridgeProbe,
     BridgeRule,
     BridgeRules,
@@ -22,11 +21,11 @@ from .bridge import (
     BridgeTasks,
     BridgeUser,
     BridgeUsers,
+    CanonicalModel,
     CapabilityToggle,
     ConnectionInfo,
     DeviceLimits,
     DiagnosticCheck,
-    ProbeUnderstanding,
     ShabbatProfile,
     StatusComponent,
 )
@@ -39,7 +38,6 @@ __all__ = [
     "BridgeDevices",
     "BridgeDiagnostics",
     "BridgeIssue",
-    "BridgeModel",
     "BridgeProbe",
     "BridgeRule",
     "BridgeRules",
@@ -49,11 +47,11 @@ __all__ = [
     "BridgeTasks",
     "BridgeUser",
     "BridgeUsers",
+    "CanonicalModel",
     "CapabilityToggle",
     "ConnectionInfo",
     "DeviceLimits",
     "DiagnosticCheck",
-    "ProbeUnderstanding",
     "ShabbatProfile",
     "StatusComponent",
 ]

@@ -5,22 +5,23 @@ Supervisor injects. Only Bobi's `script.bobi_cc_*` bridge services are called �
 this adapter never enumerates entities, never reads arbitrary states, and never
 calls a service that changes anything.
 
+Raw responses are handed straight to `app.services.normalize`, which is the only
+place that knows bridge field names. This adapter's job is transport, not shape.
+
 Security invariants enforced here:
 
-* `SUPERVISOR_TOKEN` is read once from settings and lives only in the
+* `SUPERVISOR_TOKEN` is read from settings and lives only in the
   `Authorization` header of outgoing requests.
 * Authorization headers are never logged.
-* Response bodies are logged only when `BOBI_DEBUG_HTTP` is explicitly enabled,
-  so real household data does not land in the add-on log by default.
+* Response bodies are logged only when `BOBI_DEBUG_HTTP` is explicitly enabled.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, TypeVar
+from typing import Any
 
 import httpx
-from pydantic import ValidationError
 
 from app.adapters.base import HomeAssistantAdapter
 from app.config import Settings
@@ -29,7 +30,6 @@ from app.models.bridge import (
     BridgeCapabilities,
     BridgeDevices,
     BridgeDiagnostics,
-    BridgeModel,
     BridgeProbe,
     BridgeRules,
     BridgeShabbat,
@@ -38,10 +38,9 @@ from app.models.bridge import (
     BridgeUsers,
     ConnectionInfo,
 )
+from app.services import normalize
 
 logger = logging.getLogger("bobi.ha")
-
-T = TypeVar("T", bound=BridgeModel)
 
 #: Bridge scripts, without the `script.` domain prefix.
 STATUS = "bobi_cc_status"
@@ -108,11 +107,8 @@ class RealHomeAssistantAdapter(HomeAssistantAdapter):
         is what makes a script hand back data rather than just firing.
 
         Home Assistant has shipped more than one response shape for this
-        endpoint, so the result is unwrapped defensively:
-
-        * `{"service_response": {...}}` → the inner object (current shape);
-        * a bare object → itself;
-        * a single-element list wrapping either of the above → unwrapped.
+        endpoint, so the result is unwrapped defensively — see
+        :func:`extract_service_response`.
         """
         if domain == "script" and service not in ALLOWED_SERVICES:
             # Structural guard: this adapter exists to call the read-only
@@ -128,7 +124,7 @@ class RealHomeAssistantAdapter(HomeAssistantAdapter):
         params = {"return_response": ""} if return_response else None
 
         if self._debug_http:
-            logger.debug("→ %s %s data=%s", domain, service, data)
+            logger.debug("→ %s.%s data=%s", domain, service, data)
 
         try:
             response = await self._get_client().post(
@@ -196,33 +192,28 @@ class RealHomeAssistantAdapter(HomeAssistantAdapter):
             details={"service": service_name, "status": response.status_code},
         )
 
-    async def _fetch(
-        self,
-        service: str,
-        model: type[T],
-        data: dict[str, Any] | None = None,
-    ) -> T:
-        """Call a bridge script and validate the result into `model`."""
+    async def _payload(self, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Call a bridge script and return its payload as a plain dict.
+
+        A script that returns nothing is a valid-but-empty response, so it
+        becomes `{}` rather than an error — the normalizer will produce an empty
+        screen, which is the honest result.
+        """
         payload = await self.call_service("script", service, data)
 
         if payload is None:
-            # A script that returns nothing is a valid-but-empty response.
-            return model()
+            return {}
+        if isinstance(payload, list):
+            # A bare list is a collection; the normalizers look for it by key,
+            # so hand it over under a neutral one.
+            return {"items": payload}
         if not isinstance(payload, dict):
             raise UpstreamError(
                 "התקבל מבנה נתונים לא צפוי מ-Home Assistant",
                 code="bridge_bad_shape",
                 details={"service": service, "type": type(payload).__name__},
             )
-
-        try:
-            return model.model_validate(payload)
-        except ValidationError as exc:
-            raise UpstreamError(
-                "לא הצלחתי לקרוא את התשובה מבובי",
-                code="bridge_validation_failed",
-                details={"service": service, "errors": exc.error_count()},
-            ) from exc
+        return payload
 
     # --- connection -------------------------------------------------------
     async def connection_info(self) -> ConnectionInfo:
@@ -244,46 +235,37 @@ class RealHomeAssistantAdapter(HomeAssistantAdapter):
 
     # --- bridge services --------------------------------------------------
     async def get_status(self) -> BridgeStatus:
-        status = await self._fetch(STATUS, BridgeStatus)
-        # Phase 2 never trusts an upstream "writes are fine".
-        status.writes_enabled = False
-        return status
+        return normalize.normalize_status(await self._payload(STATUS))
 
     async def get_devices(
         self, scope: str = "all", include_unavailable: bool = True
     ) -> BridgeDevices:
-        return await self._fetch(
-            DEVICES,
-            BridgeDevices,
-            {"scope": scope, "include_unavailable": include_unavailable},
+        payload = await self._payload(
+            DEVICES, {"scope": scope, "include_unavailable": include_unavailable}
         )
+        return normalize.normalize_devices(payload, scope, include_unavailable)
 
     async def get_capabilities(self) -> BridgeCapabilities:
-        return await self._fetch(CAPABILITIES, BridgeCapabilities)
+        return normalize.normalize_capabilities(await self._payload(CAPABILITIES))
 
     async def get_users(self) -> BridgeUsers:
-        return await self._fetch(USERS, BridgeUsers)
+        return normalize.normalize_users(await self._payload(USERS))
 
     async def get_shabbat(self) -> BridgeShabbat:
-        shabbat = await self._fetch(SHABBAT, BridgeShabbat)
-        shabbat.writes_enabled = False
-        return shabbat
+        return normalize.normalize_shabbat(await self._payload(SHABBAT))
 
     async def get_rules(self) -> BridgeRules:
-        return await self._fetch(RULES, BridgeRules)
+        return normalize.normalize_rules(await self._payload(RULES))
 
     async def get_tasks(self) -> BridgeTasks:
-        return await self._fetch(TASKS, BridgeTasks)
+        return normalize.normalize_tasks(await self._payload(TASKS))
 
     async def get_diagnostics(self) -> BridgeDiagnostics:
-        return await self._fetch(DIAGNOSTICS, BridgeDiagnostics)
+        return normalize.normalize_diagnostics(await self._payload(DIAGNOSTICS))
 
     async def probe(self, text: str) -> BridgeProbe:
-        result = await self._fetch(PROBE, BridgeProbe, {"text": text})
-        # Restated locally regardless of what the bridge returned.
-        result.probe_only = True
-        result.would_execute = False
-        return result
+        payload = await self._payload(PROBE, {"text": text})
+        return normalize.normalize_probe(payload, text)
 
 
 def extract_service_response(payload: Any) -> Any:
@@ -291,8 +273,11 @@ def extract_service_response(payload: Any) -> Any:
 
     Kept module-level and pure so the unwrapping rules are unit-testable
     without a client or a server.
+
+    * `{"service_response": {...}}` → the inner object (current shape)
+    * a bare object → itself
+    * a single-element list wrapping either → unwrapped
     """
-    # Some versions wrap the whole thing in a single-element list.
     if isinstance(payload, list):
         if len(payload) == 1:
             return extract_service_response(payload[0])

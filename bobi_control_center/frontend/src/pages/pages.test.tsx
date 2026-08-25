@@ -393,7 +393,11 @@ describe('DiagnosticsPage', () => {
     renderWithProviders(<DiagnosticsPage />);
 
     expect(await screen.findByText('בדיקות שבוצעו')).toBeInTheDocument();
-    expect(screen.getByText('גשר בובי')).toBeInTheDocument();
+    expect(screen.getByText('WhatsApp')).toBeInTheDocument();
+
+    // A numeric check is informational: shown as a figure, not a pass badge.
+    expect(screen.getByText('מכשירים בקטלוג')).toBeInTheDocument();
+    expect(screen.getByText('18')).toBeInTheDocument();
   });
 
   it('celebrates an empty issue list', async () => {

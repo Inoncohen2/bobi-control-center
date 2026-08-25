@@ -41,9 +41,22 @@ def test_devices_returns_the_canonical_catalog(client: TestClient) -> None:
     assert body["count"] == len(body["devices"])
 
     device = body["devices"][0]
-    for field in ("entity_id", "canonical", "area", "state", "aliases", "capabilities",
-                  "semantic_scopes", "handler", "domain", "group"):
+    for field in ("id", "name", "entity_id", "area", "state", "available", "aliases",
+                  "capabilities", "semantic_scopes", "handler", "domain", "group", "extra"):
         assert field in device
+
+
+def test_devices_expose_exactly_one_collection(client: TestClient) -> None:
+    """No empty legacy list sitting beside the populated one."""
+    body = client.get("/api/bobi/devices").json()
+    collections = [key for key, value in body.items() if isinstance(value, list)]
+    assert sorted(collections) == ["areas", "devices", "groups"]
+    assert "entries" not in body
+
+
+def test_device_ids_are_unique(client: TestClient) -> None:
+    ids = [d["id"] for d in client.get("/api/bobi/devices").json()["devices"]]
+    assert len(ids) == len(set(ids))
 
 
 def test_devices_scope_filters_server_side(client: TestClient) -> None:
@@ -96,14 +109,22 @@ def test_capability_toggles_are_returned_separately(client: TestClient) -> None:
 
 
 def test_unknown_capability_fields_are_preserved(client: TestClient) -> None:
-    """The registry grows; extra keys must survive the round trip."""
-    from app.models.bridge import BridgeCapability
+    """The registry grows; extra keys must survive into the Advanced panel."""
+    from app.services import normalize
 
-    capability = BridgeCapability.model_validate(
-        {"id": "x", "label": "חדש", "brand_new_field": "value"}
+    result = normalize.normalize_capabilities(
+        {"registry": {"x": {"label": "חדש", "brand_new_field": "value"}}}
     )
-    assert capability.extras()["brand_new_field"] == "value"
-    assert "brand_new_field" in capability.model_dump()
+    capability = result.capabilities[0]
+    assert capability.label == "חדש"
+    assert capability.extra["brand_new_field"] == "value"
+
+
+def test_capabilities_expose_exactly_one_collection(client: TestClient) -> None:
+    body = client.get("/api/bobi/capabilities").json()
+    assert "registry" not in body
+    assert body["capabilities"]
+    assert len(body["capabilities"]) == body["count"]
 
 
 # --- users ------------------------------------------------------------------
@@ -133,18 +154,48 @@ def test_shabbat_is_read_only(client: TestClient) -> None:
     assert "has_draft" in body
 
 
-def test_shabbat_maps_device_tokens_to_labels(client: TestClient) -> None:
+def test_shabbat_resolves_device_tokens_server_side(client: TestClient) -> None:
+    """The UI must never receive a raw device token to resolve itself."""
     body = client.get("/api/bobi/shabbat").json()
-    labels = body["device_labels"]
-    assert labels
 
-    # Every token referenced by a profile should resolve to a friendly label.
-    for key in ("pre_off_profile", "pre_on_profile", "night_off_profile", "morning_on_profile"):
-        profile = body.get(key)
-        if not profile:
-            continue
-        for token in profile["devices"]:
-            assert token in labels, f"{token} has no friendly label"
+    assert body["profiles"], "the mock defines profiles"
+    for profile in body["profiles"]:
+        for device in profile["devices"]:
+            # A friendly Hebrew name, not a snake_case token.
+            assert "_" not in device, f"{device} looks like an unresolved token"
+
+    for name in body["ac_temperatures"]:
+        assert "_" not in name, f"{name} looks like an unresolved token"
+
+
+def test_shabbat_flattens_profiles_into_one_list(client: TestClient) -> None:
+    body = client.get("/api/bobi/shabbat").json()
+    assert "upcoming" not in body
+    assert "pre_off_profile" not in body
+    assert body["candle_lighting"], "times are read out of `upcoming`"
+    assert {p["kind"] for p in body["profiles"]} >= {"pre_off", "night_off"}
+
+
+def test_tasks_expose_exactly_one_collection(client: TestClient) -> None:
+    body = client.get("/api/bobi/tasks").json()
+    assert "users" not in body
+    assert body["tasks"]
+    assert len(body["tasks"]) == body["count"]
+
+
+def test_status_has_no_empty_legacy_fields(client: TestClient) -> None:
+    body = client.get("/api/bobi/status").json()
+    assert body["components"], "real components must be read, not left empty"
+    assert body["counts"], "real figures must be read, not left empty"
+
+
+def test_probe_is_flattened_from_the_nested_result(client: TestClient) -> None:
+    body = client.post(
+        "/api/bobi/probe", json={"text": "כבה מזגן הורים ב-1:30 בלילה"}
+    ).json()
+    assert "result" not in body
+    assert body["handled"] is True
+    assert body["skill"]
 
 
 # --- rules ------------------------------------------------------------------

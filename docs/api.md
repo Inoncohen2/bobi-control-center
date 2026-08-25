@@ -14,12 +14,22 @@ The app is served from a generated prefix such as
 `location.pathname` at runtime, so paths below are relative to the app root, not
 to the domain root.
 
-### Open models
+### One canonical schema
 
-Bridge models set `extra="allow"` and make almost every field optional. The
-registry grows independently of this app, so unknown keys are preserved rather
-than dropped, and a partial response degrades to a usable screen instead of a
-500.
+Responses are **not** the shape Home Assistant sends. The bridge names its
+collections `entries`, `registry`, `upcoming`/`profiles`/`drafts` and per-user
+`users`, and nests the probe answer under `result`.
+`backend/app/services/normalize.py` maps all of that onto one canonical
+contract, so:
+
+* a response carries **exactly one** collection per resource — never a
+  populated list beside an empty legacy one;
+* the frontend contains no normalization logic and never sees a raw bridge key;
+* fields the normalizer does not map explicitly land in a per-item `extra` map,
+  shown under "מתקדם / פרטים טכניים" so a growing registry surfaces rather than
+  disappearing;
+* a partial or oddly-typed response degrades to a usable screen instead of a
+  500 — `checks` arriving as a map rather than a list is handled, not rejected.
 
 ### Errors
 
@@ -101,28 +111,34 @@ Scopes: `all`, `lighting`, `climate`, `cameras`, `battery`, `temperature`,
   "scope": "climate",
   "include_unavailable": true,
   "count": 3,
+  "areas": ["חדר הורים", "סלון"],
+  "groups": ["מיזוג"],
   "devices": [{
-    "entity_id": "climate.example",
+    "id": "climate.example",
     "name": "מזגן סלון",
-    "canonical": "מזגן סלון",
-    "semantic_scopes": ["climate", "temperature"],
-    "aliases": ["מזגן סלון", "המזגן בסלון"],
-    "domain": "climate",
-    "group": "מיזוג",
     "area": "סלון",
+    "group": "מיזוג",
+    "domain": "climate",
     "state": "off",
+    "available": true,
+    "aliases": ["מזגן סלון", "המזגן בסלון"],
+    "capabilities": ["turn_on", "turn_off", "set_temperature"],
+    "semantic_scopes": ["climate", "temperature"],
     "controllable": true,
     "logical_controllable": true,
+    "entity_id": "climate.example",
     "handler": "climate_handler",
-    "capabilities": ["turn_on", "turn_off", "set_temperature"],
     "limits": { "min": 16, "max": 30, "step": 1 },
-    "last_changed": "2026-08-25T11:00:00+03:00"
+    "last_changed": "2026-08-25T11:00:00+03:00",
+    "extra": {}
   }]
 }
 ```
 
-The UI shows `canonical`, `area`, `state`, `capabilities` and `aliases`.
-`entity_id` and `handler` appear only under **מתקדם / פרטים טכניים**.
+Read out of the bridge's `entries`. `name` is the canonical display name and
+`available` is derived from the state, both server-side. The UI shows `name`,
+`area`, `state`, `capabilities` and `aliases`; `entity_id`, `handler` and
+`extra` appear only under **מתקדם / פרטים טכניים**.
 
 ---
 
@@ -145,9 +161,10 @@ The UI shows `canonical`, `area`, `state`, `capabilities` and `aliases`.
 }
 ```
 
-Rendered dynamically and grouped by whatever `group` values the registry
-supplies; entries with none fall under *יכולות נוספות*. Toggles are **read-only**
-in Phase 2.
+Read out of the bridge's `registry`, which may arrive as a map keyed by id or
+as a list. Rendered dynamically and grouped by whatever `group` values the
+registry supplies; entries with none fall under *יכולות נוספות*. Toggles are
+**read-only** in Phase 2.
 
 ---
 
@@ -175,20 +192,27 @@ shows only whether WhatsApp is connected.
 {
   "candle_lighting": "18:52",
   "havdalah": "19:51",
+  "parasha": "פרשת ראה",
   "pre_shabbat_offset_minutes": 20,
-  "pre_off_profile":     { "id": "…", "label": "…", "active": true, "devices": ["kitchen_light"] },
-  "pre_on_profile":      { … },
-  "night_off_profile":   { … },
-  "morning_on_profile":  { … },
-  "ac_temperatures": { "living_room_ac": 24 },
-  "device_labels": { "kitchen_light": "אור מטבח" },
+  "profiles": [{
+    "id": "pre_off", "kind": "pre_off", "label": "כיבוי לפני שבת",
+    "active": true, "time": null, "offset_minutes": 20,
+    "devices": ["אור מטבח"], "extra": {}
+  }],
+  "ac_temperatures": { "מזגן סלון": "24" },
   "has_draft": false,
-  "writes_enabled": false
+  "draft_owners": [],
+  "writes_enabled": false,
+  "extra": {}
 }
 ```
 
-`device_labels` maps a token to a friendly name; the UI never shows a raw token.
-`writes_enabled` is forced to `false`.
+Times are read out of the bridge's `upcoming`. Profiles come from `profiles` as
+**one list** — `kind` carries the bridge's own key, so a profile the app has
+never seen still renders. Device tokens are resolved to friendly names
+server-side, including the keys of `ac_temperatures`; the UI never receives a
+raw token. `has_draft` is derived from `drafts`. `writes_enabled` is forced to
+`false`.
 
 ---
 
@@ -209,13 +233,16 @@ automations.
 
 ## `GET /api/bobi/tasks`
 
-→ `script.bobi_cc_tasks`. The bridge strips internal metadata.
+→ `script.bobi_cc_tasks`. The bridge groups tasks per user under `users` and
+strips internal metadata; they are flattened into one list with `owner` and
+`list_name` inherited from the group.
 
 ```json
 { "count": 6,
+  "owners": ["ינון", "הודיה"],
   "tasks": [{ "id": "…", "title": "לקבוע תור לרופא", "status": "needs_action",
               "completed": false, "due": null, "owner": "ינון",
-              "list_name": "משימות ינון" }] }
+              "list_name": "משימות ינון", "extra": {} }] }
 ```
 
 ---
@@ -228,15 +255,26 @@ automations.
 {
   "ok": false,
   "issue_count": 3,
-  "issues": [{ "id": "…", "severity": "error", "title": "מצלמת ליה אינה זמינה",
-               "message": "…", "component": "מצלמות",
-               "entity_id": "camera.example", "entity_ids": [],
-               "suggested_action": "…", "detail": "state=unavailable" }],
-  "checks": [{ "id": "…", "name": "גשר בובי", "ok": true, "detail": "זמין" }]
+  "issues": [{ "id": "device_unavailable:camera.example", "severity": "error",
+               "title": "מצלמת ליה אינה זמינה", "message": "…",
+               "component": "device", "code": "device_unavailable",
+               "entity_ids": ["camera.example"], "suggested_action": "…",
+               "detail": "state=unavailable", "extra": {} }],
+  "checks": [{ "id": "whatsapp", "label": "WhatsApp", "ok": true,
+               "value": "WORKING", "detail": null },
+             { "id": "catalog_count", "label": "מכשירים בקטלוג", "ok": null,
+               "value": "19", "detail": null }]
 }
 ```
 
-`entity_id`, `entity_ids` and `detail` are rendered only inside the collapsed
+The bridge sends `checks` as a **map** mixing status words with plain figures;
+it is normalized into a list. A status word sets `ok`; a figure leaves `ok`
+`null` and renders as an informational value rather than a green pass.
+
+Issue ids are made unique — two devices sharing `device_unavailable` are
+qualified by entity — so they are safe as list keys.
+
+`code`, `entity_ids` and `detail` are rendered only inside the collapsed
 **פרטים טכניים** section.
 
 ---
@@ -244,6 +282,9 @@ automations.
 ## `POST /api/bobi/probe`
 
 → `script.bobi_cc_probe`, which Home Assistant invokes with `probe_only=true`.
+
+The bridge nests its answer under `result`; the normalizer flattens it, so the
+top-level fields below are always the real values rather than nulls.
 
 Request: `{ "text": "כבה מזגן הורים ב-1:30 בלילה" }`
 
@@ -258,15 +299,21 @@ Request: `{ "text": "כבה מזגן הורים ב-1:30 בלילה" }`
                      "area": "חדר הורים", "time": "01:30" },
   "schedule_valid": true,
   "schedule_reason": "תוזמן ל-01:30",
-  "schedule_kind": "one_time",
+  "schedule_kind": "next_night_clock",
   "text": "…",
+  "warnings": [],
   "probe_only": true,
-  "would_execute": false
+  "would_execute": false,
+  "raw": { "executed": false, "result": { "…": "the untouched bridge response" } }
 }
 ```
 
-`probe_only: true` and `would_execute: false` are asserted by this application
-in both adapters — they are never derived from the bridge response.
+`probe_only: true` and `would_execute: false` are asserted by the normalizer —
+never derived from the bridge response. If the bridge ever reported
+`executed: true`, the flag still reads `false` **and** a warning is added, so
+the discrepancy is visible rather than hidden.
+
+`raw` carries the untouched bridge response for the Test Center's JSON view.
 
 The UI derives its pipeline
 (`טקסט → הבנה → יעד → תזמון → Skill → בדיקת בטיחות`) from these fields and

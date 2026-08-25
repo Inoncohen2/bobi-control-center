@@ -13,7 +13,6 @@ import { EmptyState, QueryBoundary } from '@/components/state/QueryBoundary';
 import { useDevices } from '@/hooks/queries';
 import {
   EMPTY_FILTERS,
-  areasOf,
   filterDevices,
   groupByArea,
   hasActiveFilters,
@@ -21,7 +20,7 @@ import {
   type DeviceFilters,
 } from '@/features/devices/filter';
 import { DEVICE_SCOPES, type BridgeDevice, type DeviceScope } from '@/types/api';
-import { SCOPE_LABELS, deviceName, isAvailable, stateLabel, timeAgo } from '@/utils/format';
+import { SCOPE_LABELS, stateLabel, timeAgo } from '@/utils/format';
 
 const AVAILABILITY_OPTIONS: Array<{ value: AvailabilityFilter; label: string }> = [
   { value: 'all', label: 'הכול' },
@@ -42,12 +41,10 @@ const TECHNICAL_FIELDS: Array<[string, string]> = [
 ];
 
 function DeviceDetail({ device, onClose }: { device: BridgeDevice; onClose: () => void }) {
-  const available = isAvailable(device.state);
-
   return (
-    <Modal open onClose={onClose} title={deviceName(device)}>
+    <Modal open onClose={onClose} title={device.name}>
       <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-900/40">
-        <Badge tone={available ? 'ok' : 'error'} dot>
+        <Badge tone={device.available ? 'ok' : 'error'} dot>
           {stateLabel(device.state)}
         </Badge>
         {device.last_changed ? (
@@ -60,7 +57,7 @@ function DeviceDetail({ device, onClose }: { device: BridgeDevice; onClose: () =
       <dl className="mt-4 space-y-3">
         <div>
           <dt className="text-sm text-slate-500 dark:text-slate-400">שם בבובי</dt>
-          <dd className="font-medium text-slate-900 dark:text-slate-100">{deviceName(device)}</dd>
+          <dd className="font-medium text-slate-900 dark:text-slate-100">{device.name}</dd>
         </div>
         {device.area ? (
           <div>
@@ -111,7 +108,7 @@ function DeviceDetail({ device, onClose }: { device: BridgeDevice; onClose: () =
         <TechnicalDetails
           source={device as unknown as Record<string, unknown>}
           known={TECHNICAL_FIELDS}
-          hide={['name', 'canonical', 'area', 'state', 'aliases', 'capabilities', 'limits']}
+          extra={device.extra}
         />
       </AdvancedDisclosure>
     </Modal>
@@ -119,8 +116,6 @@ function DeviceDetail({ device, onClose }: { device: BridgeDevice; onClose: () =
 }
 
 function DeviceCard({ device, onOpen }: { device: BridgeDevice; onOpen: () => void }) {
-  const available = isAvailable(device.state);
-
   return (
     <li>
       <button
@@ -130,13 +125,13 @@ function DeviceCard({ device, onOpen }: { device: BridgeDevice; onOpen: () => vo
       >
         {/* The user-facing name only — never the entity id. */}
         <p className="line-clamp-2 font-medium leading-snug text-slate-900 dark:text-slate-100">
-          {deviceName(device)}
+          {device.name}
         </p>
         {device.group ? (
           <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{device.group}</p>
         ) : null}
         <div className="mt-3">
-          <Badge tone={available ? 'ok' : 'error'} dot>
+          <Badge tone={device.available ? 'ok' : 'error'} dot>
             {stateLabel(device.state)}
           </Badge>
         </div>
@@ -157,9 +152,10 @@ export function DevicesPage() {
 
   const visible = useMemo(() => filterDevices(devices, filters), [devices, filters]);
   const grouped = useMemo(() => groupByArea(visible), [visible]);
-  const areas = useMemo(() => areasOf(devices), [devices]);
+  // Supplied by the backend rather than recomputed here.
+  const areas = query.data?.areas ?? [];
 
-  const openDevice = devices.find((device) => device.entity_id === openId) ?? null;
+  const openDevice = devices.find((device) => device.id === openId) ?? null;
   const filtersActive = hasActiveFilters(filters);
 
   return (
@@ -321,11 +317,11 @@ export function DevicesPage() {
                     </span>
                   </h2>
                   <ul className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-                    {areaDevices.map((device, index) => (
+                    {areaDevices.map((device) => (
                       <DeviceCard
-                        key={device.entity_id ?? `${area}-${index}`}
+                        key={device.id}
                         device={device}
-                        onOpen={() => setOpenId(device.entity_id)}
+                        onOpen={() => setOpenId(device.id)}
                       />
                     ))}
                   </ul>

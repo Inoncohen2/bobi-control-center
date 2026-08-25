@@ -23,10 +23,6 @@ const TECHNICAL_FIELDS: Array<[string, string]> = [
   ['risk', 'רמת סיכון'],
 ];
 
-function capabilityKey(capability: BridgeCapability, index: number): string {
-  return capability.id ?? capability.handler ?? capability.label ?? `capability-${index}`;
-}
-
 function CapabilityDetail({
   capability,
   onClose,
@@ -40,7 +36,7 @@ function CapabilityDetail({
     <Modal
       open
       onClose={onClose}
-      title={capability.label ?? capability.id ?? 'יכולת'}
+      title={capability.label}
       description={capability.example ? `לדוגמה: ${capability.example}` : undefined}
     >
       <div className="flex flex-wrap gap-2">
@@ -71,7 +67,7 @@ function CapabilityDetail({
         <TechnicalDetails
           source={capability as unknown as Record<string, unknown>}
           known={TECHNICAL_FIELDS}
-          hide={['label', 'example', 'group']}
+          extra={capability.extra}
         />
       </AdvancedDisclosure>
     </Modal>
@@ -90,9 +86,7 @@ function CapabilityCard({
   return (
     <Card interactive as="li" className="flex flex-col">
       <button type="button" onClick={onOpen} className="flex-1 text-right">
-        <h3 className="font-semibold text-slate-900 dark:text-slate-100">
-          {capability.label ?? capability.id ?? 'יכולת'}
-        </h3>
+        <h3 className="font-semibold text-slate-900 dark:text-slate-100">{capability.label}</h3>
         {capability.example ? (
           <p className="mt-1 text-sm leading-relaxed text-slate-500 dark:text-slate-400">
             „{capability.example}”
@@ -113,7 +107,8 @@ function CapabilityCard({
 }
 
 function ToggleRow({ toggle }: { toggle: CapabilityToggle }) {
-  const label = toggle.label ?? toggle.name ?? toggle.id ?? 'מתג';
+  const label = toggle.label;
+  // `enabled` is resolved by the backend; the raw state is only a fallback.
   const on = toggle.enabled ?? (toggle.state ?? '').toLowerCase() === 'on';
 
   return (
@@ -154,8 +149,7 @@ export function CapabilitiesPage() {
     return [...groups.entries()];
   }, [capabilities]);
 
-  const openCapability =
-    capabilities.find((capability, index) => capabilityKey(capability, index) === openKey) ?? null;
+  const openCapability = capabilities.find((capability) => capability.id === openKey) ?? null;
 
   return (
     <>
@@ -195,17 +189,13 @@ export function CapabilitiesPage() {
                   {group}
                 </h2>
                 <ul className="grid gap-3 sm:grid-cols-2">
-                  {groupCapabilities.map((capability) => {
-                    const index = capabilities.indexOf(capability);
-                    const key = capabilityKey(capability, index);
-                    return (
-                      <CapabilityCard
-                        key={key}
-                        capability={capability}
-                        onOpen={() => setOpenKey(key)}
-                      />
-                    );
-                  })}
+                  {groupCapabilities.map((capability) => (
+                    <CapabilityCard
+                      key={capability.id}
+                      capability={capability}
+                      onOpen={() => setOpenKey(capability.id)}
+                    />
+                  ))}
                 </ul>
               </section>
             ))}
@@ -217,8 +207,8 @@ export function CapabilitiesPage() {
                 </SectionTitle>
                 <Card className="p-0">
                   <ul className="divide-y divide-slate-100 dark:divide-slate-700/60">
-                    {data.toggles.map((toggle, index) => (
-                      <ToggleRow key={toggle.id ?? index} toggle={toggle} />
+                    {data.toggles.map((toggle) => (
+                      <ToggleRow key={toggle.id} toggle={toggle} />
                     ))}
                   </ul>
                 </Card>

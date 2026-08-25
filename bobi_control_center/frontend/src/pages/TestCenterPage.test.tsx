@@ -92,7 +92,7 @@ describe('TestCenterPage', () => {
         status: 'not_understood',
         terminal: false,
         skill: null,
-        understanding: null,
+        understanding: {},
         schedule_valid: null,
         schedule_reason: 'לא זוהתה כוונה בטקסט',
         schedule_kind: null,

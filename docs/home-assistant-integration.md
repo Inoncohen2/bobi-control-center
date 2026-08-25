@@ -44,6 +44,33 @@ It is reused by all nine endpoints and:
 - unwraps the response defensively (see below);
 - converts every Home Assistant failure into the app's structured error shape.
 
+### Normalization
+
+Unwrapping gets the payload; `app/services/normalize.py` then maps it onto the
+canonical contract. It is the only module that knows bridge field names, and it
+is written to tolerate variation:
+
+| Bridge sends | Canonical response |
+| --- | --- |
+| `entries` | `devices` |
+| `registry` (map **or** list) | `capabilities` |
+| `upcoming` / `profiles` / `drafts` | flat times, one `profiles` list, `has_draft` |
+| per-user `users` (tasks) | one flat `tasks` list with `owner` |
+| `{"result": {…}}` (probe) | flattened top-level fields |
+| `checks` as a **map** | `checks` as a list |
+
+Rules it follows:
+
+* emit **exactly one** collection per resource — never a populated list beside
+  an empty legacy one;
+* accept a map or a list wherever either is plausible;
+* never raise on a missing or oddly-typed field — a partial response must
+  produce an empty screen, not a 502;
+* route unmapped fields into a per-item `extra` map so nothing is silently lost;
+* resolve device tokens to friendly names, so the UI never receives a raw token;
+* drop anything resembling a phone number, LID or chat id, even if a future
+  bridge version starts sending one.
+
 ### Response unwrapping
 
 Home Assistant has shipped more than one shape for a service-call response, so

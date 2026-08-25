@@ -38,7 +38,6 @@ function avatarColor(seed: string): string {
 }
 
 function UserCard({ user }: { user: BridgeUser }) {
-  const name = user.name ?? user.id ?? 'משתמש';
   const role = (user.role ?? '').toLowerCase();
 
   return (
@@ -47,13 +46,13 @@ function UserCard({ user }: { user: BridgeUser }) {
         <span
           aria-hidden="true"
           className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-lg font-semibold text-white"
-          style={{ backgroundColor: avatarColor(user.id ?? name) }}
+          style={{ backgroundColor: avatarColor(user.id) }}
         >
-          {name.charAt(0)}
+          {user.name.charAt(0)}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="font-semibold text-slate-900 dark:text-slate-100">{name}</h3>
+            <h3 className="font-semibold text-slate-900 dark:text-slate-100">{user.name}</h3>
             {user.role ? <Badge tone="neutral">{ROLE_LABELS[role] ?? user.role}</Badge> : null}
             <Badge tone={user.enabled === false ? 'muted' : 'ok'} dot>
               {user.enabled === false ? 'מושבת' : 'פעיל'}
@@ -134,8 +133,8 @@ export function UsersPage() {
                   <span id="profiles-heading">פרופילים</span>
                 </SectionTitle>
                 <ul className="grid gap-3 lg:grid-cols-2">
-                  {data.users.map((user, index) => (
-                    <UserCard key={user.id ?? index} user={user} />
+                  {data.users.map((user) => (
+                    <UserCard key={user.id} user={user} />
                   ))}
                 </ul>
               </section>
@@ -155,13 +154,13 @@ export function UsersPage() {
                           <th scope="col" className="p-3 text-right font-medium text-slate-500">
                             הרשאה
                           </th>
-                          {data.users.map((user, index) => (
+                          {data.users.map((user) => (
                             <th
-                              key={user.id ?? index}
+                              key={user.id}
                               scope="col"
                               className="p-3 text-center font-medium text-slate-900 dark:text-slate-100"
                             >
-                              {user.name ?? user.id}
+                              {user.name}
                             </th>
                           ))}
                         </tr>
@@ -178,16 +177,16 @@ export function UsersPage() {
                             >
                               {permissionLabel(permission)}
                             </th>
-                            {data.users.map((user, index) => {
+                            {data.users.map((user) => {
                               const granted = user.permissions.includes(permission);
                               return (
-                                <td key={user.id ?? index} className="p-3 text-center">
+                                <td key={user.id} className="p-3 text-center">
                                   {/* Static, not a control: Phase 2 cannot write. */}
                                   <span
                                     role="img"
-                                    aria-label={`${permissionLabel(permission)} עבור ${
-                                      user.name ?? user.id
-                                    }: ${granted ? 'מותר' : 'לא מותר'}`}
+                                    aria-label={`${permissionLabel(permission)} עבור ${user.name}: ${
+                                      granted ? 'מותר' : 'לא מותר'
+                                    }`}
                                     className={cn(
                                       'inline-flex h-8 w-8 items-center justify-center rounded-lg',
                                       granted

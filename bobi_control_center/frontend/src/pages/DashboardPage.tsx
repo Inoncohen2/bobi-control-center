@@ -10,25 +10,20 @@ import type { BridgeIssue, StatusComponent } from '@/types/api';
 import { countLabel } from '@/utils/format';
 import { cn } from '@/utils/cn';
 
+/** `ok` is resolved by the backend, so tone follows it directly. */
 function componentTone(component: StatusComponent): BadgeTone {
   if (component.ok === true) return 'ok';
   if (component.ok === false) return 'warning';
-  const state = (component.state ?? '').toLowerCase();
-  if (state === 'online' || state === 'on' || state === 'connected') return 'ok';
-  if (state === 'offline' || state === 'error') return 'error';
-  if (state === 'degraded') return 'warning';
   return 'muted';
 }
 
 function HealthCard({ component }: { component: StatusComponent }) {
   return (
     <Card className="p-4">
-      <p className="text-sm text-slate-500 dark:text-slate-400">
-        {component.name ?? component.id ?? 'רכיב'}
-      </p>
+      <p className="text-sm text-slate-500 dark:text-slate-400">{component.name}</p>
       <div className="mt-1.5">
         <Badge tone={componentTone(component)} dot>
-          {component.label ?? component.state ?? 'לא ידוע'}
+          {component.label}
         </Badge>
       </div>
       {component.detail ? (
@@ -59,12 +54,13 @@ function StatCard({ label, value, warn }: { label: string; value: number; warn?:
 }
 
 function IssueRow({ issue }: { issue: BridgeIssue }) {
-  const severity = (issue.severity ?? 'warning').toLowerCase();
-  const isError = severity === 'error';
-  const title = issue.title ?? issue.label ?? issue.message ?? 'בעיה לא מזוהה';
-  const body = issue.message ?? issue.description ?? '';
+  const isError = issue.severity.toLowerCase() === 'error';
   // Technical identifiers stay out of the summary and live in the disclosure.
-  const technical = [issue.entity_id, ...(issue.entity_ids ?? []), issue.detail]
+  const technical = [
+    issue.code ? `code: ${issue.code}` : null,
+    ...issue.entity_ids,
+    issue.detail,
+  ]
     .filter(Boolean)
     .join('\n');
 
@@ -90,11 +86,11 @@ function IssueRow({ issue }: { issue: BridgeIssue }) {
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="font-medium text-slate-900 dark:text-slate-100">{title}</p>
+            <p className="font-medium text-slate-900 dark:text-slate-100">{issue.title}</p>
             {issue.component ? <Badge tone="neutral">{issue.component}</Badge> : null}
           </div>
-          {body ? (
-            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{body}</p>
+          {issue.message ? (
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{issue.message}</p>
           ) : null}
           {issue.suggested_action ? (
             <p className="mt-1.5 text-sm text-slate-500 dark:text-slate-400">
@@ -160,8 +156,8 @@ export function DashboardPage() {
               <EmptyState title="אין מידע על רכיבי המערכת" />
             ) : (
               <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                {status.data.components.map((component, index) => (
-                  <HealthCard key={component.id ?? index} component={component} />
+                {status.data.components.map((component) => (
+                  <HealthCard key={component.id} component={component} />
                 ))}
               </div>
             )}
@@ -220,8 +216,8 @@ export function DashboardPage() {
 
             {issues.length > 0 ? (
               <ul className="space-y-3">
-                {issues.slice(0, 5).map((issue, index) => (
-                  <IssueRow key={issue.id ?? index} issue={issue} />
+                {issues.slice(0, 5).map((issue) => (
+                  <IssueRow key={issue.id} issue={issue} />
                 ))}
               </ul>
             ) : null}

@@ -33,6 +33,12 @@ Technical identifiers exist in the data model but live behind an explicit
                             │  bridge contract models
                             ▼
 ┌──────────────────────────────────────────────────────────┐
+│  services/normalize.py                                    │
+│  raw bridge shapes → the canonical contract               │
+│  the ONLY module that knows bridge field names            │
+└───────────────────────────┬──────────────────────────────┘
+                            ▼
+┌──────────────────────────────────────────────────────────┐
 │  HomeAssistantAdapter (abstract — no write method)        │
 ├──────────────────────────────────────────────────────────┤
 │  RealHomeAssistantAdapter  ← SUPERVISOR_TOKEN present     │
@@ -87,18 +93,40 @@ bobi-control-center/
 └── docs/
 ```
 
-## 4. The bridge contract
+## 4. The canonical contract and normalization
 
-`models/bridge.py` defines one model per service. Two deliberate properties:
+`models/bridge.py` defines one model per resource. These are **not** the shapes
+Home Assistant sends: the bridge names its collections `entries`, `registry`,
+`upcoming`/`profiles`/`drafts` and per-user `users`, and nests the probe answer
+under `result`.
 
-- **`extra="allow"` everywhere.** The Capability Registry and device catalog are
-  Bobi's, and grow independently of this app. Unknown keys are preserved and
-  surfaced in the Advanced panel rather than dropped.
-- **Almost every field optional.** A partially-populated response must produce a
-  usable screen, not a 500.
+`services/normalize.py` is the only module that knows those names. Everything
+above it — routes, and therefore React — sees one clean schema.
 
-Both adapters return these models, so the frontend renders one shape regardless
-of which is active — which is what makes mock-mode development faithful.
+| Bridge sends | Canonical response |
+| --- | --- |
+| `entries` | `devices` (plus derived `areas`, `groups`, `available`) |
+| `registry` (map or list) | `capabilities` |
+| `upcoming` + `profiles` + `drafts` | flat times + one `profiles` list + `has_draft` |
+| per-user `users` | one flat `tasks` list with `owner` and `list_name` |
+| `{"result": {...}}` | flattened probe fields |
+| `checks` as a **map** | `checks` as a list |
+
+Three properties make it safe:
+
+- **One representation.** A response carries exactly one collection per
+  resource. There is never a populated list beside an empty legacy one — the
+  bug this layer was written to fix.
+- **Nothing dropped.** Unmapped fields land in a per-item `extra` map, surfaced
+  in the Advanced panel, so a growing registry shows up rather than vanishing.
+- **Tolerant.** A collection may arrive as a map or a list; a field may be
+  missing or oddly typed. A partial response produces an empty screen, not a
+  502. `checks` arriving as a map is exactly what used to 502 the diagnostics
+  endpoint.
+
+Both adapters run through the same normalizer, and the mock emits raw payloads
+in the real bridge shape — so mock mode is a rehearsal of the real path, not a
+parallel one.
 
 ## 5. Data flow
 
@@ -112,7 +140,8 @@ of which is active — which is what makes mock-mode development faithful.
    the scope against the bridge's list.
 5. `RealHomeAssistantAdapter.get_devices()` POSTs to
    `…/services/script/bobi_cc_devices?return_response`.
-6. The response is unwrapped, validated into `BridgeDevices`, and returned.
+6. The response is unwrapped, then `normalize_devices()` maps `entries` onto the
+   canonical `BridgeDevices`.
 
 Scope is a **bridge** parameter, so changing it refetches. Search, area and
 availability filters are client-side over the returned set.
@@ -120,8 +149,10 @@ availability filters are client-side over the returned set.
 ### The probe path
 
 `POST /api/bobi/probe` → `script.bobi_cc_probe`, which Home Assistant runs with
-`probe_only=true`. `features/probe/pipeline.ts` derives the visual stages from
-the flat result, as a pure function so every branch is testable without React.
+`probe_only=true`. The bridge nests its answer under `result`;
+`normalize_probe()` flattens it and asserts the safety invariants.
+`features/probe/pipeline.ts` then derives the visual stages from the flat
+result, as a pure function so every branch is testable without React.
 
 ## 6. Ingress
 
@@ -145,7 +176,8 @@ inside it, across direct load, internal navigation and browser refresh.
 | No write method exists | `HomeAssistantAdapter` declares none |
 | Only the bridge is reachable | `ALLOWED_SERVICES` checked before the request |
 | One non-GET route | A test enumerates the router |
-| The probe cannot execute | `would_execute = False` hard-coded in both adapters |
+| The probe cannot execute | `would_execute=False` hard-coded in the normalizer, and the model's default |
+| An execution claim cannot hide | A bridge reporting `executed: true` still yields `false`, plus a visible warning |
 | The UI offers no write control | Disabled controls labelled *"עריכה תהיה זמינה בשלב הבא"* |
 
 ## 8. Error handling
@@ -175,7 +207,21 @@ via the shared `QueryBoundary`.
 - No phone numbers or LIDs: the bridge withholds them and the UI shows only
   connection status.
 
-## 10. Deployment
+## 10. Load
+
+Every fetch is a Home Assistant service call, so polling is deliberately modest:
+
+| Screen | Interval |
+| --- | --- |
+| Dashboard, devices | 20s |
+| Diagnostics | 60s |
+| Capabilities, users, Shabbat, rules, tasks | on entry only |
+| Test Center | explicit button press only |
+
+`refetchIntervalInBackground` is false, so polling stops while the tab is
+hidden. Measured in the real install at ~0.08% CPU and ~44 MB.
+
+## 11. Deployment
 
 - **Development**: Vite on `:5173` proxies `/api` to uvicorn on `:8099`; no
   token means mock data.

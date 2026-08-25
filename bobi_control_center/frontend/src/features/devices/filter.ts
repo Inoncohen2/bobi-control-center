@@ -7,7 +7,7 @@
  */
 
 import type { BridgeDevice } from '@/types/api';
-import { deviceName, isAvailable } from '@/utils/format';
+
 
 export type AvailabilityFilter = 'all' | 'available' | 'unavailable';
 
@@ -29,7 +29,7 @@ function matchesSearch(device: BridgeDevice, search: string): boolean {
   if (!needle) return true;
 
   const haystacks = [
-    deviceName(device),
+    device.name,
     device.area ?? '',
     device.group ?? '',
     ...(device.aliases ?? []),
@@ -42,9 +42,9 @@ export function filterDevices(devices: BridgeDevice[], filters: DeviceFilters): 
     if (!matchesSearch(device, filters.search)) return false;
     if (filters.area && device.area !== filters.area) return false;
 
-    const available = isAvailable(device.state);
-    if (filters.availability === 'available' && !available) return false;
-    if (filters.availability === 'unavailable' && available) return false;
+    // `available` is derived server-side, so the UI does not re-derive it.
+    if (filters.availability === 'available' && !device.available) return false;
+    if (filters.availability === 'unavailable' && device.available) return false;
     return true;
   });
 }

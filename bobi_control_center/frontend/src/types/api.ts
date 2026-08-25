@@ -1,21 +1,19 @@
 /**
- * TypeScript mirror of the backend's bridge models.
+ * TypeScript mirror of the backend's **canonical** contract.
  *
- * These shapes come from Bobi's `script.bobi_cc_*` services. Two properties
- * carry through from the backend and matter when rendering:
+ * These are not the shapes Home Assistant sends. The backend's
+ * `app/services/normalize.py` maps the raw bridge response onto these, so React
+ * receives one clean schema and contains no normalization logic of its own.
  *
- * - **Almost everything is optional.** A partial bridge response must still
- *   produce a usable screen, so every component treats missing values as
- *   "unknown" rather than assuming they exist.
- * - **Unknown fields are preserved.** The registry grows independently of this
- *   app, so extra keys are rendered in the Advanced panel rather than dropped.
+ * Every item carries an `extra` map holding fields the normalizer did not map
+ * explicitly — rendered in the "מתקדם / פרטים טכניים" disclosure so a growing
+ * registry surfaces rather than disappearing.
  *
- * `entity_id` and `handler` are technical: display them only inside the
- * "מתקדם / פרטים טכניים" disclosure.
+ * `entity_id` and `handler` are technical: display them only inside that
+ * disclosure.
  */
 
-/** Any bridge object may carry keys this app does not know about. */
-export type Extras = Record<string, unknown>;
+export type Extra = Record<string, unknown>;
 
 // --- connection ------------------------------------------------------------
 export interface ConnectionInfo {
@@ -28,55 +26,64 @@ export interface ConnectionInfo {
 }
 
 // --- status ----------------------------------------------------------------
-export interface StatusComponent extends Extras {
-  id: string | null;
-  name: string | null;
+export interface StatusComponent {
+  id: string;
+  name: string;
+  label: string;
   state: string | null;
-  label: string | null;
-  detail: string | null;
   ok: boolean | null;
+  detail: string | null;
 }
 
-export interface BridgeStatus extends Extras {
+export interface BridgeStatus {
   ok: boolean | null;
   version: string | null;
   uptime: string | null;
   components: StatusComponent[];
+  /** Numeric headline figures, rendered dynamically. */
   counts: Record<string, number>;
+  /** Remaining scalar fields the bridge sent. */
+  details: Record<string, string>;
   writes_enabled: boolean;
 }
 
 // --- devices ---------------------------------------------------------------
-export interface DeviceLimits extends Extras {
+export interface DeviceLimits {
   min: number | null;
   max: number | null;
   step: number | null;
 }
 
-export interface BridgeDevice extends Extras {
-  entity_id: string | null;
-  name: string | null;
-  /** The human-facing name. Preferred over `name` everywhere in the UI. */
-  canonical: string | null;
-  semantic_scopes: string[];
-  aliases: string[];
-  domain: string | null;
-  group: string | null;
+export interface BridgeDevice {
+  /** Stable key. */
+  id: string;
+  /** The user-facing name. Never an entity id. */
+  name: string;
   area: string | null;
+  group: string | null;
+  domain: string | null;
   state: string | null;
+  available: boolean;
+  aliases: string[];
+  capabilities: string[];
+  semantic_scopes: string[];
   controllable: boolean | null;
   logical_controllable: boolean | null;
+  entity_id: string | null;
   handler: string | null;
-  capabilities: string[];
   limits: DeviceLimits | null;
   last_changed: string | null;
+  extra: Extra;
 }
 
-export interface BridgeDevices extends Extras {
-  scope: string | null;
-  include_unavailable: boolean | null;
-  count: number | null;
+export interface BridgeDevices {
+  scope: string;
+  include_unavailable: boolean;
+  count: number;
   devices: BridgeDevice[];
+  /** Derived server-side. */
+  areas: string[];
+  groups: string[];
 }
 
 export const DEVICE_SCOPES = [
@@ -96,37 +103,37 @@ export const DEVICE_SCOPES = [
 export type DeviceScope = (typeof DEVICE_SCOPES)[number];
 
 // --- capabilities ----------------------------------------------------------
-export interface BridgeCapability extends Extras {
-  id: string | null;
+export interface BridgeCapability {
+  id: string;
+  label: string;
+  example: string | null;
+  risk: string | null;
   handler: string | null;
   local: boolean | null;
   local_after_parse: boolean | null;
-  risk: string | null;
-  label: string | null;
-  example: string | null;
   group: string | null;
+  extra: Extra;
 }
 
 /** A runtime master switch. READ-ONLY in Phase 2. */
-export interface CapabilityToggle extends Extras {
-  id: string | null;
-  name: string | null;
-  label: string | null;
-  state: string | null;
+export interface CapabilityToggle {
+  id: string;
+  label: string;
   enabled: boolean | null;
+  state: string | null;
   entity_id: string | null;
 }
 
-export interface BridgeCapabilities extends Extras {
-  count: number | null;
+export interface BridgeCapabilities {
+  count: number;
   capabilities: BridgeCapability[];
   toggles: CapabilityToggle[];
 }
 
 // --- users -----------------------------------------------------------------
-export interface BridgeUser extends Extras {
-  id: string | null;
-  name: string | null;
+export interface BridgeUser {
+  id: string;
+  name: string;
   role: string | null;
   enabled: boolean | null;
   whatsapp_connected: boolean | null;
@@ -134,74 +141,68 @@ export interface BridgeUser extends Extras {
   task_list: string | null;
   permissions: string[];
   areas: string[];
+  extra: Extra;
 }
 
-export interface BridgeUsers extends Extras {
-  count: number | null;
+export interface BridgeUsers {
+  count: number;
   users: BridgeUser[];
 }
 
 // --- probe -----------------------------------------------------------------
-export interface ProbeUnderstanding extends Extras {
-  intent: string | null;
-  action: string | null;
-  domain: string | null;
-  target: string | null;
-  targets: string[];
-  area: string | null;
-  value: unknown;
-  time: string | null;
-  date: string | null;
-}
-
-export interface BridgeProbe extends Extras {
+export interface BridgeProbe {
   handled: boolean | null;
   status: string | null;
   terminal: boolean | null;
   skill: string | null;
-  understanding: ProbeUnderstanding | null;
+  /** Shape varies by skill, so it is rendered generically. */
+  understanding: Record<string, unknown>;
   schedule_valid: boolean | null;
   schedule_reason: string | null;
   schedule_kind: string | null;
   text: string | null;
   error: string | null;
-  /** Invariants of the Phase 2 contract. Always true / false respectively. */
+  warnings: string[];
+  /** Invariants of the Phase 2 contract. */
   probe_only: boolean;
   would_execute: boolean;
+  /** The unmodified bridge response, for the JSON view. */
+  raw: Record<string, unknown>;
 }
 
 // --- shabbat ---------------------------------------------------------------
-export interface ShabbatProfile extends Extras {
-  id: string | null;
-  name: string | null;
-  label: string | null;
+export interface ShabbatProfile {
+  id: string;
+  /** The bridge's own profile key, e.g. `pre_off`. */
+  kind: string;
+  label: string;
   active: boolean | null;
-  devices: string[];
   time: string | null;
   offset_minutes: number | null;
+  /** Friendly device names, already resolved from tokens by the backend. */
+  devices: string[];
+  extra: Extra;
 }
 
-export interface BridgeShabbat extends Extras {
+export interface BridgeShabbat {
   candle_lighting: string | null;
   havdalah: string | null;
+  parasha: string | null;
   pre_shabbat_offset_minutes: number | null;
-  pre_off_profile: ShabbatProfile | null;
-  pre_on_profile: ShabbatProfile | null;
-  night_off_profile: ShabbatProfile | null;
-  morning_on_profile: ShabbatProfile | null;
-  ac_temperatures: Record<string, unknown>;
-  /** device token → friendly label, so a raw token is never shown. */
-  device_labels: Record<string, string>;
-  has_draft: boolean | null;
+  profiles: ShabbatProfile[];
+  /** Friendly device name → temperature, already resolved. */
+  ac_temperatures: Record<string, string>;
+  has_draft: boolean;
+  draft_owners: string[];
   /** False for the whole of Phase 2. */
   writes_enabled: boolean;
+  extra: Extra;
 }
 
 // --- rules -----------------------------------------------------------------
-export interface BridgeRule extends Extras {
-  id: string | null;
-  name: string | null;
-  label: string | null;
+export interface BridgeRule {
+  id: string;
+  name: string;
   description: string | null;
   enabled: boolean | null;
   kind: string | null;
@@ -210,56 +211,59 @@ export interface BridgeRule extends Extras {
   targets: string[];
   last_triggered: string | null;
   entity_id: string | null;
+  extra: Extra;
 }
 
-export interface BridgeRules extends Extras {
-  count: number | null;
+export interface BridgeRules {
+  count: number;
   rules: BridgeRule[];
 }
 
 // --- tasks -----------------------------------------------------------------
-export interface BridgeTask extends Extras {
-  id: string | null;
-  title: string | null;
-  summary: string | null;
-  status: string | null;
-  completed: boolean | null;
-  due: string | null;
+export interface BridgeTask {
+  id: string;
+  title: string;
   owner: string | null;
+  completed: boolean;
+  status: string | null;
+  due: string | null;
   list_name: string | null;
+  extra: Extra;
 }
 
-export interface BridgeTasks extends Extras {
-  count: number | null;
+export interface BridgeTasks {
+  count: number;
   tasks: BridgeTask[];
+  owners: string[];
 }
 
 // --- diagnostics -----------------------------------------------------------
-export interface DiagnosticCheck extends Extras {
-  id: string | null;
-  name: string | null;
-  label: string | null;
+export interface DiagnosticCheck {
+  id: string;
+  label: string;
+  /** null for an informational figure such as a count. */
   ok: boolean | null;
+  value: string | null;
   detail: string | null;
 }
 
-export interface BridgeIssue extends Extras {
-  id: string | null;
-  severity: string | null;
-  title: string | null;
-  label: string | null;
+export interface BridgeIssue {
+  id: string;
+  severity: string;
+  title: string;
   message: string | null;
-  description: string | null;
   component: string | null;
-  entity_id: string | null;
+  /** Technical: show only under פרטים טכניים. */
+  code: string | null;
   entity_ids: string[];
   suggested_action: string | null;
   detail: string | null;
+  extra: Extra;
 }
 
-export interface BridgeDiagnostics extends Extras {
+export interface BridgeDiagnostics {
   ok: boolean | null;
-  issue_count: number | null;
+  issue_count: number;
   issues: BridgeIssue[];
   checks: DiagnosticCheck[];
 }

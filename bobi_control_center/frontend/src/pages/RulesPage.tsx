@@ -18,14 +18,13 @@ const KIND_LABELS: Record<string, string> = {
 };
 
 function RuleCard({ rule }: { rule: BridgeRule }) {
-  const name = rule.name ?? rule.label ?? rule.id ?? 'כלל';
   const kind = (rule.kind ?? '').toLowerCase();
 
   return (
     <Card as="li" className="flex flex-col gap-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="font-semibold text-slate-900 dark:text-slate-100">{name}</h3>
+          <h3 className="font-semibold text-slate-900 dark:text-slate-100">{rule.name}</h3>
           {rule.description ? (
             <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
               {rule.description}
@@ -73,8 +72,7 @@ function RuleCard({ rule }: { rule: BridgeRule }) {
             ['entity_id', 'מזהה טכני'],
             ['kind', 'סוג'],
           ]}
-          hide={['name', 'label', 'description', 'enabled', 'schedule', 'trigger', 'targets',
-                 'last_triggered']}
+          extra={rule.extra}
         />
       </AdvancedDisclosure>
     </Card>
@@ -113,8 +111,8 @@ export function RulesPage() {
       >
         {(data) => (
           <ul className="space-y-3">
-            {data.rules.map((rule, index) => (
-              <RuleCard key={rule.id ?? index} rule={rule} />
+            {data.rules.map((rule) => (
+              <RuleCard key={rule.id} rule={rule} />
             ))}
           </ul>
         )}

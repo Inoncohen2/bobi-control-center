@@ -48,26 +48,24 @@ export function TechnicalRow({ label, value }: { label: string; value: ReactNode
 }
 
 /**
- * Render a bridge object's technical fields.
+ * Render a normalized object's technical fields.
  *
- * `known` names the fields to show with friendly labels; everything else the
- * bridge sent is listed under "שדות נוספים" so a growing registry surfaces here
- * rather than disappearing.
+ * `known` names the fields to show with friendly labels. `extra` is the
+ * backend's own map of fields the normalizer did not map explicitly — listed
+ * under "שדות נוספים" so a growing bridge surfaces here rather than
+ * disappearing.
  */
 export function TechnicalDetails({
   source,
   known,
-  hide = [],
+  extra,
 }: {
   source: Record<string, unknown>;
   known: Array<[key: string, label: string]>;
-  /** Keys already rendered in the normal UI, so they are not repeated. */
-  hide?: string[];
+  extra?: Record<string, unknown>;
 }) {
-  const knownKeys = new Set([...known.map(([key]) => key), ...hide]);
-  const extras = Object.entries(source).filter(
-    ([key, value]) =>
-      !knownKeys.has(key) && value !== null && value !== undefined && value !== '',
+  const extras = Object.entries(extra ?? {}).filter(
+    ([, value]) => value !== null && value !== undefined && value !== '',
   );
 
   return (

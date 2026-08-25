@@ -143,17 +143,29 @@ export function probeStatusLabel(status: string | null | undefined): string {
   return PROBE_STATUS_LABELS[status] ?? status;
 }
 
+/**
+ * Schedule kinds Bobi's dispatcher returns.
+ *
+ * `next_night_clock` is one the real bridge sends: a clock time in the small
+ * hours, which Bobi resolves to the coming night rather than today.
+ */
 export const SCHEDULE_KIND_LABELS: Record<string, string> = {
   one_time: 'חד־פעמי',
+  next_night_clock: 'הלילה הקרוב',
+  next_day_clock: 'מחר',
+  today_clock: 'היום',
   daily: 'יומי',
   weekly: 'שבועי',
   immediate: 'מיידי',
   recurring: 'חוזר',
+  relative: 'יחסי',
 };
 
 export function scheduleKindLabel(kind: string | null | undefined): string {
   if (!kind) return '—';
-  return SCHEDULE_KIND_LABELS[kind] ?? kind;
+  // An unrecognised kind is still a machine token, so at least soften it
+  // rather than showing snake_case to a household member.
+  return SCHEDULE_KIND_LABELS[kind] ?? kind.replace(/_/g, ' ');
 }
 
 /** Format a value from an open-ended bridge object for display. */

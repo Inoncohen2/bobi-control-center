@@ -9,9 +9,11 @@ import './index.css';
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // Household-sized data: refetching on every focus is noise.
+      // Every fetch is a Home Assistant service call, so the defaults are
+      // deliberately quiet: no refetch storm on focus, and a stale window that
+      // lets screens without their own polling serve from cache.
       refetchOnWindowFocus: false,
-      staleTime: 30_000,
+      staleTime: 60_000,
       retry: 1,
     },
   },

@@ -38,6 +38,12 @@ served through Home Assistant Ingress.
 5. *(Optional)* Toggle **Show in sidebar** to get a **Bobi** entry in the Home
    Assistant sidebar.
 
+   `ingress_panel` is Supervisor-owned state, not a manifest key: it starts
+   `false` for every Ingress app and this toggle is what turns it on. The
+   manifest supplies the panel's title and icon so the result looks right. By
+   default the entry is admin-only (`panel_admin: true`) — change that in
+   `config.yaml` if every household member should see it.
+
 There is **no token to paste**. The Supervisor injects `SUPERVISOR_TOKEN`
 because the app declares `homeassistant_api: true`, and the backend uses it
 server-side only.
@@ -93,6 +99,13 @@ The most important safety surface. Type something you would send Bobi, press
 built from the bridge's own `handled`, `status`, `terminal`, `skill`,
 `understanding` and `schedule_*` fields, under a prominent
 **בדיקה בלבד — לא בוצעה שום פעולה** banner.
+
+### Load
+
+Every refresh is a Home Assistant service call, so polling is deliberately
+modest: dashboard and devices every 20s, diagnostics every 60s, and everything
+else on entry only. Polling stops entirely while the tab is hidden. Measured in
+the real install at ~0.08% CPU and ~44 MB.
 
 ### Technical detail stays hidden
 

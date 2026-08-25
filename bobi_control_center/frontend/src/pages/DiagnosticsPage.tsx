@@ -8,8 +8,9 @@ import { useDiagnostics } from '@/hooks/queries';
 import type { BridgeIssue, DiagnosticCheck } from '@/types/api';
 import { cn } from '@/utils/cn';
 
+/** The backend normalizes severity; this only collapses it to three buckets. */
 function severityOf(issue: BridgeIssue): 'error' | 'warning' | 'ok' {
-  const value = (issue.severity ?? 'warning').toLowerCase();
+  const value = issue.severity.toLowerCase();
   if (value === 'error' || value === 'critical') return 'error';
   if (value === 'ok' || value === 'info') return 'ok';
   return 'warning';
@@ -37,12 +38,15 @@ function IssueCard({ issue }: { issue: BridgeIssue }) {
   const severity = severityOf(issue);
   const Icon = SECTIONS.find((section) => section.severity === severity)?.icon ?? AlertTriangle;
 
-  const title = issue.title ?? issue.label ?? issue.message ?? 'בעיה לא מזוהה';
-  const body = issue.message ?? issue.description ?? '';
-
-  // Entity ids are technical and belong only in the collapsed section.
-  const entities = [issue.entity_id, ...(issue.entity_ids ?? [])].filter(Boolean) as string[];
-  const technical = [...entities, issue.detail].filter(Boolean).join('\n');
+  // Entity ids and the machine code are technical and belong only in the
+  // collapsed section.
+  const technical = [
+    issue.code ? `code: ${issue.code}` : null,
+    ...issue.entity_ids,
+    issue.detail,
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   return (
     <Card as="li" className={BORDER[severity]}>
@@ -54,13 +58,13 @@ function IssueCard({ issue }: { issue: BridgeIssue }) {
         />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="font-semibold text-slate-900 dark:text-slate-100">{title}</h3>
+            <h3 className="font-semibold text-slate-900 dark:text-slate-100">{issue.title}</h3>
             {issue.component ? <Badge tone="neutral">{issue.component}</Badge> : null}
           </div>
 
-          {body && body !== title ? (
+          {issue.message ? (
             <p className="mt-1.5 text-sm leading-relaxed text-slate-600 dark:text-slate-300">
-              {body}
+              {issue.message}
             </p>
           ) : null}
 
@@ -95,20 +99,23 @@ function IssueCard({ issue }: { issue: BridgeIssue }) {
 }
 
 function CheckRow({ check }: { check: DiagnosticCheck }) {
-  const ok = check.ok !== false;
   return (
     <li className="flex items-center justify-between gap-3 px-4 py-3">
       <div className="min-w-0">
-        <p className="text-sm font-medium text-slate-800 dark:text-slate-200">
-          {check.label ?? check.name ?? check.id ?? 'בדיקה'}
-        </p>
+        <p className="text-sm font-medium text-slate-800 dark:text-slate-200">{check.label}</p>
         {check.detail ? (
           <p className="text-xs text-slate-500 dark:text-slate-400">{check.detail}</p>
         ) : null}
       </div>
-      <Badge tone={ok ? 'ok' : 'warning'} dot>
-        {ok ? 'תקין' : 'דורש בדיקה'}
-      </Badge>
+      {/* `ok` is null for a measurement such as a count, which is neither a
+          pass nor a failure — it is shown as a plain figure. */}
+      {check.ok === null ? (
+        <Badge tone="neutral">{check.value ?? '—'}</Badge>
+      ) : (
+        <Badge tone={check.ok ? 'ok' : 'warning'} dot>
+          {check.ok ? 'תקין' : 'דורש בדיקה'}
+        </Badge>
+      )}
     </li>
   );
 }
@@ -129,7 +136,7 @@ export function DiagnosticsPage() {
         onRetry={() => void query.refetch()}
       >
         {(report) => {
-          const issues = report.issues ?? [];
+          const issues = report.issues;
           const counts = {
             error: issues.filter((issue) => severityOf(issue) === 'error').length,
             warning: issues.filter((issue) => severityOf(issue) === 'warning').length,
@@ -153,7 +160,7 @@ export function DiagnosticsPage() {
                 </Card>
                 <Card className="p-4 text-center">
                   <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
-                    {(report.checks ?? []).filter((check) => check.ok !== false).length}
+                    {report.checks.filter((check) => check.ok !== false).length}
                   </p>
                   <p className="text-sm text-slate-500 dark:text-slate-400">בדיקות תקינות</p>
                 </Card>
@@ -180,8 +187,8 @@ export function DiagnosticsPage() {
                         {section.title} ({sectionIssues.length})
                       </h2>
                       <ul className="space-y-3">
-                        {sectionIssues.map((issue, index) => (
-                          <IssueCard key={issue.id ?? index} issue={issue} />
+                        {sectionIssues.map((issue) => (
+                          <IssueCard key={issue.id} issue={issue} />
                         ))}
                       </ul>
                     </section>
@@ -189,15 +196,15 @@ export function DiagnosticsPage() {
                 })
               )}
 
-              {(report.checks ?? []).length > 0 ? (
+              {report.checks.length > 0 ? (
                 <section aria-labelledby="checks-heading">
                   <SectionTitle>
                     <span id="checks-heading">בדיקות שבוצעו</span>
                   </SectionTitle>
                   <Card className="p-0">
                     <ul className="divide-y divide-slate-100 dark:divide-slate-700/60">
-                      {report.checks.map((check, index) => (
-                        <CheckRow key={check.id ?? index} check={check} />
+                      {report.checks.map((check) => (
+                        <CheckRow key={check.id} check={check} />
                       ))}
                     </ul>
                   </Card>

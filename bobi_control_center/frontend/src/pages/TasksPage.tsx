@@ -11,17 +11,8 @@ import type { BridgeTask } from '@/types/api';
 import { formatDate } from '@/utils/format';
 import { cn } from '@/utils/cn';
 
-function isDone(task: BridgeTask): boolean {
-  if (task.completed !== null && task.completed !== undefined) return task.completed;
-  return (task.status ?? '').toLowerCase() === 'completed';
-}
-
-function taskTitle(task: BridgeTask): string {
-  return task.title ?? task.summary ?? 'משימה';
-}
-
 function TaskRow({ task }: { task: BridgeTask }) {
-  const done = isDone(task);
+  const done = task.completed;
 
   return (
     <li className="flex items-center gap-3 px-4 py-3">
@@ -48,7 +39,7 @@ function TaskRow({ task }: { task: BridgeTask }) {
               : 'text-slate-900 dark:text-slate-100',
           )}
         >
-          {taskTitle(task)}
+          {task.title}
         </p>
         <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-slate-500 dark:text-slate-400">
           {task.owner ? <span>{task.owner}</span> : null}
@@ -90,8 +81,8 @@ export function TasksPage() {
         }
       >
         {(data) => {
-          const open = data.tasks.filter((task) => !isDone(task));
-          const completed = data.tasks.filter(isDone);
+          const open = data.tasks.filter((task) => !task.completed);
+          const completed = data.tasks.filter((task) => task.completed);
 
           return (
             <div className="space-y-6">
@@ -106,8 +97,8 @@ export function TasksPage() {
                     </div>
                   ) : (
                     <ul className="divide-y divide-slate-100 dark:divide-slate-700/60">
-                      {open.map((task, index) => (
-                        <TaskRow key={task.id ?? index} task={task} />
+                      {open.map((task) => (
+                        <TaskRow key={task.id} task={task} />
                       ))}
                     </ul>
                   )}
@@ -132,8 +123,8 @@ export function TasksPage() {
                   {showCompleted ? (
                     <Card className="p-0">
                       <ul className="divide-y divide-slate-100 dark:divide-slate-700/60">
-                        {completed.map((task, index) => (
-                          <TaskRow key={task.id ?? index} task={task} />
+                        {completed.map((task) => (
+                          <TaskRow key={task.id} task={task} />
                         ))}
                       </ul>
                     </Card>

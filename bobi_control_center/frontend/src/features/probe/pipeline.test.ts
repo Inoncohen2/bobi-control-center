@@ -40,7 +40,9 @@ describe('buildPipeline', () => {
     const schedule = steps.find((step) => step.id === 'schedule');
 
     expect(schedule?.status).toBe('ok');
-    expect(schedule?.value).toBe('חד־פעמי');
+    // The real bridge returns `next_night_clock`, which must not reach the
+    // user as a raw machine token.
+    expect(schedule?.value).toBe('הלילה הקרוב');
     expect(schedule?.detail).toBe('תוזמן ל-01:30');
   });
 
@@ -68,7 +70,7 @@ describe('buildPipeline', () => {
 
   it('warns when nothing was understood and no target resolved', () => {
     const steps = buildPipeline(
-      makeProbe({ handled: false, understanding: null }),
+      makeProbe({ handled: false, understanding: {} }),
       TEXT,
     );
     const target = steps.find((step) => step.id === 'target');
@@ -88,13 +90,7 @@ describe('buildPipeline', () => {
         understanding: {
           intent: 'device_control',
           action: 'turn_off',
-          domain: null,
-          target: null,
           targets: ['מזגן סלון', 'מזגן הורים'],
-          area: null,
-          value: null,
-          time: null,
-          date: null,
         },
       }),
       TEXT,
@@ -117,6 +113,6 @@ describe('understandingRows', () => {
   });
 
   it('returns nothing when the bridge sent no understanding', () => {
-    expect(understandingRows(makeProbe({ understanding: null }))).toEqual([]);
+    expect(understandingRows(makeProbe({ understanding: {} }))).toEqual([]);
   });
 });

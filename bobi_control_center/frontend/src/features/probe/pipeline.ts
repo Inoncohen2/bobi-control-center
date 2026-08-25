@@ -9,6 +9,13 @@
 import type { BridgeProbe } from '@/types/api';
 import { displayValue, probeStatusLabel, scheduleKindLabel } from '@/utils/format';
 
+/** Read an open-map value as display text, or undefined when unusable. */
+function asText(value: unknown): string | undefined {
+  if (value === null || value === undefined || value === '') return undefined;
+  if (typeof value === 'object') return undefined;
+  return String(value);
+}
+
 export type StepStatus = 'ok' | 'warning' | 'skipped' | 'failed';
 
 export interface PipelineStep {
@@ -31,7 +38,8 @@ export function stepStatusLabel(status: StepStatus): string {
 }
 
 export function buildPipeline(result: BridgeProbe, originalText: string): PipelineStep[] {
-  const understanding = result.understanding ?? null;
+  // Normalized server-side: always an object, never null.
+  const understanding = result.understanding;
   const handled = result.handled === true;
 
   const steps: PipelineStep[] = [
@@ -46,23 +54,22 @@ export function buildPipeline(result: BridgeProbe, originalText: string): Pipeli
       label: 'הבנה',
       status: handled ? 'ok' : 'failed',
       value: probeStatusLabel(result.status),
-      detail: understanding?.intent ?? understanding?.action ?? undefined,
+      detail: asText(understanding.intent) ?? asText(understanding.action),
     },
   ];
 
   // Target: only meaningful once something was understood.
+  const targets = understanding.targets;
   const target =
-    understanding?.target ??
-    (understanding?.targets && understanding.targets.length > 0
-      ? understanding.targets.join(', ')
-      : null);
+    asText(understanding.target) ??
+    (Array.isArray(targets) && targets.length > 0 ? targets.map(String).join(', ') : null);
 
   steps.push({
     id: 'target',
     label: 'יעד',
     status: target ? 'ok' : handled ? 'skipped' : 'warning',
     value: target ?? 'לא זוהה',
-    detail: understanding?.area ?? undefined,
+    detail: asText(understanding.area),
   });
 
   // Schedule: three distinct outcomes — valid, invalid, or not part of the request.
@@ -72,7 +79,7 @@ export function buildPipeline(result: BridgeProbe, originalText: string): Pipeli
       label: 'תזמון',
       status: 'ok',
       value: scheduleKindLabel(result.schedule_kind),
-      detail: result.schedule_reason ?? understanding?.time ?? undefined,
+      detail: result.schedule_reason ?? asText(understanding.time),
     });
   } else if (result.schedule_valid === false) {
     steps.push({
@@ -115,7 +122,6 @@ export function buildPipeline(result: BridgeProbe, originalText: string): Pipeli
 /** Rows for the "מה בובי הבין" table. Skips empty values. */
 export function understandingRows(result: BridgeProbe): Array<[string, string]> {
   const understanding = result.understanding;
-  if (!understanding) return [];
 
   const labels: Record<string, string> = {
     intent: 'כוונה',

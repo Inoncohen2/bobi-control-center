@@ -7,41 +7,20 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { DisabledAction, ReadOnlyNotice } from '@/components/ui/ReadOnly';
 import { EmptyState, QueryBoundary } from '@/components/state/QueryBoundary';
 import { useShabbat } from '@/hooks/queries';
-import type { BridgeShabbat, ShabbatProfile } from '@/types/api';
-import { displayValue } from '@/utils/format';
+import type { ShabbatProfile } from '@/types/api';
 
-/** Resolve a device token to its friendly label — a raw token is never shown. */
-function labelFor(config: BridgeShabbat, token: string): string {
-  return config.device_labels?.[token] ?? token;
-}
-
-function ProfileCard({
-  title,
-  profile,
-  config,
-}: {
-  title: string;
-  profile: ShabbatProfile | null;
-  config: BridgeShabbat;
-}) {
-  if (!profile) {
-    return (
-      <Card as="li">
-        <h3 className="font-semibold text-slate-900 dark:text-slate-100">{title}</h3>
-        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">לא מוגדר פרופיל.</p>
-      </Card>
-    );
-  }
-
+/**
+ * Profiles are rendered from the list the bridge defines, not a fixed four, so
+ * a new profile kind appears without a frontend change. Device tokens are
+ * already resolved to friendly names by the backend.
+ */
+function ProfileCard({ profile }: { profile: ShabbatProfile }) {
   return (
     <Card as="li" className="flex flex-col gap-3">
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="font-semibold text-slate-900 dark:text-slate-100">{title}</h3>
-          <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
-            {profile.label ?? profile.name ?? '—'}
-          </p>
-        </div>
+        <h3 className="min-w-0 font-semibold text-slate-900 dark:text-slate-100">
+          {profile.label}
+        </h3>
         <Badge tone={profile.active === false ? 'muted' : 'ok'} dot>
           {profile.active === false ? 'לא פעיל' : 'פעיל'}
         </Badge>
@@ -56,7 +35,7 @@ function ProfileCard({
             </dd>
           </div>
         ) : null}
-        {profile.offset_minutes !== null && profile.offset_minutes !== undefined ? (
+        {profile.offset_minutes !== null ? (
           <div className="flex gap-1.5">
             <dt className="text-slate-500 dark:text-slate-400">היסט</dt>
             <dd className="font-medium text-slate-900 dark:text-slate-100">
@@ -70,9 +49,9 @@ function ProfileCard({
         <div>
           <p className="mb-1.5 text-sm text-slate-500 dark:text-slate-400">מכשירים</p>
           <div className="flex flex-wrap gap-1.5">
-            {profile.devices.map((token) => (
-              <Badge key={token} tone="info">
-                {labelFor(config, token)}
+            {profile.devices.map((device) => (
+              <Badge key={device} tone="info">
+                {device}
               </Badge>
             ))}
           </div>
@@ -83,10 +62,10 @@ function ProfileCard({
         <TechnicalDetails
           source={profile as unknown as Record<string, unknown>}
           known={[
+            ['kind', 'סוג פרופיל'],
             ['id', 'מזהה'],
-            ['devices', 'טוקני מכשירים'],
           ]}
-          hide={['name', 'label', 'active', 'time', 'offset_minutes']}
+          extra={profile.extra}
         />
       </AdvancedDisclosure>
     </Card>
@@ -127,10 +106,9 @@ export function ShabbatPage() {
                   />
                   <div>
                     <p className="text-sm font-medium text-bobi-700 dark:text-bobi-300">
-                      השבת הקרובה
+                      {config.parasha ?? 'השבת הקרובה'}
                     </p>
-                    {config.pre_shabbat_offset_minutes !== null &&
-                    config.pre_shabbat_offset_minutes !== undefined ? (
+                    {config.pre_shabbat_offset_minutes !== null ? (
                       <p className="text-xs text-slate-500 dark:text-slate-400">
                         הכנה {config.pre_shabbat_offset_minutes} דקות לפני הכניסה
                       </p>
@@ -157,60 +135,46 @@ export function ShabbatPage() {
             {config.has_draft ? (
               <Card className="border-amber-200 bg-amber-50/60 dark:border-amber-500/30 dark:bg-amber-500/10">
                 <p className="text-sm text-amber-900 dark:text-amber-200">
-                  קיימת טיוטה שנשמרה ב-Home Assistant. ניהול טיוטות מהממשק יהיה זמין בשלב הבא.
+                  {config.draft_owners.length > 0
+                    ? `קיימת טיוטה שמורה של ${config.draft_owners.join(', ')}.`
+                    : 'קיימת טיוטה שנשמרה ב-Home Assistant.'}{' '}
+                  ניהול טיוטות מהממשק יהיה זמין בשלב הבא.
                 </p>
               </Card>
             ) : null}
 
             <section aria-labelledby="profiles-heading">
-              <SectionTitle
-                action={<DisabledAction>עריכת פרופילים</DisabledAction>}
-              >
+              <SectionTitle action={<DisabledAction>עריכת פרופילים</DisabledAction>}>
                 <span id="profiles-heading">פרופילים</span>
               </SectionTitle>
-              <ul className="grid gap-3 lg:grid-cols-2">
-                <ProfileCard
-                  title="כיבוי לפני שבת"
-                  profile={config.pre_off_profile}
-                  config={config}
-                />
-                <ProfileCard
-                  title="הדלקה לפני שבת"
-                  profile={config.pre_on_profile}
-                  config={config}
-                />
-                <ProfileCard
-                  title="כיבוי לילה"
-                  profile={config.night_off_profile}
-                  config={config}
-                />
-                <ProfileCard
-                  title="הדלקת בוקר"
-                  profile={config.morning_on_profile}
-                  config={config}
-                />
-              </ul>
+              {config.profiles.length === 0 ? (
+                <EmptyState title="לא הוגדרו פרופילים לשבת" />
+              ) : (
+                <ul className="grid gap-3 lg:grid-cols-2">
+                  {config.profiles.map((profile) => (
+                    <ProfileCard key={profile.id} profile={profile} />
+                  ))}
+                </ul>
+              )}
             </section>
 
             <section aria-labelledby="ac-heading">
               <SectionTitle>
                 <span id="ac-heading">טמפרטורות מזגנים</span>
               </SectionTitle>
-              {Object.keys(config.ac_temperatures ?? {}).length === 0 ? (
+              {Object.keys(config.ac_temperatures).length === 0 ? (
                 <EmptyState title="לא הוגדרו טמפרטורות למזגנים" />
               ) : (
                 <Card className="p-0">
                   <dl className="divide-y divide-slate-100 dark:divide-slate-700/60">
-                    {Object.entries(config.ac_temperatures).map(([token, value]) => (
+                    {Object.entries(config.ac_temperatures).map(([device, value]) => (
                       <div
-                        key={token}
+                        key={device}
                         className="flex items-baseline justify-between gap-4 px-4 py-3"
                       >
-                        <dt className="text-sm text-slate-700 dark:text-slate-200">
-                          {labelFor(config, token)}
-                        </dt>
+                        <dt className="text-sm text-slate-700 dark:text-slate-200">{device}</dt>
                         <dd className="text-sm font-medium tabular-nums text-slate-900 dark:text-slate-100">
-                          {displayValue(value)}°
+                          {value}°
                         </dd>
                       </div>
                     ))}

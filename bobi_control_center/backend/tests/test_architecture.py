@@ -104,8 +104,15 @@ def test_only_the_adapter_layer_speaks_home_assistant() -> None:
     The `mock/` package is exempt: its fixtures stand in for what a real bridge
     would return.
     """
-    # base.py defines the bridge contract, so it names the services it wraps.
-    allowed_files = {"adapters/base.py", "adapters/real.py", "models/bridge.py"}
+    # These three make up the bridge-knowing layer: base.py declares the
+    # contract, real.py is the transport, and normalize.py maps raw responses
+    # onto the canonical models. They necessarily name the services involved.
+    allowed_files = {
+        "adapters/base.py",
+        "adapters/real.py",
+        "models/bridge.py",
+        "services/normalize.py",
+    }
 
     offenders: list[str] = []
     for path in BACKEND_APP.rglob("*.py"):
@@ -258,10 +265,41 @@ def test_the_adapter_interface_declares_no_write_method() -> None:
 
 
 def test_probe_hardcodes_would_execute_false() -> None:
-    """Guard against a refactor deriving this flag from bridge input."""
-    for module in ("adapters/real.py", "adapters/mock.py"):
-        source = (BACKEND_APP / module).read_text("utf-8")
-        assert "would_execute = False" in source
+    """Guard against a refactor deriving this flag from bridge input.
+
+    Normalization is where a probe response is assembled, so that is where the
+    invariant has to be asserted.
+    """
+    source = (BACKEND_APP / "services" / "normalize.py").read_text("utf-8")
+    assert "would_execute=False" in source
+    # And the model itself defaults to the safe value.
+    model = (BACKEND_APP / "models" / "bridge.py").read_text("utf-8")
+    assert "would_execute: bool = False" in model
+
+
+#: Collection names the raw bridge uses. The backend normalizes them away, so
+#: their appearance in frontend code would mean normalization leaked upward.
+_RAW_BRIDGE_KEYS = ("entries", "registry", "upcoming", "drafts", "service_response")
+
+#: `Object.entries(x)` and `map.entries()` are standard JavaScript. A bridge
+#: field would be *read* as a property, never called, so calls are excluded.
+_JS_ENTRIES_CALL = re.compile(r"\.entries\s*\(")
+
+
+def test_normalization_is_the_only_place_that_knows_bridge_field_names() -> None:
+    """React must receive one clean schema, not the raw bridge structure."""
+    offenders: list[str] = []
+    for path in _frontend_sources():
+        code = _JS_ENTRIES_CALL.sub(".__call__(", strip_comments(path.read_text("utf-8")))
+        relative = path.relative_to(FRONTEND_SRC).as_posix()
+        for key in _RAW_BRIDGE_KEYS:
+            # Either read as a property or written as a literal key.
+            if re.search(rf"[.\['\"]{key}\b", code):
+                offenders.append(f"{relative}: {key}")
+
+    assert not offenders, (
+        "the frontend must not touch raw bridge field names:\n" + "\n".join(offenders)
+    )
 
 
 def test_frontend_marks_unfinished_writes() -> None:

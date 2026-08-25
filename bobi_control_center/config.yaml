@@ -20,8 +20,15 @@ arch:
 # `ports:` mapping, so nothing is exposed to the network.
 ingress: true
 ingress_port: 8099
+
+# Sidebar entry. Note that `ingress_panel` is *not* a manifest key: the
+# Supervisor owns it, it starts false, and the user turns it on with the
+# "Show in sidebar" toggle on the app's page. These three keys are what make
+# that toggle produce a good result — a named, icon-bearing panel.
 panel_title: Bobi
 panel_icon: mdi:robot-outline
+# Restricts the sidebar entry to Home Assistant admins. Set to false to let
+# every household member see it; the app is read-only either way.
 panel_admin: true
 
 init: false
