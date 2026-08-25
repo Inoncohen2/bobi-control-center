@@ -1,0 +1,24 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["backend"]
+exclude = [".venv", "node_modules", "dist", "frontend"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF"]
+ignore = [
+    # Hebrew strings legitimately contain characters that look like ASCII
+    # lookalikes to ruff's ambiguous-unicode checks.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+    # FastAPI's dependency injection relies on calls in argument defaults.
+    "B008",
+    # `str, Enum` is the conventional Pydantic pattern and serialises
+    # predictably; StrEnum would change `str()` behaviour for no benefit here.
+    "UP042",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"backend/app/mock/*" = ["E501"]
+"backend/tests/*" = ["E501"]
