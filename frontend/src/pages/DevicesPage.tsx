@@ -113,7 +113,9 @@ function DeviceCard({ device, onOpen }: { device: Device; onOpen: () => void }) 
             <Icon size={20} />
           </span>
           <div className="min-w-0 flex-1">
-            <p className="truncate font-medium text-slate-900 dark:text-slate-100">
+            {/* Wrap rather than truncate: a cut-off device name is unusable, and
+                two columns on a phone leave little room. */}
+            <p className="line-clamp-2 font-medium leading-snug text-slate-900 dark:text-slate-100">
               {device.display_name}
             </p>
             <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
