@@ -169,6 +169,15 @@ Open **http://localhost:5173**.
 | `npm run docker:build` | Build the app image |
 | `npm run docker:run` | Run it on `:8099` |
 
+### Releasing
+
+Home Assistant decides whether an update exists by comparing `version` in
+`bobi_control_center/config.yaml` — nothing else. **Any change that reaches the
+image must bump it**, along with `backend/app/version.py` and the root
+`package.json`, which are asserted equal by a test. A CI job fails the build if
+the image changed and the version did not. See [CLAUDE.md](CLAUDE.md) and
+[CHANGELOG.md](CHANGELOG.md).
+
 ### Running the container directly
 
 ```bash

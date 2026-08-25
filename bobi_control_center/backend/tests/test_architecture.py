@@ -10,6 +10,7 @@ These keep the project honest as it grows:
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -375,3 +376,32 @@ def test_the_app_listens_on_the_ingress_port() -> None:
     assert "0.0.0.0" in run_sh
     # Ingress terminates TLS and proxies, so forwarded headers must be honoured.
     assert "--proxy-headers" in run_sh
+
+
+# --- the release version ----------------------------------------------------
+#: Semantic version, the form the Supervisor compares.
+_SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
+
+
+def test_one_version_number_everywhere() -> None:
+    """`config.yaml` is what the Supervisor compares — nothing may drift from it.
+
+    The Supervisor decides whether an update exists by reading the manifest
+    version alone. A code change that leaves it untouched simply never reaches a
+    running Home Assistant, and a half-applied bump is the same failure wearing
+    a disguise, so all three copies are asserted equal here.
+    """
+    manifest = yaml.safe_load((APP_ROOT / "config.yaml").read_text("utf-8"))
+    manifest_version = str(manifest["version"])
+    assert _SEMVER.match(manifest_version), f"not a comparable version: {manifest_version}"
+
+    # The backend reports it on /health and /api/bobi/connection.
+    from app.version import APP_VERSION
+
+    assert manifest_version == APP_VERSION, (
+        "app/version.py disagrees with config.yaml; the UI would report a "
+        "version the Supervisor never installed"
+    )
+
+    package = json.loads((REPO_ROOT / "package.json").read_text("utf-8"))
+    assert package["version"] == manifest_version

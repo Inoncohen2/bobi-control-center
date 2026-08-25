@@ -94,6 +94,67 @@ jobs:
           curl -sf http://127.0.0.1:8099/ | grep -q '<div id="root">'
           docker rm -f bobi-ci
 
+  version:
+    name: App version bumped
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The Supervisor decides whether an update exists by comparing the
+      # manifest version. A change to anything that ends up inside the image,
+      # without a bump, simply never reaches a running Home Assistant — so it
+      # fails here instead of failing silently in someone's house.
+      - name: config.yaml must be bumped whenever the image changes
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          # No base to compare against (a new branch, or the first push).
+          if [ -z "${BASE}" ] || [ "${BASE}" = "0000000000000000000000000000000000000000" ]; then
+            echo "No base commit to compare against — skipping."
+            exit 0
+          fi
+          if ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            echo "Base commit ${BASE} is not in this clone — skipping."
+            exit 0
+          fi
+
+          # Exactly what the Dockerfile copies into the image, plus the
+          # manifest and entrypoint the Supervisor reads.
+          changed=$(git diff --name-only "${BASE}" HEAD -- \
+            bobi_control_center/config.yaml \
+            bobi_control_center/Dockerfile \
+            bobi_control_center/run.sh \
+            bobi_control_center/backend/app \
+            bobi_control_center/backend/requirements.txt \
+            bobi_control_center/frontend)
+          if [ -z "${changed}" ]; then
+            echo "Nothing that reaches Home Assistant changed."
+            exit 0
+          fi
+
+          before=$(git show "${BASE}:bobi_control_center/config.yaml" | sed -n 's/^version:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p')
+          after=$(sed -n 's/^version:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' bobi_control_center/config.yaml)
+          echo "version: ${before} -> ${after}"
+          echo "changed:"; echo "${changed}" | sed 's/^/  /'
+
+          [ -n "${after}" ] || fail "config.yaml has no readable version"
+          if [ "${before}" = "${after}" ]; then
+            fail "the built image changed but config.yaml is still ${after} — bump it (e.g. 2.0.1 -> 2.0.2) or the Supervisor will report no update"
+          fi
+
+          # A lower version is an update the Supervisor will never offer.
+          lowest=$(printf '%s\n%s\n' "${before}" "${after}" | sort -V | head -1)
+          if [ "${lowest}" = "${after}" ]; then
+            fail "version went backwards: ${before} -> ${after}"
+          fi
+
+          echo "Version bumped correctly."
+
   secrets:
     name: No secrets committed
     runs-on: ubuntu-latest
