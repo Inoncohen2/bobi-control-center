@@ -24,6 +24,7 @@ dist/
 .vite/
 coverage/
 *.local
+*.tsbuildinfo
 
 # --- editors / os ---
 .vscode/

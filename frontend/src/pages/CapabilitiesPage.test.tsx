@@ -122,7 +122,7 @@ describe('CapabilitiesPage', () => {
     const user = userEvent.setup();
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
         if (init?.method === 'POST') {
           return new Response(
             JSON.stringify({
