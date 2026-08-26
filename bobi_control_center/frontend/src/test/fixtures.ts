@@ -619,6 +619,7 @@ export function makeManagementWith(
   operations: Array<{ id: string; label: string; destructive: boolean }> = [
     { id: 'set', label: 'שינוי', destructive: false },
   ],
+  targets: ManagementStatus['resources'][number]['targets'] = [],
 ): ManagementStatus {
   const base = makeManagementOn();
   return {
@@ -634,7 +635,7 @@ export function makeManagementWith(
             ? 'המשאב זמין לקריאה. פעולות הכתיבה שלו עדיין לא הופעלו ב-Home Assistant.'
             : null,
         operations,
-        targets: [],
+        targets,
       },
     ],
     ...overrides,

@@ -589,6 +589,8 @@ export type ItemKind =
   | 'choice'
   | 'text'
   | 'list'
+  /** A thing you run, not a value you set: it has no `value` and no read-back. */
+  | 'action'
   | 'readonly';
 
 /** `read_only` never gets a write control; `high` and `destructive` ask for a typed word. */

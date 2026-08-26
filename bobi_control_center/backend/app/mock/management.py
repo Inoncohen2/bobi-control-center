@@ -573,11 +573,17 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
     "system": {
         "available": True,
         "items": [
+            # `action` with no value, which is what the live system bridge sends
+            # and what nothing here used to model. A self-check has nothing to
+            # set and nothing to read back; every other kind assumes an item
+            # *is* a value, and requiring one is what left this row marked
+            # controllable and drawn as a reading.
             {
                 "id": "self_check",
                 "label": "בדיקה עצמית",
-                "kind": "readonly",
-                "value": "ready",
+                "kind": "action",
+                "value": None,
+                "display": "הרץ בדיקה",
                 "controllable": True,
                 "operations": ["run"],
                 "risk": "read_only",

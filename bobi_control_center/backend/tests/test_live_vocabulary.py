@@ -573,3 +573,50 @@ async def test_the_target_is_sent_under_both_names(resource, operation, item, wa
 
     assert sent["resource_id"] == item
     assert sent[SPECS[resource].id_field] == item
+
+
+# --- a thing you run, not a value you set ------------------------------------
+def test_action_is_a_kind_of_its_own() -> None:
+    """The live system bridge sends `kind: "action"` with no value, and every
+    other kind in the contract assumes an item *is* a value. Without this the
+    kind fell through to `readonly` and both safe checks became readings."""
+    from app.services.resource_normalize import canonical_kind
+
+    assert canonical_kind("action", None, []) == "action"
+
+
+def test_an_action_is_never_inferred() -> None:
+    """Only a bridge saying `action` produces one. A value this application
+    cannot recognise is still a reading, not a button that does something."""
+    from app.services.resource_normalize import canonical_kind
+
+    assert canonical_kind(None, None, []) == "readonly"
+    assert canonical_kind(None, "ready", []) == "readonly"
+
+
+async def test_a_valueless_action_is_still_operable() -> None:
+    """Everywhere else a missing value means the bridge could not read the item
+    and it must not be written. An action has no value to miss."""
+    snapshot = await service().resource_snapshot("system")
+    check = next(item for item in snapshot.items if item.id == "self_check")
+
+    assert check.kind == "action"
+    assert check.value is None
+    assert check.controllable is True
+    assert check.primary_operation == "run"
+
+
+async def test_running_a_safe_check_previews() -> None:
+    response = await preview(service(), "system", "run", resource_id="self_check")
+
+    assert response.valid is True, codes(response)
+
+
+async def test_a_forbidden_system_action_is_still_refused() -> None:
+    """The kind is new; the refusal it must not weaken is not. Checked before a
+    preview exists, so a forbidden action never gets as far as holding a token.
+    """
+    from app.services.resources import is_forbidden_system_action
+
+    for action in ("restart", "core_restart", "supervisor_update", "backup_restore", "shell"):
+        assert is_forbidden_system_action(action), action

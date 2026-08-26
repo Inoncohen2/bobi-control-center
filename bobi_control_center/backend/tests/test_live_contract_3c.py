@@ -443,3 +443,93 @@ async def test_a_family_with_no_commit_bridge_is_readable_not_absent(live_bridge
         family = next(entry for entry in status.resources if entry.id == name)
         assert family.available is True, name
         assert family.operations == [], name
+
+
+# --- contract 3c once every bridge that could be written, was ----------------
+#: The `resources` block this house publishes now. Every operation named here
+#: has a `script.bobi_cc_*_commit` behind it, and every family with an empty
+#: list has a snapshot and no commit — either because the bridge is unverified
+#: or because Home Assistant offers no service that could carry the write.
+LIVE_RESOURCES_FINAL = [
+    {"id": "settings", "available": True, "operations": [{"id": "set", "destructive": False}]},
+    {"id": "users", "available": True, "operations": [{"id": "set", "destructive": False}]},
+    {"id": "shabbat", "available": True, "operations": [{"id": "set", "destructive": False}]},
+    {
+        "id": "rules",
+        "available": True,
+        "operations": [
+            {"id": "enable", "destructive": False},
+            {"id": "disable", "destructive": False},
+            {"id": "delete", "destructive": True},
+        ],
+    },
+    {"id": "calendar", "available": True, "operations": [{"id": "add", "destructive": False}]},
+    {
+        "id": "devices",
+        "available": True,
+        "operations": [
+            {"id": name, "destructive": False}
+            for name in (
+                "power", "temperature", "hvac_mode", "fan_mode", "swing_mode",
+                "preset_mode", "brightness", "color_temp", "fan_speed", "start",
+                "pause", "stop", "return_to_base", "locate",
+            )
+        ],
+    },
+    {"id": "system", "available": True, "operations": [{"id": "run", "destructive": False}]},
+    {"id": "scripts", "available": True, "operations": [{"id": "run", "destructive": False}]},
+    {"id": "helpers", "available": True, "operations": []},
+    {"id": "automations", "available": True, "operations": []},
+    {"id": "scenes", "available": True, "operations": []},
+]
+
+
+async def test_every_declared_operation_is_one_this_application_can_describe(
+    live_bridge,
+) -> None:
+    """Nothing the house declares may be dropped by the closed-set filter.
+
+    A verb only one side knows is discarded in silence — the contract announces
+    it, the app quietly does not offer it, and neither reports anything wrong.
+    That is the fault this whole file exists for; here it is checked against the
+    full contract rather than one family at a time.
+    """
+    from app.services.resources import SPECS, canonical_operation
+
+    contract = dict(LIVE_CONTRACT, resources=LIVE_RESOURCES_FINAL)
+    adapter, bridge = live_bridge({CONTRACT: contract})
+    status = await bridge.status()
+    await adapter.aclose()
+
+    for entry in LIVE_RESOURCES_FINAL:
+        declared = {op["id"] for op in entry["operations"]}
+        if not declared:
+            continue
+        survived = {
+            op.id for op in next(r for r in status.resources if r.id == entry["id"]).operations
+        }
+        expected = {canonical_operation(entry["id"], name) for name in declared}
+        assert survived == expected, (entry["id"], declared - survived)
+        assert expected <= set(SPECS[entry["id"]].operations), entry["id"]
+
+
+async def test_add_becomes_create_for_the_calendar(live_bridge) -> None:
+    """Creating an event is the one calendar write Home Assistant exposes to a
+    script, and the house names it `add` where this side says `create`."""
+    contract = dict(LIVE_CONTRACT, resources=LIVE_RESOURCES_FINAL)
+    adapter, bridge = live_bridge({CONTRACT: contract})
+    status = await bridge.status()
+    await adapter.aclose()
+
+    calendar = next(entry for entry in status.resources if entry.id == "calendar")
+    assert [op.id for op in calendar.operations] == ["create"]
+
+
+async def test_delete_is_still_destructive_where_it_is_offered(live_bridge) -> None:
+    contract = dict(LIVE_CONTRACT, resources=LIVE_RESOURCES_FINAL)
+    adapter, bridge = live_bridge({CONTRACT: contract})
+    status = await bridge.status()
+    await adapter.aclose()
+
+    rules = next(entry for entry in status.resources if entry.id == "rules")
+    assert next(op for op in rules.operations if op.id == "delete").destructive is True

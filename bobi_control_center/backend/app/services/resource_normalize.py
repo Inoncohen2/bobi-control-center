@@ -301,6 +301,10 @@ def primary_operation(kind: str, value: Any, operations: list[str]) -> str | Non
     """
     if not operations:
         return None
+    if kind == "action":
+        # An action has no value, so there is no "verb that sets it" to work
+        # out — the bridge named what may be done and the first is it.
+        return operations[0]
     if kind == "toggle":
         on = value is True
         # `stop`/`start` last: a vacuum is the one device whose on and off are

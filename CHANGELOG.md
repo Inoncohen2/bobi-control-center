@@ -4,6 +4,71 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.5.0
+
+The five bridges that were missing — and the two that turned out to be
+impossible, said so rather than faked.
+
+3.4.1 left five families with a snapshot and no commit. Four of them now have
+one. The fifth does not, and the reason is worth more than the bridge would
+have been.
+
+### What Home Assistant gained
+
+- **`bobi_cc_system_commit`** runs the two safe checks and nothing else.
+  Restart, Supervisor update, integration or device deletion, backup restore
+  and anything shell-shaped are refused **by name, before dispatch**, so a
+  contract that started advertising one tomorrow would meet the same answer.
+- **`bobi_cc_script_commit`** runs one of two allow-listed Bobi scripts. The
+  canonical id maps to an entity here and nowhere else, so the web cannot name
+  a script to execute.
+- **`bobi_cc_rule_commit`** switches a smart rule on or off, or deletes it,
+  resolving the uid against the rules it can actually see.
+- **`bobi_cc_calendar_commit`** creates an event.
+- **`bobi_cc_scripts_snapshot`** now publishes its two entries as `action`
+  items so a screen can draw a button for them.
+
+### What is refused, and why
+
+- **Scenes.** There are none configured in this house. A commit bridge would
+  have been an allow-list with nothing in it, so it was not written.
+- **Changing or deleting a calendar event.** Home Assistant publishes no
+  service for either — that path is websocket-only and a bridge script cannot
+  reach it — and neither mapped calendar advertises UPDATE in the first place.
+  The snapshot had been advertising `edit`, `move` and `delete` on every event
+  regardless: a fail-open, announcing three operations no bridge could carry
+  out. Events are readings now, and say why.
+- **Creating and rewriting a rule.** A rule is a compound object and the
+  contract carries one value per item. Switching and deleting are offered;
+  inventing a form for the rest is not.
+
+Every operation the contract names has a bridge behind it, and every family
+with an empty list has a snapshot and no commit. That is now checked by a test
+that walks the whole contract rather than one family at a time.
+
+### `action` — a kind that holds no value
+
+The system bridge sends `kind: "action"` with no value, and every other kind in
+the contract assumes an item *is* a value: a missing one means the bridge could
+not read the item, which makes it unwritable. So both safe checks arrived
+marked controllable and rendered as readings — the same shape of fault as the
+vocabulary mismatch, one layer down.
+
+`action` is now a kind of its own, exempt from the value requirement and from
+nothing else. Forcing these into a toggle would have been worse than the bug: a
+toggle says it can be switched back, and a self-check cannot.
+
+### The calendar screen
+
+Adding an event is the one calendar write that exists, so the screen now has a
+form for it — reading the calendars it may write to from the contract's own
+targets rather than a list kept here. Nothing is sent while typing; the button
+opens the same preview → confirm → commit dialog as every other change, and the
+backend refuses a payload missing a title or a time before a preview exists.
+
+Nothing is relaxed. The master switch is still read-only and still off, and no
+write has been run against hardware.
+
 ## 3.4.1
 
 Commits now carry their target under the name the bridge actually reads.

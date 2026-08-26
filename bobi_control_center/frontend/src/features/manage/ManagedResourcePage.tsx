@@ -24,7 +24,12 @@ import { QueryBoundary } from '@/components/state/QueryBoundary';
 import { ChangeDialog } from './ChangeDialog';
 import { useManagedChange } from './useManagedChange';
 import { keys, useManagementContract, useResourceSnapshot } from '@/hooks/queries';
-import type { ManagedItem, ManagedResource, ResourceSnapshot } from '@/types/api';
+import type {
+  ManagedItem,
+  ManagedResource,
+  ManagedTarget,
+  ResourceSnapshot,
+} from '@/types/api';
 
 export interface ManagedRenderProps {
   snapshot: ResourceSnapshot;
@@ -33,6 +38,14 @@ export interface ManagedRenderProps {
   /** Start a change that is not about one existing item — creating something. */
   requestNew: (operation: string, payload: Record<string, unknown>) => void;
   writesEnabled: boolean;
+  /**
+   * What the contract declared for this family: the operations it named and
+   * the targets a created thing may belong to. A screen that offers creating
+   * something reads these rather than hard-coding a list — the household that
+   * gains a calendar or loses one needs no change here.
+   */
+  operations: string[];
+  targets: ManagedTarget[];
 }
 
 export function ManagedResourcePage({
@@ -129,7 +142,14 @@ export function ManagedResourcePage({
                     body="אפשר לראות הכול ולהריץ תצוגה מקדימה. ביצוע שינויים ייפתח כשיופעל המתג ב-Home Assistant."
                   />
                 ) : null}
-                {children({ snapshot, request, requestNew, writesEnabled })}
+                {children({
+                  snapshot,
+                  request,
+                  requestNew,
+                  writesEnabled,
+                  operations: (declared?.operations ?? []).map((entry) => entry.id),
+                  targets: declared?.targets ?? [],
+                })}
               </>
             ) : (
               <Notice

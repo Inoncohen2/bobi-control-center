@@ -14,6 +14,7 @@ import userEvent from '@testing-library/user-event';
 import { SettingsManagePage } from '@/pages/SettingsManagePage';
 import { SystemPage } from '@/pages/SystemPage';
 import { CamerasPage } from '@/pages/CamerasPage';
+import { CalendarPage } from '@/pages/CalendarPage';
 import {
   makeConnection,
   makeManagedItem,
@@ -378,5 +379,98 @@ describe('what the session is allowed to do', () => {
 
     await screen.findByText('סיכום בוקר אוטומטי');
     expect(screen.queryByRole('button', { name: 'כבה' })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The calendar, whose one write is creating.
+ *
+ * Home Assistant publishes no service that deletes or updates a calendar event,
+ * so the bridge advertises nothing on an event and the screen offers no control
+ * on one. Adding is the write that exists — and the form appears only because
+ * the contract named `add` and said which calendars it may be added to.
+ */
+describe('the calendar', () => {
+  const WRITABLE = [
+    { id: 'user_1', label: 'ינון', risk: null, enabled: null },
+    { id: 'user_2', label: 'הודיה', risk: null, enabled: null },
+  ];
+
+  const calendarRoutes = (
+    // What the *API* serves, which is not quite what Home Assistant sent: the
+    // backend translates the bridge's `add` into this application's `create`
+    // before a screen ever sees it.
+    operations = [{ id: 'create', label: 'הוספת אירוע', destructive: false }],
+    targets = WRITABLE,
+  ) => ({
+    ...BASE,
+    '/api/bobi/manage/contract': makeManagementWith(
+      'calendar',
+      { writes_enabled: true },
+      operations,
+      targets,
+    ),
+    '/api/bobi/manage/calendar/snapshot': makeResourceSnapshot({
+      resource: 'calendar',
+      groups: [],
+      items: [],
+    }),
+    '/api/bobi/manage/calendar/preview': makePreview(),
+  });
+
+  it('offers a form for the one write Home Assistant supports', async () => {
+    stub(calendarRoutes());
+    renderWithProviders(<CalendarPage />);
+
+    expect(await screen.findByText('אירוע חדש')).toBeInTheDocument();
+  });
+
+  it('draws no form when the contract did not name the operation', async () => {
+    // A snapshot bridge whose commit bridge has not shipped: readable, no button.
+    stub(calendarRoutes([]));
+    renderWithProviders(<CalendarPage />);
+
+    await screen.findByText('קריאה בלבד');
+    expect(screen.queryByText('אירוע חדש')).not.toBeInTheDocument();
+  });
+
+  it('draws no form when the contract named no calendar to write to', async () => {
+    stub(calendarRoutes(undefined, []));
+    renderWithProviders(<CalendarPage />);
+
+    await screen.findByText('יומן');
+    expect(screen.queryByText('אירוע חדש')).not.toBeInTheDocument();
+  });
+
+  it('sends what was typed, and only once the button is pressed', async () => {
+    const fetchMock = stub(calendarRoutes());
+    renderWithProviders(<CalendarPage />);
+
+    await screen.findByText('אירוע חדש');
+    await userEvent.type(screen.getByLabelText('כותרת'), 'רופא שיניים');
+    await userEvent.type(screen.getByLabelText('תאריך'), '2026-09-10');
+    await userEvent.type(screen.getByLabelText('משעה'), '09:00');
+    await userEvent.type(screen.getByLabelText('עד שעה'), '10:00');
+
+    // Typing is not a request to change anything.
+    expect(paths(fetchMock).some((path) => path.endsWith('/calendar/preview'))).toBe(false);
+
+    await userEvent.click(screen.getByRole('button', { name: 'בדוק שינוי' }));
+
+    await waitFor(() =>
+      expect(paths(fetchMock).some((path) => path.endsWith('/calendar/preview'))).toBe(true),
+    );
+    const call = fetchMock.mock.calls.find(([input]) =>
+      String(input).endsWith('/calendar/preview'),
+    );
+    const body = JSON.parse(String(call?.[1]?.body));
+    expect(body.operation).toBe('create');
+    expect(body.resource_id).toBeNull();
+    expect(body.payload).toMatchObject({
+      user_id: 'user_1',
+      summary: 'רופא שיניים',
+      start: '2026-09-10T09:00:00',
+      end: '2026-09-10T10:00:00',
+    });
   });
 });

@@ -306,6 +306,22 @@ def describe(
         if operation == "set_phone" or "phone" in payload:
             risk = "high"
 
+    if resource == "calendar" and creating:
+        # Creating is the only calendar write Home Assistant exposes to a
+        # script — there is no service that deletes or updates an event — so
+        # this is the one calendar payload worth checking, and it is checked
+        # here rather than left to the bridge: a preview that shows an event
+        # with no time is a confirmation of nothing.
+        for field, label in (("summary", "כותרת"), ("start", "התחלה"), ("end", "סיום")):
+            if not str(payload.get(field) or "").strip():
+                errors.append(
+                    FieldError(field=field, code="required", message=f"חסר {label} לאירוע.")
+                )
+        if not str(payload.get("user_id") or "").strip():
+            errors.append(
+                FieldError(field="user_id", code="required", message="צריך לבחור יומן.")
+            )
+
     if resource == "devices" and item is not None:
         error = device_capability_error(item, payload)
         if error is not None:
@@ -393,6 +409,7 @@ _FIELD_LABELS = {
     "name": "שם תצוגה",
     "label": "שם",
     "phone": "טלפון",
+    "summary": "כותרת",
     "days": "ימים",
     "time": "שעה",
     "start": "התחלה",
@@ -434,6 +451,11 @@ def _explain(
         return "המספר יישמר אצל בובי בלבד ולא יוצג במלואו באתר."
     if resource == "system":
         return item.description if item else None
+    if resource == "calendar" and operation == "create":
+        return (
+            "האירוע ייווצר ביומן שנבחר. שינוי או מחיקה של אירוע קיים "
+            "אינם אפשריים מ-Home Assistant."
+        )
     if resource == "calendar" and operation == "delete":
         return "האירוע יימחק מהיומן."
     if resource == "settings":

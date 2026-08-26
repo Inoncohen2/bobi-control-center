@@ -146,8 +146,12 @@ function isOperable(item: ManagedItem, writesEnabled: boolean, role: Role | unde
     writesEnabled &&
     item.controllable &&
     item.operations.length > 0 &&
-    item.value !== null &&
-    item.value !== undefined &&
+    // A missing value means the bridge could not read the item, and writing
+    // something it cannot read is writing against a preview bound to nothing.
+    // An `action` is the exception, and the only one: a self-check has no
+    // value to miss. Requiring one here left the system bridge's two safe
+    // checks marked controllable and drawn as readings.
+    (item.kind === 'action' || (item.value !== null && item.value !== undefined)) &&
     allows(role, item.risk)
   );
 }
@@ -233,6 +237,17 @@ function ItemControl({
   );
   const current = item.value === null || item.value === undefined ? '' : String(item.value);
   const dirty = draft !== current;
+
+  if (item.kind === 'action') {
+    // One button, and the label is the bridge's own word for it.
+    return (
+      <div className="flex sm:justify-end">
+        <Button variant="secondary" onClick={() => onChange(item, true, item.primary_operation ?? undefined)}>
+          {item.display ?? 'הרץ'}
+        </Button>
+      </div>
+    );
+  }
 
   if (item.kind === 'toggle') {
     const on = item.value === true;

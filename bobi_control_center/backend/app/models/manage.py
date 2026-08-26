@@ -397,7 +397,21 @@ class ManagedConstraints(CanonicalModel):
 
 #: How an item is edited. The UI renders from this and from `constraints`;
 #: an unrecognised kind is shown read-only rather than guessed at.
-ITEM_KINDS = ("toggle", "number", "time", "date", "datetime", "choice", "text", "list", "readonly")
+#:
+#: `action` is the one that holds no value. A self-check has nothing to set and
+#: nothing to read back — it is a thing you run — and every other kind here
+#: assumes an item *is* a value, so the system bridge's two safe checks arrived
+#: `controllable: true` and rendered as readings. Forcing them into a toggle
+#: would have been worse than the bug: a toggle says it can be switched back.
+ITEM_KINDS = (
+    "toggle", "number", "time", "date", "datetime", "choice", "text", "list", "action", "readonly"
+)
+
+#: Kinds an item may be operated without reporting a current value. Everywhere
+#: else a missing value means the bridge could not read the item, and an item
+#: whose value is unknown must not be written — a preview binds to what was
+#: observed, and there is nothing to bind to.
+VALUELESS_KINDS = frozenset({"action"})
 
 
 class ManagedItem(CanonicalModel):
