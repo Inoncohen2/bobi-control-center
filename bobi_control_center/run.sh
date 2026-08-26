@@ -2,7 +2,7 @@
 #
 # Bobi Control Center entrypoint.
 #
-# Reads add-on options when running under the Supervisor (bashio is available
+# Reads app options when running under the Supervisor (bashio is available
 # on the Home Assistant base images) and falls back to plain defaults so the
 # same image runs locally with `docker run`.
 
@@ -13,7 +13,11 @@ DEBUG_HTTP="false"
 EXTERNAL_HOSTNAME=""
 EXTERNAL_PASSWORD_HASH=""
 
-if command -v bashio >/dev/null 2>&1 && bashio::supervisor.ping 2>/dev/null; then
+# `bashio::config` reads /data/options.json locally. Do NOT gate option loading
+# on Supervisor API access: this app intentionally needs `homeassistant_api`
+# for the backend bridge, but not `hassio_api`. Gating on supervisor.ping would
+# silently discard the external hostname/password hash and disable public auth.
+if command -v bashio >/dev/null 2>&1 && [ -f /data/options.json ]; then
     LOG_LEVEL="$(bashio::config 'log_level')"
     DEBUG_HTTP="$(bashio::config 'debug_http')"
     EXTERNAL_HOSTNAME="$(bashio::config 'external_hostname')"
@@ -35,7 +39,13 @@ else
     echo "[bobi] No SUPERVISOR_TOKEN — using mock data. This is expected outside Home Assistant."
 fi
 
-echo "[bobi] Listening on 0.0.0.0:8099 (Ingress)."
+if [ -n "${EXTERNAL_HOSTNAME}" ] && [ -n "${EXTERNAL_PASSWORD_HASH}" ]; then
+    echo "[bobi] External access authentication configured for ${EXTERNAL_HOSTNAME}."
+else
+    echo "[bobi] External access authentication is not configured."
+fi
+
+echo "[bobi] Listening on 0.0.0.0:8099 (Ingress + private app network)."
 
 exec python -m uvicorn app.main:app \
     --host 0.0.0.0 \
