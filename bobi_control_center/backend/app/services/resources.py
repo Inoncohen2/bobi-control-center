@@ -237,6 +237,21 @@ def is_forbidden_system_action(action_id: str) -> bool:
     return any(banned in name for banned in FORBIDDEN_SYSTEM_ACTIONS)
 
 
+def mask_phone(value: object) -> str:
+    """A phone number as a screen may see it.
+
+    Enough to recognise which number it is, never enough to dial it or to
+    identify anyone from a shared screenshot. Applied to anything the bridge
+    hands over as already-masked too: a key called `phone_masked` is a claim,
+    and re-masking a value that was already masked costs nothing while trusting
+    one that was not would cost a phone number.
+    """
+    digits = [character for character in str(value) if character.isdigit()]
+    if len(digits) < 4:
+        return "•" * len(digits)
+    return "•••• ••• " + "".join(digits[-2:])
+
+
 def rank(risk: str | None) -> int:
     """Where a risk word sits in the escalation, unknown counting as high.
 

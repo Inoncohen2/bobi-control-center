@@ -36,6 +36,7 @@ from app.services.resources import (
     constraint_errors,
     humanise,
     is_forbidden_system_action,
+    mask_phone,
     needs_confirm_word,
     rank,
 )
@@ -47,16 +48,6 @@ DESTRUCTIVE_CONFIRM_WORD = "מחק"
 #: number would be a small lie about what is happening, and the whole point of
 #: making someone type a word is that they read it first.
 SENSITIVE_CONFIRM_WORD = "אישור"
-
-#: What a phone number looks like once a screen is allowed to see it. Enough to
-#: recognise which number it is, never enough to dial it or to identify anyone
-#: from a shared screenshot.
-def mask_phone(value: str) -> str:
-    digits = [character for character in str(value) if character.isdigit()]
-    if len(digits) < 4:
-        return "•" * len(digits)
-    return "•••• ••• " + "".join(digits[-2:])
-
 
 #: Fields a family's operation may carry even though they look private. Exactly
 #: one door, opened deliberately: changing a phone number is a thing the spec

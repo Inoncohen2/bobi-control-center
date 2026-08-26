@@ -611,3 +611,128 @@ def test_one_version_number_everywhere() -> None:
 
     package = json.loads((REPO_ROOT / "package.json").read_text("utf-8"))
     assert package["version"] == manifest_version
+
+
+# --- 3.0: the families the bridge describes ---------------------------------
+def test_the_allowed_service_list_is_built_from_the_declarations() -> None:
+    """No service reaches Home Assistant unless a spec named it.
+
+    The point is that the list cannot drift: adding a family means adding a
+    spec, and a service typed into a call site without one is refused before a
+    request is built.
+    """
+    from app.adapters.real import ALLOWED_SERVICES
+    from app.services.resources import SPECS
+
+    for spec in SPECS.values():
+        if spec.snapshot_service:
+            assert spec.snapshot_service in ALLOWED_SERVICES
+        if spec.commit_service:
+            assert spec.commit_service in ALLOWED_SERVICES
+
+    # And nothing outside the `bobi_cc_` family is in there at all.
+    assert all(service.startswith("bobi_cc_") for service in ALLOWED_SERVICES)
+
+
+def test_no_managed_service_is_a_raw_domain_service() -> None:
+    from app.adapters.real import ALLOWED_SERVICES
+
+    for service in ALLOWED_SERVICES:
+        assert "." not in service, f"{service} looks like a domain service"
+
+
+def test_every_family_has_a_commit_service_and_a_title_per_operation() -> None:
+    """A verb with no Hebrew title would reach a dialog as a bare token."""
+    from app.services.resources import SPECS
+
+    for spec in SPECS.values():
+        assert spec.commit_service, spec.id
+        for operation in spec.operations:
+            assert operation in spec.titles, f"{spec.id}.{operation} has no title"
+
+
+def test_the_router_and_the_specs_agree_on_the_family_list() -> None:
+    """A family the router accepts but nothing implements would 500 on use."""
+    from app.models.manage import MANAGED_RESOURCES
+    from app.services.resources import RESOURCE_IDS
+
+    assert set(MANAGED_RESOURCES) == set(RESOURCE_IDS)
+
+
+def test_the_forbidden_system_actions_cover_the_named_categories() -> None:
+    """The spec names these explicitly. A rename must not quietly drop one."""
+    from app.services.resources import is_forbidden_system_action
+
+    for action in (
+        "ha_restart",
+        "supervisor_update",
+        "integration_delete",
+        "device_delete",
+        "backup_restore",
+        "run_shell_command",
+    ):
+        assert is_forbidden_system_action(action), action
+    # And something ordinary is not caught by an over-broad rule.
+    assert not is_forbidden_system_action("self_check")
+    assert not is_forbidden_system_action("benchmark")
+
+
+def test_the_resource_normalizer_drops_anything_entity_shaped() -> None:
+    from app.services.resource_normalize import safe_detail
+
+    safe = safe_detail(
+        {
+            "entity_id": "light.kitchen",
+            "backing": "switch.boiler",
+            "members": ["climate.salon", "kitchen"],
+            "nested": {"entity_id": "camera.lia", "area": "סלון"},
+            "area": "מטבח",
+        }
+    )
+
+    assert "entity_id" not in safe
+    assert "backing" not in safe
+    assert safe["members"] == ["kitchen"]
+    assert safe["nested"] == {"area": "סלון"}
+    assert safe["area"] == "מטבח"
+
+
+def test_a_masked_value_survives_but_is_masked_again() -> None:
+    """The suffix is a claim; re-masking costs nothing and trusting could cost a number."""
+    from app.services.resource_normalize import safe_detail
+
+    safe = safe_detail({"phone_masked": "0000000042"})
+
+    assert "phone_masked" in safe
+    assert safe["phone_masked"].endswith("42")
+    assert "0000000042" not in safe["phone_masked"]
+
+
+def test_an_item_is_not_controllable_unless_the_bridge_said_so() -> None:
+    """Fail closed, on the two ways a bridge can stay silent."""
+    from app.services.resource_normalize import normalize_resource
+
+    snapshot = normalize_resource(
+        "settings",
+        {
+            "available": True,
+            "items": [
+                {"id": "a", "label": "בלי דגל", "value": True, "operations": ["set"]},
+                {"id": "b", "label": "בלי פעולות", "value": True, "controllable": True},
+                {"id": "c", "label": "שניהם", "value": True, "controllable": True,
+                 "operations": ["set"]},
+            ],
+        },
+    )
+
+    operable = {item.id: item.controllable for item in snapshot.items}
+    assert operable == {"a": False, "b": False, "c": True}
+
+
+def test_the_audit_trail_redacts_before_it_writes() -> None:
+    """On the way in, not on the way out — there is no unredacted path."""
+    source = strip_docstrings((BACKEND_APP / "services" / "audit.py").read_text("utf-8"))
+
+    assert "redact(entry.model_dump())" in source
+    # And nothing writes a raw entry anywhere in the module.
+    assert "json.dumps(entry" not in source

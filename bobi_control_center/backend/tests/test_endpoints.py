@@ -313,3 +313,91 @@ def test_probe_is_the_only_post_route(client: TestClient) -> None:
         if getattr(route, "methods", None) and "GET" not in route.methods
     ]
     assert posts == [("/api/bobi/probe", ["POST"])]
+
+
+# --- 3.0: the managed families over HTTP ------------------------------------
+# The mock adapter declares no write bridge, which is the shipping default and
+# the state these tests care about: everything must fail closed, and nothing may
+# be reachable by naming a Home Assistant service in a URL.
+MANAGED = ("settings", "users", "shabbat", "rules", "calendar", "devices", "system")
+
+
+@pytest.mark.parametrize("resource", MANAGED)
+def test_a_family_snapshot_answers_unavailable_without_a_bridge(client, resource) -> None:
+    """A 200 with a reason, not a 500: "not in Home Assistant yet" is an answer."""
+    response = client.get(f"/api/bobi/manage/{resource}/snapshot")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["resource"] == resource
+    assert body["available"] is False
+    assert body["items"] == []
+
+
+@pytest.mark.parametrize("resource", MANAGED)
+def test_a_family_preview_fails_closed_without_a_bridge(client, resource) -> None:
+    response = client.post(
+        f"/api/bobi/manage/{resource}/preview",
+        json={"operation": "set", "resource_id": "anything", "payload": {}},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "management_unavailable"
+
+
+@pytest.mark.parametrize("resource", MANAGED)
+def test_a_family_commit_fails_closed_without_a_bridge(client, resource) -> None:
+    response = client.post(
+        f"/api/bobi/manage/{resource}/commit",
+        json={"preview_id": "pv_invented", "confirmed": True},
+    )
+
+    assert response.status_code in (409, 503)
+
+
+@pytest.mark.parametrize(
+    "resource",
+    ["light", "todo", "input_boolean", "automation", "homeassistant", "climate", "camera"],
+)
+def test_a_home_assistant_domain_cannot_be_used_as_a_resource(client, resource) -> None:
+    """The URL is a closed set. Naming a domain reaches nothing at all."""
+    assert client.get(f"/api/bobi/manage/{resource}/snapshot").status_code == 404
+    for suffix in ("preview", "commit"):
+        response = client.post(f"/api/bobi/manage/{resource}/{suffix}", json={})
+        assert response.status_code in (404, 422), suffix
+
+
+def test_the_task_snapshot_keeps_its_own_endpoint(client) -> None:
+    """The generic route must not shadow the richer one, or answer in its place.
+
+    Without a write bridge it fails closed with a 503 — which is the Phase 3A
+    behaviour, and proves the generic handler (which answers 200 with a reason)
+    did not take the route over.
+    """
+    response = client.get("/api/bobi/manage/tasks/snapshot")
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "management_unavailable"
+
+
+def test_features_has_no_generic_snapshot(client) -> None:
+    response = client.get("/api/bobi/manage/features/snapshot")
+
+    assert response.status_code == 404
+
+
+def test_the_audit_endpoint_answers_without_a_bridge(client) -> None:
+    response = client.get("/api/bobi/manage/audit")
+
+    assert response.status_code == 200
+    assert response.json()["count"] == 0
+    assert response.json()["records"] == []
+
+
+def test_no_endpoint_can_set_the_master_write_switch(client) -> None:
+    """There is no route, by any method, that writes `writes_enabled`."""
+    paths = {getattr(route, "path", "") for route in client.app.routes}
+
+    assert not any("writes" in path or "kill" in path for path in paths)
+    contract = client.get("/api/bobi/manage/contract").json()
+    assert contract["writes_enabled"] is False

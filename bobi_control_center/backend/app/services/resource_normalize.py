@@ -30,7 +30,7 @@ from app.models.manage import (
     ResourceSnapshot,
 )
 from app.services import normalize
-from app.services.resources import humanise
+from app.services.resources import humanise, mask_phone
 
 #: `domain.object_id` — a Home Assistant entity id. Matched on the value as
 #: well as the key, because a bridge could hand one over under any name.
@@ -94,7 +94,16 @@ _SNAPSHOT_KEYS = {
 }
 
 
+#: Keys whose value the bridge has already reduced to something non-identifying
+#: — `phone_masked` is the one that matters. They survive the private-key filter
+#: they would otherwise trip on, and their value is masked again here rather
+#: than trusted: the suffix is a claim, and a claim is not a guarantee.
+_MASKED_SUFFIX = "_masked"
+
+
 def _private(key: str) -> bool:
+    if key.lower().endswith(_MASKED_SUFFIX):
+        return False
     return any(private in key.lower() for private in _PRIVATE_KEYS)
 
 
@@ -114,6 +123,9 @@ def safe_detail(payload: dict[str, Any]) -> dict[str, Any]:
     safe: dict[str, Any] = {}
     for key, value in payload.items():
         if key in _ITEM_KEYS or _private(key):
+            continue
+        if key.lower().endswith(_MASKED_SUFFIX):
+            safe[key] = mask_phone(value)
             continue
         cleaned = _safe_value(value)
         if cleaned is _DROP:

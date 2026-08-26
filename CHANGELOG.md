@@ -4,6 +4,73 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.0.0
+
+The complete management release — settings, users, the Shabbat clock, rules, the
+calendar, devices and the system, all reachable from the web.
+
+Home Assistant has not shipped those seven bridges yet, so the honest way to
+build this was to **let the bridge describe them**. It names the items, says
+which are operable, and supplies the limits; this side renders that description
+in Hebrew and refuses whatever does not fit. Hard-coding seven contracts that do
+not exist would have meant writing screens that assert what Bobi does, and
+inventing the answer to a question only Home Assistant can answer.
+
+The practical consequence: **every family works the day its bridge lands**, and
+until then it says so. A family the contract does not name shows as unavailable
+with the reason Home Assistant gave, never as a broken screen and never as a
+control that silently does nothing.
+
+### What is new
+
+- **Eight API families**, each with a snapshot, a preview and a commit:
+  settings, users, Shabbat, rules, the calendar, devices and the system, beside
+  the tasks and features 2.2.1 already managed.
+- **One editor for all of them.** `kind` picks the control, `constraints`
+  bounds it, `options` fills it, `controllable` decides whether there is a
+  control at all. A row the bridge did not mark operable is a reading.
+- **Screens**: smart notifications, the calendar, cameras, the system, and a
+  persistent activity log. Devices, the Shabbat clock, rules and users keep the
+  read-only screens they already had and gain management underneath.
+- **A trail that survives a restart.** Written to the app's `/data`, bounded and
+  rotated, redacted on the way in — a number that never reaches the file cannot
+  leak from it later.
+
+### What it refuses
+
+Four rules hold whatever the bridge says, because a bridge that has not shipped
+cannot be relied on to catch them:
+
+- A household never runs out of enabled administrators.
+- A phone number is shown masked, and reaches the trail redacted. Setting one is
+  the single field allowed past the private-field filter, and it is still never
+  displayed or recorded whole.
+- Saving a Shabbat profile changes the schedule and no device, and the dialog
+  says so before anyone presses save.
+- A control the bridge did not advertise is refused rather than passed along.
+
+Restarting Home Assistant, updating the Supervisor, deleting an integration or a
+device, and restoring a backup are refused for being what they are — checked
+before the question of whether such an action exists is even asked, so a bridge
+that started offering one tomorrow would meet the same answer.
+
+Nothing from 2.2.1 is relaxed. The preview token, the five-minute single-use
+expiry, the payload binding, the observed-state binding, the explicit
+confirmation, read-after-write and Home Assistant's master switch all stand, and
+the switch is still read-only: no endpoint, setting or screen can turn it on.
+
+### Notes for the Home Assistant side
+
+The seven new commit services receive the Phase 3A shape extended rather than
+replaced — flat fields, the target under the name its bridge expects, one
+`expected_*` per value the preview observed, plus `preview_token`, `confirmed`
+and `request_id`. A bridge author who has read `bobi_cc_task_update_commit` can
+write the next one without a new document.
+
+Smart notifications and cameras have no bridge of their own by design: the first
+are settings the contract marks with a `notification_class`, the second are
+devices whose class is `camera`. Neither invents a service.
+
 ## 2.2.1
 
 Commits now carry their preview token, which is what Home Assistant was asking

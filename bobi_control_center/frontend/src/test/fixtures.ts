@@ -17,6 +17,8 @@ import type {
   PreviewResponse,
   CommitResponse,
   TaskSnapshot,
+  ManagedItem,
+  ResourceSnapshot,
 } from '@/types/api';
 
 export function makeConnection(overrides: Partial<ConnectionInfo> = {}): ConnectionInfo {
@@ -25,7 +27,7 @@ export function makeConnection(overrides: Partial<ConnectionInfo> = {}): Connect
     connected: true,
     writes_enabled: false,
     phase: 2,
-    app_version: '2.2.1',
+    app_version: '3.0.0',
     detail: 'מחובר לגשר של בובי',
     ...overrides,
   };
@@ -567,6 +569,67 @@ export function makeCommit(overrides: Partial<CommitResponse> = {}): CommitRespo
       verified: true,
       source: 'web',
     },
+    ...overrides,
+  };
+}
+
+// --- the 3.0 families ------------------------------------------------------
+
+export function makeManagedItem(overrides: Partial<ManagedItem> = {}): ManagedItem {
+  return {
+    id: 'morning_enabled',
+    label: 'סיכום בוקר אוטומטי',
+    group: 'morning',
+    kind: 'toggle',
+    value: true,
+    display: 'פעיל',
+    description: null,
+    risk: 'low',
+    controllable: true,
+    operations: ['set'],
+    options: [],
+    constraints: null,
+    unavailable_reason: null,
+    detail: {},
+    ...overrides,
+  };
+}
+
+export function makeResourceSnapshot(
+  overrides: Partial<ResourceSnapshot> = {},
+): ResourceSnapshot {
+  const items = overrides.items ?? [makeManagedItem()];
+  return {
+    resource: 'settings',
+    available: true,
+    reason: null,
+    writes_enabled: true,
+    groups: [{ id: 'morning', label: 'סיכום בוקר', description: null, items }],
+    items,
+    detail: {},
+    ...overrides,
+  };
+}
+
+/** A contract that advertises one of the 3.0 families as available. */
+export function makeManagementWith(
+  resource: string,
+  overrides: Partial<ManagementStatus> = {},
+): ManagementStatus {
+  const base = makeManagementOn();
+  return {
+    ...base,
+    resources: [
+      ...base.resources,
+      {
+        id: resource,
+        label: resource,
+        available: true,
+        detail: null,
+        operations: [{ id: 'set', label: 'שינוי', destructive: false }],
+        targets: [],
+      },
+    ],
     ...overrides,
   };
 }

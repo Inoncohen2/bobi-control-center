@@ -58,7 +58,7 @@ Stack traces never leave the process.
 ### `GET /health`
 
 ```json
-{ "ok": true, "app": "bobi-control-center", "version": "2.2.1",
+{ "ok": true, "app": "bobi-control-center", "version": "3.0.0",
   "adapter": "home_assistant", "writes_enabled": false }
 ```
 
@@ -68,7 +68,7 @@ Whether the app is showing real or demo data. Contains no secret.
 
 ```json
 { "adapter": "home_assistant", "connected": true, "writes_enabled": false,
-  "phase": 2, "app_version": "2.2.1", "detail": "מחובר לגשר של בובי" }
+  "phase": 2, "app_version": "3.0.0", "detail": "מחובר לגשר של בובי" }
 ```
 
 ---
@@ -554,3 +554,127 @@ Home Assistant contract first. There is also **no endpoint that enables Home
 Assistant's master write switch**, and a test asserts none of the management
 modules can set it. A test enumerates the published surface and asserts the only
 non-GET routes are the probe and the managed preview/commit pair.
+
+---
+
+## Management — the 3.0 families
+
+Seven more families join tasks and features, and all of them use the same three
+routes:
+
+```
+GET  /api/bobi/manage/{resource}/snapshot
+POST /api/bobi/manage/{resource}/preview
+POST /api/bobi/manage/{resource}/commit
+```
+
+`{resource}` is one of `settings`, `users`, `shabbat`, `rules`, `calendar`,
+`devices`, `system`. Anything else — including a Home Assistant domain such as
+`light` or `todo` — is a 404 before a service is consulted. `tasks` keeps its
+own richer snapshot endpoint and is refused on the generic one.
+
+| Family | Read service | Write service |
+| --- | --- | --- |
+| `settings` | `bobi_cc_settings_snapshot` | `bobi_cc_settings_commit` |
+| `users` | `bobi_cc_users_manage_snapshot` | `bobi_cc_user_commit` |
+| `shabbat` | `bobi_cc_shabbat` | `bobi_cc_shabbat_commit` |
+| `rules` | `bobi_cc_rules` | `bobi_cc_rule_commit` |
+| `calendar` | `bobi_cc_calendar_snapshot` | `bobi_cc_calendar_commit` |
+| `devices` | `bobi_cc_devices` | `bobi_cc_device_commit` |
+| `system` | `bobi_cc_system_snapshot` | `bobi_cc_system_commit` |
+
+Smart notifications and cameras have no service of their own: notifications are
+settings the contract marks with a `notification_class`, and cameras are devices
+whose `device_class` is `camera`.
+
+### The snapshot envelope
+
+One shape for every family. A family whose bridge has not shipped answers **200**
+with `available: false` and a Hebrew `reason` — never a 5xx, because "Home
+Assistant does not offer this yet" is a fact, not a failure.
+
+```json
+{
+  "resource": "settings",
+  "available": true,
+  "reason": null,
+  "writes_enabled": false,
+  "groups": [{ "id": "morning", "label": "סיכום בוקר", "description": null,
+               "items": [] }],
+  "items": [{
+    "id": "morning_time",
+    "label": "שעת שליחה",
+    "group": "morning",
+    "kind": "time",
+    "value": "07:00",
+    "display": "07:00",
+    "description": null,
+    "risk": "low",
+    "controllable": true,
+    "operations": ["set"],
+    "options": [],
+    "constraints": { "minimum": null, "maximum": null, "step": null,
+                     "unit": null, "max_length": null, "allowed": [] },
+    "unavailable_reason": null,
+    "detail": {}
+  }],
+  "detail": {}
+}
+```
+
+`kind` is one of `toggle`, `number`, `time`, `date`, `datetime`, `choice`,
+`text`, `list`, `readonly`; anything else renders read-only. `risk` is
+`read_only`, `low`, `medium`, `high` or `destructive` — the last two ask for a
+typed confirmation word.
+
+**Fail closed.** `controllable` absent means *not* controllable, and an item
+with no `operations` or no `value` is a reading however interesting it looks. A
+bridge has to say yes; silence is no.
+
+**No entity ids.** `detail` is filtered: a key named `entity_id`, a value shaped
+like `light.kitchen`, and anything phone- or LID-shaped are dropped — through
+nested dicts and through dicts inside lists. A key ending `_masked` survives and
+is masked again here rather than trusted.
+
+### The commit payload
+
+The Phase 3A shape, extended rather than replaced:
+
+```json
+{
+  "operation": "set",
+  "<id_field>": "morning_time",
+  "…": "the validated payload, flat",
+  "expected_value": "07:00",
+  "preview_token": "pt_…",
+  "confirmed": true,
+  "request_id": "req_…"
+}
+```
+
+`<id_field>` is per family: `setting_id`, `user_id`, `profile_id`, `rule_id`,
+`event_uid`, `device_id`, `action_id`. One `expected_*` is sent per value the
+preview observed. `preview_token` is never empty — the adapter refuses to build
+a commit without one.
+
+### Refusals that are this application's own
+
+| `code` | When |
+| --- | --- |
+| `last_admin` | Disabling or demoting the only enabled administrator |
+| `forbidden_action` | A restart, Supervisor update, integration/device delete or backup restore |
+| `not_controllable` | The bridge did not mark the item controllable, or named no operation for it |
+| `unsupported_capability` | A device control outside the bridge's `capabilities` list |
+| `too_low` · `too_high` · `bad_step` · `too_long` · `not_allowed` | A published limit |
+| `conflict` | The bridge reported a blocking rule conflict |
+| `resource_unavailable` | The family's bridge has not shipped |
+
+Home Assistant re-checks all of these. Neither side is relaxed because the other
+exists.
+
+### `GET /api/bobi/manage/audit`
+
+Newest first, from the app's persistent `/data` when it can be written and from
+memory otherwise. Bounded and rotated, with exactly one older generation kept.
+Phone numbers, LIDs, tokens and images are redacted **before the line is
+written**, so nothing identifying can be recovered by reading the file.

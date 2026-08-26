@@ -23,8 +23,14 @@ TEST_TOKEN = "test-token-not-a-real-secret"
 
 
 @pytest.fixture
-def mock_settings() -> Settings:
-    return Settings(adapter="mock")
+def mock_settings(tmp_path) -> Settings:
+    """Mock adapter, and a `data` directory that belongs to this test.
+
+    The management trail is written to `data_dir`, so a shared one would let
+    one test read another's audit lines — and would leave a `data/` folder in
+    the working tree after every run.
+    """
+    return Settings(adapter="mock", data_dir=tmp_path / "data")
 
 
 @pytest.fixture
