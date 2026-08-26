@@ -14,6 +14,7 @@ be deliberate.
 
 from __future__ import annotations
 
+import copy
 import secrets
 from typing import Any
 
@@ -26,12 +27,437 @@ from app.models.manage import (
     ManagementResource,
     ManagementStatus,
     ObservedState,
+    ResourceSnapshot,
     SnapshotTask,
     TaskSnapshot,
 )
+from app.services.resource_normalize import normalize_resource, unavailable
+from app.services.resources import SPECS
 
 _OPEN = "needs_action"
 _COMPLETED = "completed"
+
+#: Stands where a phone number or a LID would be in real bridge data. Nothing
+#: may echo it back: if this string ever appears in a response, an audit line or
+#: a log, the redaction has a hole in it.
+PRIVATE_CANARY = "MUST-NOT-APPEAR"
+
+
+# --- the 3.0 families -------------------------------------------------------
+# Raw bridge payloads, deliberately in the shape a `bobi_cc_*_snapshot` service
+# answers rather than in the normalized shape — so every test that touches a
+# family exercises the normalizer too, and a change there cannot pass unnoticed.
+DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
+    "settings": {
+        "available": True,
+        "groups": [
+            {
+                "id": "morning",
+                "label": "סיכום בוקר",
+                "items": [
+                    {
+                        "id": "morning_enabled",
+                        "label": "סיכום בוקר אוטומטי",
+                        "kind": "toggle",
+                        "value": True,
+                        "controllable": True,
+                        "operations": ["set"],
+                        "risk": "low",
+                    },
+                    {
+                        "id": "morning_time",
+                        "label": "שעת שליחה",
+                        "kind": "time",
+                        "value": "07:00",
+                        "controllable": True,
+                        "operations": ["set"],
+                        "risk": "low",
+                    },
+                    {
+                        "id": "morning_user_1",
+                        "label": "נמען — ינון",
+                        "kind": "toggle",
+                        "value": True,
+                        "controllable": True,
+                        "operations": ["set"],
+                    },
+                    {
+                        "id": "morning_user_2",
+                        "label": "נמען — הודיה",
+                        "kind": "toggle",
+                        "value": False,
+                        "controllable": True,
+                        "operations": ["set"],
+                    },
+                ],
+            },
+            {
+                "id": "home_status",
+                "label": "מצב הבית",
+                "items": [
+                    {
+                        "id": "home_status_policy",
+                        "label": "מתי לשלוח",
+                        "kind": "choice",
+                        "value": "away_only",
+                        "controllable": True,
+                        "operations": ["set"],
+                        "options": [
+                            {"value": "away_only", "label": "רק כשאין אף אחד בבית"},
+                            {"value": "always", "label": "תמיד"},
+                        ],
+                    },
+                    {
+                        "id": "home_status_first_time",
+                        "label": "שליחה ראשונה",
+                        "kind": "time",
+                        "value": "13:00",
+                        "controllable": True,
+                        "operations": ["set"],
+                    },
+                ],
+            },
+            {
+                "id": "ai",
+                "label": "בינה מלאכותית",
+                "items": [
+                    {
+                        "id": "ai_enabled",
+                        "label": "בובי AI",
+                        "kind": "toggle",
+                        "value": True,
+                        "controllable": True,
+                        "operations": ["set"],
+                        "risk": "medium",
+                    },
+                    {
+                        "id": "ai_monthly_cap",
+                        "label": "תקרת עלות חודשית",
+                        "kind": "number",
+                        "value": 20,
+                        "controllable": True,
+                        "operations": ["set"],
+                        "risk": "medium",
+                        "constraints": {"min": 0, "max": 200, "step": 5, "unit": "$"},
+                    },
+                ],
+            },
+            {
+                "id": "notifications",
+                "label": "התראות חכמות",
+                "items": [
+                    {
+                        "id": "smart_notifications",
+                        "label": "התראות חכמות",
+                        "kind": "toggle",
+                        "value": True,
+                        "controllable": True,
+                        "operations": ["set"],
+                        "notification_class": "master",
+                    },
+                    {
+                        "id": "notify_bedtime",
+                        "label": "התראת שינה",
+                        "kind": "toggle",
+                        "value": False,
+                        "controllable": True,
+                        "operations": ["set"],
+                        "notification_class": "smart",
+                    },
+                    {
+                        "id": "notify_bedtime_recipients",
+                        "label": "נמעני התראת שינה",
+                        "kind": "choice",
+                        "value": "both",
+                        "controllable": True,
+                        "operations": ["set"],
+                        "notification_class": "smart",
+                        "options": [
+                            {"value": "user_1", "label": "ינון בלבד"},
+                            {"value": "user_2", "label": "הודיה בלבד"},
+                            {"value": "both", "label": "שניהם"},
+                        ],
+                    },
+                    {
+                        "id": "notify_low_battery",
+                        "label": "סוללה חלשה",
+                        "kind": "toggle",
+                        "value": True,
+                        "controllable": True,
+                        "operations": ["set"],
+                        "notification_class": "system",
+                    },
+                ],
+            },
+        ],
+    },
+    "users": {
+        "available": True,
+        "items": [
+            {
+                "id": "user_1",
+                "label": "ינון",
+                "kind": "toggle",
+                "value": True,
+                "controllable": True,
+                "operations": ["disable", "set_role", "rename", "set_phone"],
+                "risk": "medium",
+                "role": "admin",
+                "enabled": True,
+                "whatsapp_configured": True,
+                "phone_masked": "•••• ••• 42",
+                "calendar_configured": True,
+                "task_list_configured": True,
+                # Deliberately present, and deliberately never surfaced. The
+                # value is a canary rather than a plausible number: the
+                # redaction is by key name, so the shape does not matter, and a
+                # test can assert this exact string reaches no response, no
+                # audit line and no log.
+                "phone": PRIVATE_CANARY,
+                "lid": f"{PRIVATE_CANARY}@lid",
+            },
+            {
+                "id": "user_2",
+                "label": "הודיה",
+                "kind": "toggle",
+                "value": True,
+                "controllable": True,
+                "operations": ["disable", "set_role", "rename", "set_phone"],
+                "risk": "medium",
+                "role": "member",
+                "enabled": True,
+                "whatsapp_configured": True,
+                "phone_masked": "•••• ••• 17",
+                "calendar_configured": True,
+                "task_list_configured": False,
+                "phone": PRIVATE_CANARY,
+            },
+        ],
+    },
+    "shabbat": {
+        "available": True,
+        "groups": [
+            {
+                "id": "timing",
+                "label": "תזמון",
+                "items": [
+                    {
+                        "id": "pre_shabbat_offset_minutes",
+                        "label": "כמה דקות לפני כניסת שבת",
+                        "kind": "number",
+                        "value": 30,
+                        "controllable": True,
+                        "operations": ["set_timing"],
+                        "constraints": {"min": 0, "max": 120, "step": 5, "unit": " דק׳"},
+                    },
+                    {
+                        "id": "alert_enabled",
+                        "label": "התראת בובי לפני שבת",
+                        "kind": "toggle",
+                        "value": True,
+                        "controllable": True,
+                        "operations": ["set_timing"],
+                    },
+                    {
+                        "id": "night_off_time",
+                        "label": "כיבוי בליל שבת",
+                        "kind": "time",
+                        "value": "23:30",
+                        "controllable": True,
+                        "operations": ["set_timing"],
+                    },
+                    {
+                        "id": "morning_on_time",
+                        "label": "הדלקה בשבת בבוקר",
+                        "kind": "time",
+                        "value": "07:30",
+                        "controllable": True,
+                        "operations": ["set_timing"],
+                    },
+                ],
+            },
+            {
+                "id": "profiles",
+                "label": "פרופילים",
+                "items": [
+                    {
+                        "id": "pre_off",
+                        "label": "לפני שבת — יכובו",
+                        "kind": "list",
+                        "value": ["mosquito", "laundry"],
+                        "controllable": True,
+                        "operations": ["set_membership"],
+                        "profile": "pre_off",
+                        "constraints": {
+                            "allowed": [
+                                {"value": "dining", "label": "פינת אוכל"},
+                                {"value": "salon", "label": "סלון"},
+                                {"value": "kitchen", "label": "מטבח"},
+                                {"value": "led_salon", "label": "LED סלון"},
+                                {"value": "mosquito", "label": "קטלן יתושים"},
+                                {"value": "laundry", "label": "מכונת כביסה"},
+                                {"value": "boiler", "label": "דוד"},
+                            ]
+                        },
+                    },
+                    {
+                        "id": "pre_on",
+                        "label": "לפני שבת — יודלקו",
+                        "kind": "list",
+                        "value": ["kitchen", "dining", "led_salon"],
+                        "controllable": True,
+                        "operations": ["set_membership"],
+                        "profile": "pre_on",
+                        "constraints": {
+                            "allowed": [
+                                {"value": "dining", "label": "פינת אוכל"},
+                                {"value": "salon", "label": "סלון"},
+                                {"value": "kitchen", "label": "מטבח"},
+                                {"value": "led_salon", "label": "LED סלון"},
+                                {"value": "ac_salon", "label": "מזגן סלון"},
+                            ]
+                        },
+                    },
+                ],
+            },
+            {
+                "id": "temperatures",
+                "label": "טמפרטורות מזגן",
+                "items": [
+                    {
+                        "id": "ac_salon_temperature",
+                        "label": "מזגן סלון",
+                        "kind": "number",
+                        "value": 24,
+                        "controllable": True,
+                        "operations": ["set_temperature"],
+                        "constraints": {"min": 16, "max": 30, "step": 1, "unit": "°"},
+                    },
+                    {
+                        "id": "ac_parents_temperature",
+                        "label": "מזגן הורים",
+                        "kind": "number",
+                        "value": 23,
+                        "controllable": True,
+                        "operations": ["set_temperature"],
+                        "constraints": {"min": 16, "max": 30, "step": 1, "unit": "°"},
+                    },
+                ],
+            },
+        ],
+    },
+    "rules": {
+        "available": True,
+        "items": [
+            {
+                "id": "rule_1",
+                "label": "להדליק דוד ביום שלישי",
+                "kind": "toggle",
+                "value": True,
+                "controllable": True,
+                "operations": ["edit", "disable", "delete"],
+                "rule_type": "weekly",
+                "days": ["tue"],
+                "time": "06:00",
+                "action": "להדליק את הדוד",
+                "version": 3,
+            },
+            {
+                "id": "rule_2",
+                "label": "תזכורת לקחת תרופה",
+                "kind": "toggle",
+                "value": False,
+                "controllable": True,
+                "operations": ["edit", "enable", "delete"],
+                "rule_type": "once",
+                "next_due": "2026-09-01T20:00:00",
+                "action": "לשלוח תזכורת",
+                "version": 1,
+            },
+        ],
+    },
+    "calendar": {
+        "available": True,
+        "items": [
+            {
+                "id": "evt_1",
+                "label": "פגישת הורים",
+                "kind": "readonly",
+                "value": "2026-09-02T18:00:00",
+                "controllable": True,
+                "operations": ["edit", "move", "delete"],
+                "user_id": "user_1",
+                "start": "2026-09-02T18:00:00",
+                "end": "2026-09-02T19:00:00",
+                "location": "בית הספר",
+                "recurring": False,
+            }
+        ],
+    },
+    "devices": {
+        "available": True,
+        "items": [
+            {
+                "id": "kitchen",
+                "label": "מטבח",
+                "kind": "toggle",
+                "value": False,
+                "controllable": True,
+                "operations": ["set"],
+                "device_class": "light",
+                "capabilities": ["on_off", "brightness"],
+                "entity_id": "light.kitchen",
+                "constraints": {"min": 1, "max": 100, "step": 1, "unit": "%"},
+            },
+            {
+                "id": "ac_salon",
+                "label": "מזגן סלון",
+                "kind": "number",
+                "value": 24,
+                "controllable": True,
+                "operations": ["set"],
+                "device_class": "climate",
+                "capabilities": ["on_off", "temperature", "hvac_mode"],
+                "constraints": {"min": 16, "max": 30, "step": 1, "unit": "°"},
+            },
+            {
+                "id": "cam_lia",
+                "label": "מצלמת ליה",
+                "kind": "readonly",
+                "value": "streaming",
+                "controllable": False,
+                "operations": [],
+                "device_class": "camera",
+                "unavailable_reason": "המצלמה אינה ניתנת לשליטה מכאן",
+            },
+        ],
+    },
+    "system": {
+        "available": True,
+        "items": [
+            {
+                "id": "self_check",
+                "label": "בדיקה עצמית",
+                "kind": "readonly",
+                "value": "ready",
+                "controllable": True,
+                "operations": ["run"],
+                "risk": "read_only",
+                "description": "בובי בודק את עצמו ומדווח. לא משנה כלום.",
+            },
+            {
+                "id": "undo_last_action",
+                "label": "ביטול הפעולה האחרונה",
+                "kind": "readonly",
+                "value": "available",
+                "controllable": True,
+                "operations": ["run"],
+                "risk": "high",
+                "description": "מחזיר את השינוי האחרון שבובי ביצע.",
+            },
+        ],
+    },
+}
 
 
 class MockManagementBridge(ManagementBridge):
@@ -51,6 +477,10 @@ class MockManagementBridge(ManagementBridge):
         reports_feature_state: bool = True,
         fail_on: str | None = None,
         verifies: bool = True,
+        #: Raw family payloads, keyed by resource. A family missing from this
+        #: mapping answers "unavailable", which is exactly what a bridge that
+        #: has not shipped does — so a test can hold one back on purpose.
+        resources: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self.tasks: dict[str, dict[str, Any]] = tasks or {}
         self.features: dict[str, bool] = features or {}
@@ -60,6 +490,9 @@ class MockManagementBridge(ManagementBridge):
         self._reports_feature_state = reports_feature_state
         self._fail_on = fail_on
         self._verifies = verifies
+        self.resources: dict[str, dict[str, Any]] = (
+            copy.deepcopy(DEFAULT_RESOURCE_PAYLOADS) if resources is None else resources
+        )
         #: Every apply() call, so a test can assert a preview made none.
         self.applied: list[dict[str, Any]] = []
 
@@ -102,6 +535,28 @@ class MockManagementBridge(ManagementBridge):
                         for feature_id, state in self.features.items()
                     ],
                 ),
+                # A family is advertised only when this double actually holds
+                # data for it, which is how the live contract behaves: the
+                # bridge names what it has implemented. Withhold a family from
+                # `resources=` and every route for it fails closed, which is
+                # what a test of "the bridge has not landed" needs.
+                *[
+                    ManagementResource(
+                        id=resource,
+                        label=SPECS[resource].label,
+                        available=True,
+                        operations=[
+                            ManagedOperation(
+                                id=operation,
+                                label=SPECS[resource].titles.get(operation, operation),
+                                destructive=operation in SPECS[resource].destructive,
+                            )
+                            for operation in SPECS[resource].operations
+                        ],
+                    )
+                    for resource in self.resources
+                    if resource in SPECS
+                ],
             ],
         )
 
@@ -125,7 +580,40 @@ class MockManagementBridge(ManagementBridge):
             writes_enabled=self.writes_enabled,
         )
 
+    async def resource_snapshot(self, resource: str) -> ResourceSnapshot:
+        payload = self.resources.get(resource)
+        if payload is None:
+            return unavailable(resource, f"{resource}: הגשר של בובי עדיין לא כולל את השירות הזה")
+        return normalize_resource(resource, {**payload, "writes_enabled": self.writes_enabled})
+
+    def _raw_item(self, resource: str, item_id: str) -> dict[str, Any] | None:
+        """The raw entry behind a normalized item, so a commit can change it."""
+        payload = self.resources.get(resource) or {}
+        for group in payload.get("groups", []):
+            for entry in group.get("items", []):
+                if entry.get("id") == item_id:
+                    return entry
+        for entry in payload.get("items", []):
+            if entry.get("id") == item_id:
+                return entry
+        return None
+
     async def observe(self, resource_type: str, resource_id: str | None) -> ObservedState | None:
+        if resource_type in SPECS and resource_type not in ("tasks", "features"):
+            if resource_id is None:
+                return ObservedState(resource_id=None, label=None, values={})
+            snapshot = await self.resource_snapshot(resource_type)
+            if not snapshot.available:
+                return None
+            item = next((entry for entry in snapshot.items if entry.id == resource_id), None)
+            if item is None or item.value is None:
+                return None
+            values: dict[str, Any] = {"value": item.value}
+            for key, value in item.detail.items():
+                if isinstance(value, str | int | float | bool):
+                    values[key] = value
+            return ObservedState(resource_id=item.id, label=item.label, values=values)
+
         if resource_type == "tasks":
             if resource_id is None:
                 return ObservedState(values={})
@@ -191,7 +679,75 @@ class MockManagementBridge(ManagementBridge):
             return self._apply_task(operation, resource_id, payload, observed)
         if resource_type == "features":
             return self._apply_feature(resource_id, payload, observed)
+        if resource_type in SPECS:
+            return self._apply_resource(resource_type, operation, resource_id, payload, observed)
         raise BobiError("משאב לא נתמך", code="unsupported_resource")
+
+    def _apply_resource(
+        self,
+        resource: str,
+        operation: str,
+        resource_id: str | None,
+        payload: dict[str, Any],
+        observed: ObservedState,
+    ) -> BridgeOutcome:
+        """A 3.0 family commit, checked the way the live bridge checks one."""
+        spec = SPECS[resource]
+        if operation not in spec.operations:
+            return BridgeOutcome(executed=False, verified=False, reason="unsupported_operation")
+
+        if operation in spec.creating:
+            new_id = f"{resource}_{secrets.token_hex(3)}"
+            entry = {
+                "id": new_id,
+                "label": payload.get("label") or payload.get("value") or new_id,
+                "kind": "toggle",
+                "value": True,
+                "controllable": True,
+                "operations": list(spec.operations),
+                **{k: v for k, v in payload.items() if k not in ("label",)},
+            }
+            self.resources.setdefault(resource, {"available": True}).setdefault(
+                "items", []
+            ).append(entry)
+            return BridgeOutcome(executed=True, verified=self._verifies, reason="ok",
+                                 resource_id=new_id)
+
+        entry = self._raw_item(resource, resource_id or "")
+        if entry is None:
+            return BridgeOutcome(executed=False, verified=False, reason="not_found")
+
+        # Optimistic locking, exactly as Home Assistant does it.
+        if observed.values.get("value") != entry.get("value"):
+            return BridgeOutcome(executed=False, verified=False, reason="stale_preview")
+
+        if operation in spec.destructive:
+            for container in (self.resources[resource].get("items", []),):
+                if entry in container:
+                    container.remove(entry)
+            for group in self.resources[resource].get("groups", []):
+                if entry in group.get("items", []):
+                    group["items"].remove(entry)
+            return BridgeOutcome(executed=True, verified=self._verifies, reason="ok",
+                                 resource_id=resource_id)
+
+        wanted = payload.get("value", payload.get("enabled"))
+        if operation == "enable":
+            wanted = True
+        elif operation == "disable":
+            wanted = False
+
+        if wanted is not None and entry.get("value") == wanted:
+            return BridgeOutcome(executed=False, verified=True, reason="already_in_state",
+                                 resource_id=resource_id)
+        if wanted is not None:
+            entry["value"] = wanted
+        # Structured edits — a rule's days, an event's start — land beside it.
+        for key, value in payload.items():
+            if key not in ("value", "enabled"):
+                entry[key] = value
+        return BridgeOutcome(executed=True, verified=self._verifies, reason="ok",
+                             resource_id=resource_id)
 
     def _apply_task(
         self,

@@ -1,6 +1,6 @@
-"""The Home Assistant write bridge — Phase 3A.
+"""The Home Assistant write bridge.
 
-Five `script.bobi_cc_*` services and nothing else:
+A closed list of `script.bobi_cc_*` services and nothing else:
 
 | Service | Kind |
 | --- | --- |
@@ -10,11 +10,19 @@ Five `script.bobi_cc_*` services and nothing else:
 | `bobi_cc_task_update_commit` | write — edit · complete · reopen · delete |
 | `bobi_cc_feature_commit` | write |
 
-`todo.add_item`, `todo.update_item`, `todo.remove_item` and every
-`input_boolean.*` are **never** called. The adapter's allow-list rejects them
-before a request is built, and a test asserts none of them appears anywhere on
-this path. Bobi's bridge owns those entities; this application only asks the
-bridge, by operation name, to do one of the things it has declared.
+3.0 adds one read and one write service per managed family — settings, users,
+Shabbat, rules, the calendar, devices and the system — named in
+`app.services.resources` and reached only through `_apply_resource`. The list is
+still closed: `ALLOWED_SERVICES` is built from these declarations, so a service
+that is not declared cannot be called even by name.
+
+`todo.add_item`, `todo.update_item`, `todo.remove_item`, every `input_boolean.*`
+and every device domain — `light.*`, `climate.*`, `switch.*`, `vacuum.*`,
+`camera.*`, `calendar.*`, `automation.*` — are **never** called. The adapter's
+allow-list rejects them before a request is built, and a test asserts none of
+them appears anywhere on this path. Bobi's bridge owns those entities; this
+application only asks the bridge, by operation name, to do one of the things it
+has declared.
 
 ## The two layers
 
@@ -37,6 +45,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from app.adapters.management import UNAVAILABLE_MESSAGE, ManagementBridge
+from app.errors import BobiError
 from app.models.manage import (
     FEATURE_OPERATIONS,
     TASK_OPERATIONS,
@@ -46,10 +55,17 @@ from app.models.manage import (
     ManagementResource,
     ManagementStatus,
     ObservedState,
+    ResourceSnapshot,
     SnapshotTask,
     TaskSnapshot,
 )
 from app.services import normalize
+from app.services.resource_normalize import normalize_resource, unavailable
+from app.services.resources import (
+    RESOURCE_READ_SERVICES,
+    RESOURCE_WRITE_SERVICES,
+    SPECS,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle only matters to type checkers
     from app.adapters.real import RealHomeAssistantAdapter
@@ -64,10 +80,12 @@ TASK_UPDATE_COMMIT = "bobi_cc_task_update_commit"
 FEATURE_COMMIT = "bobi_cc_feature_commit"
 
 #: The read half. Callable while previewing.
-MANAGEMENT_READ_SERVICES = frozenset({CONTRACT, TASK_SNAPSHOT})
+MANAGEMENT_READ_SERVICES = frozenset({CONTRACT, TASK_SNAPSHOT}) | RESOURCE_READ_SERVICES
 #: The write half. Reachable only from `apply()`, only after a confirmed
 #: preview, and only when Home Assistant's master switch is on.
-MANAGEMENT_WRITE_SERVICES = frozenset({TASK_ADD_COMMIT, TASK_UPDATE_COMMIT, FEATURE_COMMIT})
+MANAGEMENT_WRITE_SERVICES = (
+    frozenset({TASK_ADD_COMMIT, TASK_UPDATE_COMMIT, FEATURE_COMMIT}) | RESOURCE_WRITE_SERVICES
+)
 
 #: Hebrew for the operations the contract names.
 _TASK_OPERATION_LABELS = {
@@ -107,8 +125,33 @@ class RealManagementBridge(ManagementBridge):
         """`script.bobi_cc_task_snapshot`. Read-only."""
         return _snapshot(await self._payload(TASK_SNAPSHOT))
 
+    async def resource_snapshot(self, resource: str) -> ResourceSnapshot:
+        """One 3.0 family, read from its own snapshot service.
+
+        A service Home Assistant has not published yet answers 404, which the
+        adapter raises as `bridge_service_missing`. That is turned into an
+        unavailable snapshot rather than an error page: "this is not in Home
+        Assistant yet" is the true answer, and it is the *only* thing to do
+        about it — there is no second way to fetch this and none may be added.
+        """
+        spec = SPECS.get(resource)
+        if spec is None or spec.snapshot_service is None:
+            return unavailable(resource, UNAVAILABLE_MESSAGE)
+        try:
+            payload = await self._payload(spec.snapshot_service)
+        except BobiError as exc:
+            if exc.code == "bridge_service_missing":
+                return unavailable(
+                    resource, f"{spec.label}: הגשר של בובי עדיין לא כולל את השירות הזה"
+                )
+            raise
+        return normalize_resource(resource, payload)
+
     async def observe(self, resource_type: str, resource_id: str | None) -> ObservedState | None:
         """The current state a preview binds to, read fresh from the bridge."""
+        if resource_type in SPECS and resource_type not in ("tasks", "features"):
+            return await self._observe_resource(resource_type, resource_id)
+
         if resource_type == "tasks":
             if resource_id is None:
                 # Adding a task binds to nothing that exists yet.
@@ -146,6 +189,36 @@ class RealManagementBridge(ManagementBridge):
 
         return None
 
+    async def _observe_resource(
+        self, resource: str, resource_id: str | None
+    ) -> ObservedState | None:
+        """Find the item a preview is about, and keep what the bridge will compare.
+
+        Creating something binds to nothing, so an absent id is an empty
+        observation rather than a failure. Everything else must be found: an
+        item the snapshot does not report is an item whose current value is
+        unknown, and a preview against an unknown value would describe a change
+        that may never have been true.
+        """
+        if resource_id is None:
+            return ObservedState(resource_id=None, label=None, values={})
+
+        snapshot = await self.resource_snapshot(resource)
+        if not snapshot.available:
+            return None
+        item = next((entry for entry in snapshot.items if entry.id == resource_id), None)
+        if item is None or item.value is None:
+            return None
+
+        # `value` under its own name plus the canonical extras the bridge
+        # published for this item — a rule's version, an event's start. Home
+        # Assistant compares whichever of them it cares about.
+        values: dict[str, Any] = {"value": item.value}
+        for key, value in item.detail.items():
+            if isinstance(value, str | int | float | bool):
+                values[key] = value
+        return ObservedState(resource_id=item.id, label=item.label, values=values)
+
     # --- writes -----------------------------------------------------------
     async def apply(
         self,
@@ -173,7 +246,49 @@ class RealManagementBridge(ManagementBridge):
             return await self._apply_feature(
                 operation, resource_id, payload, observed, request_id, preview_token
             )
+        if resource_type in SPECS:
+            return await self._apply_resource(
+                resource_type, operation, resource_id, payload, observed, request_id, preview_token
+            )
         raise _unsupported(resource_type, operation)
+
+    async def _apply_resource(
+        self,
+        resource: str,
+        operation: str,
+        resource_id: str | None,
+        payload: dict[str, Any],
+        observed: ObservedState,
+        request_id: str,
+        preview_token: str,
+    ) -> BridgeOutcome:
+        """One 3.0 family's commit, on the shape Phase 3A established.
+
+        Flat fields, the target under the name its bridge expects, and one
+        `expected_*` per value the preview observed — the same convention as
+        `expected_summary` and `expected_state`, extended rather than replaced,
+        so a bridge author reading one script can write the next.
+        """
+        spec = SPECS[resource]
+        if operation not in spec.operations:
+            raise _unsupported(resource, operation)
+        if spec.commit_service is None:  # pragma: no cover - every spec has one today
+            raise _unsupported(resource, operation)
+
+        data: dict[str, Any] = {"operation": operation}
+        if resource_id is not None:
+            data[spec.id_field] = resource_id
+        # What the user asked for, already validated and already stripped of
+        # anything private by the preview store.
+        data.update(payload)
+        # What the preview saw. Straight from the observation, never re-read
+        # here — re-reading would defeat the staleness check it exists for.
+        for key, value in observed.values.items():
+            data[f"expected_{key}"] = value
+        data["preview_token"] = preview_token
+        data["confirmed"] = True
+        data["request_id"] = request_id
+        return _outcome(await self._payload(spec.commit_service, data))
 
     async def _apply_task(
         self,

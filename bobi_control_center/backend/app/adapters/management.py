@@ -26,7 +26,13 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from app.models.manage import BridgeOutcome, ManagementStatus, ObservedState, TaskSnapshot
+from app.models.manage import (
+    BridgeOutcome,
+    ManagementStatus,
+    ObservedState,
+    ResourceSnapshot,
+    TaskSnapshot,
+)
 
 #: Shown whenever management is asked for and no bridge has declared itself.
 UNAVAILABLE_MESSAGE = "ניהול עדיין לא הופעל ב-Home Assistant"
@@ -47,6 +53,17 @@ class ManagementBridge(ABC):
     @abstractmethod
     async def snapshot(self) -> TaskSnapshot:
         """The task list a preview binds to. READ ONLY."""
+
+    @abstractmethod
+    async def resource_snapshot(self, resource: str) -> ResourceSnapshot:
+        """One 3.0 family's current state, normalized. READ ONLY.
+
+        A family whose bridge service has not shipped answers `available:
+        false` with a Hebrew reason rather than raising. That is a real answer —
+        the screen says the feature is not available in Home Assistant yet —
+        and it is the only thing this application may do about a missing
+        bridge. There is no fallback that reaches Home Assistant another way.
+        """
 
     @abstractmethod
     async def observe(self, resource_type: str, resource_id: str | None) -> ObservedState | None:

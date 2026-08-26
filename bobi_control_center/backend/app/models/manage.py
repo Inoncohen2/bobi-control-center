@@ -26,9 +26,25 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.bridge import CanonicalModel
 
-#: Resources Phase 3A prepares. Anything else is refused by the router, so a
-#: later milestone has to add itself here deliberately.
-MANAGED_RESOURCES = ("tasks", "features")
+#: Every family the router will accept in a URL. Anything else is refused
+#: before a service is consulted, so a resource cannot be managed by guessing
+#: its name — a new one has to be added here deliberately, with a spec in
+#: `app.services.resources` and a describer to match.
+#:
+#: Being listed here is *permission to ask*, not availability: the management
+#: contract decides whether Home Assistant actually offers the family, and a
+#: family it does not name stays unavailable however complete this list is.
+MANAGED_RESOURCES = (
+    "tasks",
+    "features",
+    "settings",
+    "users",
+    "shabbat",
+    "rules",
+    "calendar",
+    "devices",
+    "system",
+)
 
 #: Operations, per resource — named exactly as the Home Assistant contract
 #: names them, so nothing has to be translated on the way out. The bridge
@@ -329,3 +345,108 @@ class AuditLog(CanonicalModel):
 
     count: int = 0
     records: list[AuditEntry] = Field(default_factory=list)
+
+
+# --- the contract-driven resources (3.0) ------------------------------------
+# Phase 3A hard-coded two families because the bridge published exactly two.
+# The families below are described by the bridge instead: it names the items, it
+# says which are operable, and it supplies the limits. Nothing here decides what
+# Bobi can do — it decides only how to *say* it in Hebrew, and how to refuse.
+
+
+class ManagedOption(CanonicalModel):
+    """One allowed value of a choice, as the bridge offered it."""
+
+    value: str
+    label: str
+    #: Hebrew, when picking this option deserves a word of warning.
+    detail: str | None = None
+
+
+class ManagedConstraints(CanonicalModel):
+    """The limits the bridge published for one item.
+
+    Every one is optional, and an absent limit is never invented: an item with
+    no `minimum` is not thereby unbounded, it is an item whose bound this
+    application does not know. Home Assistant checks its own limits again.
+    """
+
+    minimum: float | None = None
+    maximum: float | None = None
+    step: float | None = None
+    #: `°`, `דק׳`, `%` — appended when a value is shown.
+    unit: str | None = None
+    max_length: int | None = None
+    #: For a list item: the tokens it may hold, e.g. Shabbat profile membership.
+    allowed: list[ManagedOption] = Field(default_factory=list)
+
+
+#: How an item is edited. The UI renders from this and from `constraints`;
+#: an unrecognised kind is shown read-only rather than guessed at.
+ITEM_KINDS = ("toggle", "number", "time", "date", "datetime", "choice", "text", "list", "readonly")
+
+
+class ManagedItem(CanonicalModel):
+    """One thing a person can look at, and sometimes change.
+
+    A setting, a notification class, a user, a Shabbat profile field, a rule, a
+    calendar event, a device control, a system action. The shape is deliberately
+    the same for all of them: the bridge describes, this application renders.
+    """
+
+    id: str
+    label: str
+    #: Which card it belongs under — `morning`, `shabbat_alert`, `salon`.
+    group: str | None = None
+    kind: str = "readonly"
+    #: The canonical current value. `None` means the bridge did not report one,
+    #: which makes the item unoperable rather than assumed.
+    value: Any = None
+    #: Hebrew rendering of `value`, for screens that only display.
+    display: str | None = None
+    description: str | None = None
+    #: `read_only` · `low` · `medium` · `high` · `destructive`.
+    risk: str = "read_only"
+    #: Whether a write UI may be shown at all. False unless the bridge says so.
+    controllable: bool = False
+    #: The operations the bridge accepts for this item, from the closed set.
+    operations: list[str] = Field(default_factory=list)
+    options: list[ManagedOption] = Field(default_factory=list)
+    constraints: ManagedConstraints | None = None
+    #: Hebrew — why this item cannot be operated right now.
+    unavailable_reason: str | None = None
+    #: Extra canonical, already-safe fields for a family's own screen: a rule's
+    #: days, an event's start and end, a device's mode. Never a raw entity id —
+    #: the normalizers drop those before they get here.
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class ManagedGroup(CanonicalModel):
+    """A titled section of a resource screen."""
+
+    id: str
+    label: str
+    description: str | None = None
+    items: list[ManagedItem] = Field(default_factory=list)
+
+
+class ResourceSnapshot(CanonicalModel):
+    """One family's current state, normalized.
+
+    The same envelope for settings, users, Shabbat, rules, the calendar, devices
+    and the system. `available` false with a Hebrew `reason` is a perfectly good
+    answer and the screens are built to show it: a bridge that has not landed
+    yet is reported as missing, never worked around.
+    """
+
+    resource: str
+    available: bool = False
+    reason: str | None = None
+    #: Home Assistant's master switch, as reported on this call.
+    writes_enabled: bool = False
+    groups: list[ManagedGroup] = Field(default_factory=list)
+    #: Every item, flat, whatever group it sits in.
+    items: list[ManagedItem] = Field(default_factory=list)
+    #: The family's own canonical extras — a Shabbat profile list, a calendar
+    #: range, the device classes present. Already normalized and already safe.
+    detail: dict[str, Any] = Field(default_factory=dict)

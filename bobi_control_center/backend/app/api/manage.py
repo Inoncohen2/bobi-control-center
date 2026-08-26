@@ -20,6 +20,7 @@ from app.models.manage import (
     ManagementStatus,
     PreviewRequest,
     PreviewResponse,
+    ResourceSnapshot,
     TaskSnapshot,
 )
 
@@ -62,6 +63,38 @@ async def get_task_snapshot(service: ManagementDep) -> TaskSnapshot:
     application must not infer one.
     """
     return await service.snapshot()
+
+
+@router.get(
+    "/{resource}/snapshot",
+    response_model=ResourceSnapshot,
+    summary="מצב נוכחי של משאב מנוהל",
+)
+async def get_resource_snapshot(
+    service: ManagementDep,
+    resource: str = _RESOURCE,
+) -> ResourceSnapshot:
+    """One family's current state, from its own `bobi_cc_*` read service.
+
+    Serves settings, users, Shabbat, rules, the calendar, devices and the
+    system — the same envelope for all of them, because the screens render from
+    what the bridge describes rather than from anything hard-coded here.
+
+    A family whose bridge has not shipped answers `available: false` with a
+    Hebrew reason and a 200, not an error: "Home Assistant does not offer this
+    yet" is a fact about the house, and the screen is built to say it. There is
+    no second path to this data, and none may be added.
+
+    `tasks` keeps its own richer endpoint above; asking for it here is refused
+    rather than answered in a shape that would lose the open/completed split.
+    """
+    checked = _check(resource)
+    if checked in ("tasks", "features"):
+        raise NotFoundError(
+            "למשאב הזה יש נקודת קצה משלו",
+            details={"resource": checked, "endpoint": "/api/bobi/manage/tasks/snapshot"},
+        )
+    return await service.resource_snapshot(checked)
 
 
 @router.post(

@@ -43,13 +43,29 @@ from app.models.manage import (
     ObservedState,
     PreviewRequest,
     PreviewResponse,
+    ResourceSnapshot,
     TaskSnapshot,
     VerificationResult,
     WriteResult,
 )
 from app.models.manage import ValidationError as FieldError
+from app.services.audit import AuditTrail
+from app.services.describe import (
+    allowed_private_fields,
+    describe,
+    find_item,
+    observed_from,
+)
+from app.services.resource_normalize import unavailable
+from app.services.resources import SPECS
 
 logger = logging.getLogger("bobi.manage")
+
+#: The families whose previews are generated from the bridge's own description.
+#: `tasks` and `features` keep their Phase 3A describers untouched — they are
+#: the two contracts Home Assistant has actually shipped, and rewriting a
+#: working path to look like the new one would be a change with no upside.
+GENERIC_RESOURCES = frozenset(SPECS) - {"tasks", "features"}
 
 #: How long a preview stays valid. Long enough to read and confirm, short
 #: enough that a forgotten dialog cannot commit an hour-old intention.
@@ -131,17 +147,23 @@ def _now() -> datetime:
 _PRIVATE_FIELDS = ("phone", "lid", "jid", "chat_id", "wa_id", "token", "secret", "number")
 
 
-def sanitise(payload: dict[str, Any]) -> dict[str, Any]:
+def sanitise(payload: dict[str, Any], keep: frozenset[str] = frozenset()) -> dict[str, Any]:
     """Drop anything resembling a phone number, id or credential.
 
-    Applied to everything that gets stored or echoed. The management path never
-    needs such a field, so removing it costs nothing and closes the possibility
-    of one leaking into the audit trail.
+    Applied to everything that gets stored or echoed. Almost nothing on the
+    management path needs such a field, so removing it costs nothing and closes
+    the possibility of one leaking into the audit trail.
+
+    `keep` is the one exception, and it is deliberately narrow: changing a
+    household member's phone number cannot be done without the number, so
+    `users.set_phone` names `phone` here and nothing else names anything. The
+    audit line is sanitised again on the way out with no `keep` at all, so even
+    that field reaches the trail masked rather than whole.
     """
     return {
         key: value
         for key, value in payload.items()
-        if not any(private in key.lower() for private in _PRIVATE_FIELDS)
+        if key in keep or not any(private in key.lower() for private in _PRIVATE_FIELDS)
     }
 
 
@@ -197,10 +219,15 @@ class _StoredPreview:
 class ManagementService:
     """The write flow, independent of FastAPI and of any bridge."""
 
-    def __init__(self, bridge: ManagementBridge | None) -> None:
+    def __init__(
+        self, bridge: ManagementBridge | None, trail: AuditTrail | None = None
+    ) -> None:
         self._bridge = bridge
         self._previews: dict[str, _StoredPreview] = {}
         self._audit: list[AuditEntry] = []
+        # A memory-only trail keeps every call site identical when there is no
+        # `/data` — a test, a laptop — rather than making every write check.
+        self._trail = trail if trail is not None else AuditTrail(None)
 
     # --- discovery --------------------------------------------------------
     async def status(self) -> ManagementStatus:
@@ -229,6 +256,17 @@ class ManagementService:
         if self._bridge is None:
             raise ManagementUnavailableError()
         return await self._bridge.snapshot()
+
+    async def resource_snapshot(self, resource: str) -> ResourceSnapshot:
+        """One family's current state. Read-only, and it fails closed.
+
+        No bridge at all answers "unavailable" rather than raising: a screen
+        that can say *why* it is empty is more use than an error page, and this
+        is the same answer a bridge that has not shipped yet produces.
+        """
+        if self._bridge is None:
+            return unavailable(resource, UNAVAILABLE_MESSAGE)
+        return await self._bridge.resource_snapshot(resource)
 
     async def _require_bridge(
         self, resource_type: str, operation: str, *, for_write: bool = False
@@ -289,7 +327,12 @@ class ManagementService:
         """Describe the change. Performs no write of any kind."""
         bridge = await self._require_bridge(resource_type, request.operation)
 
-        payload = sanitise(request.payload)
+        payload = sanitise(
+            request.payload, keep=allowed_private_fields(resource_type, request.operation)
+        )
+
+        if resource_type in GENERIC_RESOURCES:
+            return await self._preview_resource(bridge, resource_type, request, payload)
 
         # Read what the resource looks like *now*. Home Assistant compares
         # against this immediately before it acts, so it is the preview's job to
@@ -319,6 +362,52 @@ class ManagementService:
         else:  # pragma: no cover - the router restricts this first.
             raise NotFoundError("משאב לא מוכר")
 
+        return self._store_preview(response, resource_type, request, payload, observed)
+
+    async def _preview_resource(
+        self,
+        bridge: ManagementBridge,
+        resource_type: str,
+        request: PreviewRequest,
+        payload: dict[str, Any],
+    ) -> PreviewResponse:
+        """A 3.0 family's preview, described from what the bridge published.
+
+        The snapshot is read once and used for everything: to find the item, to
+        learn its limits, to bind the observation the commit will carry, and —
+        for users — to count the admins. One read, so the whole preview
+        describes a single consistent moment rather than several.
+        """
+        snapshot = await bridge.resource_snapshot(resource_type)
+        if not snapshot.available:
+            return _invalid(
+                request.operation,
+                request.resource_id,
+                SPECS[resource_type].label,
+                [
+                    FieldError(
+                        field=None,
+                        code="resource_unavailable",
+                        message=snapshot.reason or UNAVAILABLE_MESSAGE,
+                    )
+                ],
+            ).model_copy(update={"resource_type": resource_type})
+
+        response = describe(
+            resource_type, request.operation, request.resource_id, payload, snapshot
+        )
+        observed = observed_from(find_item(snapshot, request.resource_id))
+        return self._store_preview(response, resource_type, request, payload, observed)
+
+    def _store_preview(
+        self,
+        response: PreviewResponse,
+        resource_type: str,
+        request: PreviewRequest,
+        payload: dict[str, Any],
+        observed: ObservedState,
+    ) -> PreviewResponse:
+        """Stamp a described change with its ids, keep it, and record the line."""
         expires_at = _now() + PREVIEW_TTL
         preview_id = f"pv_{secrets.token_urlsafe(24)}"
         # Minted here, with the preview, and not at commit time: a token created
@@ -545,6 +634,10 @@ class ManagementService:
             operation=operation,
             resource_type=resource_type,
             resource_id=resource_id,
+            # Sanitised with no `keep`: the one field a commit may carry —
+            # a household member's phone number — is dropped here even though
+            # it was allowed through to the bridge. The trail records that a
+            # number changed, never which number it became.
             requested_change=sanitise(requested_change),
             result=result,
             verified=verified,
@@ -552,10 +645,19 @@ class ManagementService:
         )
         self._audit.append(entry)
         del self._audit[:-AUDIT_LIMIT]
+        self._trail.append(entry)
         return entry
 
     def audit(self, limit: int = 50) -> AuditLog:
-        records = list(reversed(self._audit))[:limit]
+        """Newest first, from disk when there is a disk, memory otherwise.
+
+        The file is the fuller record — it survives a restart — so it is
+        preferred, and the in-memory list is the fallback for an install whose
+        `/data` cannot be written.
+        """
+        records = self._trail.read(limit)
+        if not records:
+            records = list(reversed(self._audit))[:limit]
         return AuditLog(count=len(records), records=records)
 
 

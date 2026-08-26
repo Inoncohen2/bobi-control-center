@@ -42,7 +42,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     _configure_logging(settings)
 
     adapter = build_adapter(settings)
-    management = build_management(adapter)
+    management = build_management(adapter, settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

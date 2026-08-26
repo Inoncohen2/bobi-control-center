@@ -17,6 +17,7 @@ from app.adapters import (
     RealHomeAssistantAdapter,
 )
 from app.config import Settings
+from app.services.audit import build_trail
 from app.services.manage import ManagementService
 
 logger = logging.getLogger("bobi")
@@ -44,17 +45,26 @@ def build_adapter(settings: Settings) -> HomeAssistantAdapter:
     return MockHomeAssistantAdapter()
 
 
-def build_management(adapter: HomeAssistantAdapter) -> ManagementService:
+def build_management(
+    adapter: HomeAssistantAdapter, settings: Settings | None = None
+) -> ManagementService:
     """Wrap whatever write bridge the adapter declares — usually none.
 
     The service holds the previews and the audit trail, so it must be one
     per process rather than one per request: a preview created by one request
     has to still be there when the next one confirms it.
+
+    The trail is given the app's persistent directory, so the record of what
+    was changed outlives a restart — which is when someone is most likely to
+    want to read it.
     """
     bridge = adapter.management_bridge()
     if bridge is None:
         logger.info("No Home Assistant write bridge declared — management is unavailable.")
-    return ManagementService(bridge)
+    trail = build_trail(settings.data_dir if settings else None)
+    if trail.path is not None:
+        logger.info("Management trail at %s", trail.path)
+    return ManagementService(bridge, trail)
 
 
 def get_adapter(request: Request) -> HomeAssistantAdapter:
