@@ -29,6 +29,13 @@ from app.services.manage import (
     PreviewExpiredError,
     WritesDisabledError,
 )
+from app.services.roles import Actor, Role
+
+#: These tests exercise the write flow, not the permission model, so the service
+#: is built with an owner as its default actor. The application's own default is
+#: a viewer — the weakest role — so a route that ever forgot to say who is
+#: asking would be able to read and nothing else.
+OWNER = Actor(role=Role.OWNER, source="ingress")
 
 OPEN_TASK = {"summary": "לקבוע תור לרופא", "status": "needs_action", "user_id": "user_1"}
 DONE_TASK = {"summary": "לחדש ביטוח", "status": "completed", "user_id": "user_2"}
@@ -42,7 +49,7 @@ def bridge(**kwargs) -> MockManagementBridge:
 
 
 def service(**kwargs) -> ManagementService:
-    return ManagementService(bridge(**kwargs))
+    return ManagementService(bridge(**kwargs), default_actor=OWNER)
 
 
 async def preview_add(svc: ManagementService, **payload):
@@ -81,7 +88,7 @@ async def test_a_preview_still_works_while_writes_are_off() -> None:
 async def test_a_commit_is_refused_while_writes_are_off() -> None:
     """A disabled feature, not a failure — and the wording says so."""
     holder = bridge()
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
     preview = await preview_add(svc)
 
     with pytest.raises(WritesDisabledError) as caught:
@@ -101,14 +108,14 @@ async def test_the_application_never_reports_writes_it_cannot_do() -> None:
 
 # --- fail closed ------------------------------------------------------------
 async def test_without_a_bridge_nothing_is_available() -> None:
-    status = await ManagementService(None).status()
+    status = await ManagementService(None, default_actor=OWNER).status()
 
     assert status.available is False
     assert status.reason == "ניהול עדיין לא הופעל ב-Home Assistant"
 
 
 async def test_preview_and_snapshot_fail_closed_without_a_bridge() -> None:
-    svc = ManagementService(None)
+    svc = ManagementService(None, default_actor=OWNER)
     with pytest.raises(ManagementUnavailableError):
         await preview_add(svc)
     with pytest.raises(ManagementUnavailableError):
@@ -127,7 +134,7 @@ async def test_an_operation_the_bridge_does_not_declare_is_refused() -> None:
 # --- preview never writes ---------------------------------------------------
 async def test_preview_performs_no_write() -> None:
     holder = bridge(writes_enabled=True)
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
 
     await preview_add(svc)
     await svc.preview("tasks", PreviewRequest(operation="delete", resource_id="uid_1"))
@@ -242,7 +249,7 @@ async def test_an_unknown_token_is_rejected() -> None:
 async def test_an_altered_payload_cannot_reuse_a_token() -> None:
     """The commit carries no payload, and an echo that disagrees is rejected."""
     holder = bridge(writes_enabled=True)
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
     preview = await svc.preview(
         "tasks", PreviewRequest(operation="delete", resource_id="uid_1")
     )
@@ -280,7 +287,7 @@ async def test_a_token_cannot_cross_resources() -> None:
 
 async def test_only_the_stored_payload_reaches_home_assistant() -> None:
     holder = bridge(writes_enabled=True)
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
     preview = await preview_add(svc, due_date="2026-09-01")
 
     await commit(svc, preview)
@@ -296,7 +303,7 @@ async def test_only_the_stored_payload_reaches_home_assistant() -> None:
 # make impossible to reintroduce.
 async def test_a_commit_carries_the_token_of_its_own_preview() -> None:
     holder = bridge(writes_enabled=True)
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
     preview = await preview_add(svc)
 
     await commit(svc, preview)
@@ -318,7 +325,7 @@ async def test_a_commit_carries_the_token_of_its_own_preview() -> None:
 async def test_every_write_path_carries_a_token(resource, request_) -> None:
     """Not just the one that was tested by hand — all three commit services."""
     holder = bridge(writes_enabled=True)
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
     preview = await svc.preview(resource, request_)
 
     await svc.commit(resource, CommitRequest(preview_id=preview.preview_id, confirmed=True))
@@ -357,7 +364,7 @@ async def test_a_tokenless_commit_is_what_home_assistant_refuses() -> None:
     regression would once again pass every test and fail on a real install.
     """
     holder = bridge(writes_enabled=True)
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
     preview = await preview_add(svc)
     svc._previews[preview.preview_id].token = ""
 
@@ -371,7 +378,7 @@ async def test_a_tokenless_commit_is_what_home_assistant_refuses() -> None:
 async def test_a_replayed_commit_never_reaches_the_bridge_a_second_time() -> None:
     """One token, one call — the retry is stopped here, not by Home Assistant."""
     holder = bridge(writes_enabled=True)
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
     preview = await preview_add(svc)
 
     await commit(svc, preview)
@@ -394,7 +401,7 @@ async def test_commit_requires_an_explicit_confirmation() -> None:
 
 async def test_deleting_needs_the_confirmation_word() -> None:
     holder = bridge(writes_enabled=True)
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
     preview = await svc.preview(
         "tasks", PreviewRequest(operation="delete", resource_id="uid_1")
     )
@@ -416,7 +423,7 @@ async def test_deleting_needs_the_confirmation_word() -> None:
 async def test_an_expected_summary_mismatch_prevents_the_commit() -> None:
     """Someone renamed the task between preview and confirm."""
     holder = bridge(writes_enabled=True)
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
     preview = await svc.preview(
         "tasks",
         PreviewRequest(operation="edit", resource_id="uid_1", payload={"new_summary": "חדש"}),
@@ -433,7 +440,7 @@ async def test_an_expected_summary_mismatch_prevents_the_commit() -> None:
 
 async def test_an_expected_status_mismatch_prevents_the_commit() -> None:
     holder = bridge(writes_enabled=True)
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
     preview = await svc.preview(
         "tasks", PreviewRequest(operation="complete", resource_id="uid_1")
     )
@@ -448,7 +455,7 @@ async def test_an_expected_status_mismatch_prevents_the_commit() -> None:
 async def test_the_observed_state_is_what_is_sent_to_home_assistant() -> None:
     """`expected_*` comes from the preview's reading, never from the client."""
     holder = bridge(writes_enabled=True)
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
     preview = await svc.preview(
         "tasks", PreviewRequest(operation="complete", resource_id="uid_1")
     )
@@ -462,7 +469,7 @@ async def test_the_observed_state_is_what_is_sent_to_home_assistant() -> None:
 
 async def test_the_feature_expected_state_is_passed_to_home_assistant() -> None:
     holder = bridge(writes_enabled=True)
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
     preview = await svc.preview(
         "features",
         PreviewRequest(operation="set", resource_id="morning_auto", payload={"enabled": True}),
@@ -475,7 +482,7 @@ async def test_the_feature_expected_state_is_passed_to_home_assistant() -> None:
 
 async def test_a_feature_that_changed_since_the_preview_is_refused() -> None:
     holder = bridge(writes_enabled=True)
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
     preview = await svc.preview(
         "features",
         PreviewRequest(operation="set", resource_id="morning_auto", payload={"enabled": True}),
@@ -491,7 +498,7 @@ async def test_a_feature_that_changed_since_the_preview_is_refused() -> None:
 async def test_already_in_state_is_a_verified_success() -> None:
     """Nothing needed doing, and the bridge confirmed the desired state holds."""
     holder = bridge(writes_enabled=True, features={"morning_auto": True})
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
     preview = await svc.preview(
         "features",
         PreviewRequest(operation="set", resource_id="morning_auto", payload={"enabled": True}),
@@ -522,7 +529,7 @@ async def test_a_duplicate_task_is_refused_by_the_bridge() -> None:
 # --- honest results ---------------------------------------------------------
 async def test_a_verified_commit_says_so() -> None:
     holder = bridge(writes_enabled=True)
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
     preview = await preview_add(svc)
 
     response = await commit(svc, preview)
@@ -567,7 +574,10 @@ async def test_every_preview_and_commit_is_audited() -> None:
     assert entry.resource_type == "tasks"
     assert entry.result == "committed"
     assert entry.verified is True
-    assert entry.source == "web"
+    # The route the change came in through, and the authority it was made
+    # under — a role and a route, never a name.
+    assert entry.source == "ingress"
+    assert entry.actor == "בעלים (Ingress)"
     assert entry.timestamp
 
 
@@ -590,7 +600,7 @@ async def test_the_audit_trail_carries_no_personal_detail() -> None:
 
 async def test_a_private_field_never_reaches_the_bridge_either() -> None:
     holder = bridge(writes_enabled=True)
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
     preview = await preview_add(svc, phone="0500000000")
     await commit(svc, preview)
 

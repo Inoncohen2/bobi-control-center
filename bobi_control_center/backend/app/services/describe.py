@@ -339,6 +339,7 @@ def describe(
         changes=changes,
         explanation=explanation,
         destructive=destructive,
+        risk="destructive" if destructive else risk,
         warning=_warn(resource, operation, destructive, risk),
         confirm_word=_confirm_word(risk, destructive),
         confirm_label=spec.titles.get(operation, "בצע שינוי"),

@@ -25,7 +25,14 @@ from app.adapters.real_management import (
 from app.models.manage import CommitRequest, ObservedState, PreviewRequest
 from app.services import manage
 from app.services.manage import ManagementService, PreviewExpiredError
+from app.services.roles import Actor, Role
 from tests.conftest import json_response
+
+#: These tests exercise the write flow, not the permission model, so the service
+#: is built with an owner as its default actor. The application's own default is
+#: a viewer — the weakest role — so a route that ever forgot to say who is
+#: asking would be able to read and nothing else.
+OWNER = Actor(role=Role.OWNER, source="ingress")
 
 #: Stands in for the token the preview store mints. Its value is opaque to the
 #: bridge; what matters is that this exact string reaches Home Assistant.
@@ -171,7 +178,7 @@ async def test_a_feature_the_contract_says_nothing_about_is_not_previewable(
 ) -> None:
     """Shown, but not operable: `expected_state` must be observed, not guessed."""
     adapter, bridge = bridge_client({CONTRACT: WRITES_ON})
-    management = ManagementService(bridge)
+    management = ManagementService(bridge, default_actor=OWNER)
     preview = await management.preview(
         "features",
         PreviewRequest(operation="set", resource_id="morning_auto", payload={"enabled": False}),
@@ -447,7 +454,7 @@ async def test_an_undeclared_operation_raises_before_any_request(
 async def test_the_service_reports_the_master_switch_it_read(bridge_client) -> None:
     """End to end: contract → service → status, with writes still off."""
     adapter, bridge = bridge_client({CONTRACT: CONTRACT_PAYLOAD})
-    status = await ManagementService(bridge).status()
+    status = await ManagementService(bridge, default_actor=OWNER).status()
     await adapter.aclose()
 
     assert status.available is True
@@ -468,7 +475,7 @@ async def test_the_service_reports_the_master_switch_it_read(bridge_client) -> N
 async def committed_body(bridge_client, recorded_requests, responses, resource, request_, service):
     """Preview then commit through the service; return what reached HA."""
     adapter, bridge = bridge_client(responses)
-    management = ManagementService(bridge)
+    management = ManagementService(bridge, default_actor=OWNER)
     preview = await management.preview(resource, request_)
     assert preview.valid, preview.errors
     response = await management.commit(
@@ -557,7 +564,7 @@ async def test_the_token_sent_is_the_one_the_preview_minted(
     adapter, bridge = bridge_client(
         {CONTRACT: WRITES_ON, TASK_ADD_COMMIT: {**COMMITTED, "uid": "u-9"}}
     )
-    management = ManagementService(bridge)
+    management = ManagementService(bridge, default_actor=OWNER)
     preview = await management.preview(
         "tasks",
         PreviewRequest(operation="add", payload={"user_id": "user_1", "summary": "לקנות חלב"}),
@@ -580,7 +587,7 @@ async def test_a_stale_or_replayed_preview_never_becomes_a_request(
     adapter, bridge = bridge_client(
         {CONTRACT: WRITES_ON, TASK_ADD_COMMIT: {**COMMITTED, "uid": "u-9"}}
     )
-    management = ManagementService(bridge)
+    management = ManagementService(bridge, default_actor=OWNER)
 
     async def take_preview():
         return await management.preview(

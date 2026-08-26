@@ -156,6 +156,12 @@ class PreviewResponse(CanonicalModel):
     #: Hebrew label for the confirm button, e.g. "מחק משימה".
     confirm_label: str = "אישור"
 
+    #: `read_only` · `low` · `medium` · `high` · `destructive`. The screen
+    #: escalates its confirmation with it, and the role check reads the same
+    #: value — so what a person is warned about and what they are allowed to do
+    #: can never drift apart.
+    risk: str = "low"
+
     valid: bool = True
     errors: list[ValidationError] = Field(default_factory=list)
 
@@ -234,8 +240,12 @@ class AuditEntry(CanonicalModel):
     #: `previewed` · `committed` · `committed_unverified` · `failed` · `refused`.
     result: str
     verified: bool | None = None
-    #: Where the request came from. Only the web UI exists today.
+    #: Where the request came from — `ingress` or `external`.
     source: str = "web"
+    #: The authority the change was made under: a role and a route, never a
+    #: name or an address. "Who was allowed to do this" is the question the
+    #: trail exists to answer; "who exactly" is not one it should hold.
+    actor: str | None = None
 
 
 class CommitResponse(CanonicalModel):

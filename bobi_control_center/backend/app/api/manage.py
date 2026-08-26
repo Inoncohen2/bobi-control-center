@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Path, Query
 
-from app.api.deps import ManagementDep
+from app.api.deps import ActorDep, ManagementDep
 from app.errors import NotFoundError
 from app.models.manage import (
     MANAGED_RESOURCES,
@@ -102,25 +102,35 @@ async def get_resource_snapshot(
 )
 async def preview_change(
     service: ManagementDep,
+    actor: ActorDep,
     request: PreviewRequest,
     resource: str = _RESOURCE,
 ) -> PreviewResponse:
     """Describe a change without making it.
 
     This path performs no write. The response carries a single-use id that the
-    matching commit requires.
+    matching commit requires, and it is refused outright when the session's role
+    is below what the change's risk needs — so an operation someone may not run
+    never becomes a token that something else could spend.
     """
-    return await service.preview(_check(resource), request)
+    return await service.preview(_check(resource), request, actor)
 
 
 @router.post("/{resource}/commit", response_model=CommitResponse, summary="ביצוע שינוי")
 async def commit_change(
     service: ManagementDep,
+    actor: ActorDep,
     request: CommitRequest,
     resource: str = _RESOURCE,
 ) -> CommitResponse:
-    """Apply a change the user previewed and confirmed, then read it back."""
-    return await service.commit(_check(resource), request)
+    """Apply a change the user previewed and confirmed, then read it back.
+
+    The role is checked again here against the risk stored with the preview.
+    The two requests are independent and nothing guarantees they came from the
+    same session, so checking only at preview time would leave a token a weaker
+    session could spend.
+    """
+    return await service.commit(_check(resource), request, actor)
 
 
 @router.get("/audit", response_model=AuditLog, summary="יומן שינויים")

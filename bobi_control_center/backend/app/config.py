@@ -54,6 +54,12 @@ class Settings(BaseSettings):
     ha_base_url: str = SUPERVISOR_API_BASE
     ha_timeout_seconds: float = 30.0
 
+    #: The role a session from the public hostname is given. Ingress is always
+    #: `owner`; this is the other door. Defaults to `admin` so that reaching the
+    #: house from the Internet does not, by itself, grant the handful of
+    #: operations rated destructive.
+    external_role: str = "admin"
+
     data_dir: Path = Path("./data")
 
     @field_validator("cors_origins", mode="before")

@@ -23,6 +23,13 @@ from app.mock.management import DEFAULT_RESOURCE_PAYLOADS, PRIVATE_CANARY, MockM
 from app.models.manage import CommitRequest, PreviewRequest
 from app.services.manage import ManagementService, ManagementUnavailableError, WritesDisabledError
 from app.services.resources import SPECS
+from app.services.roles import Actor, Role
+
+#: These tests exercise the write flow, not the permission model, so the service
+#: is built with an owner as its default actor. The application's own default is
+#: a viewer — the weakest role — so a route that ever forgot to say who is
+#: asking would be able to read and nothing else.
+OWNER = Actor(role=Role.OWNER, source="ingress")
 
 
 def bridge(**kwargs) -> MockManagementBridge:
@@ -31,7 +38,7 @@ def bridge(**kwargs) -> MockManagementBridge:
 
 
 def service(**kwargs) -> ManagementService:
-    return ManagementService(bridge(**kwargs))
+    return ManagementService(bridge(**kwargs), default_actor=OWNER)
 
 
 async def preview(svc: ManagementService, resource: str, operation: str, **kwargs):
@@ -71,7 +78,7 @@ async def test_a_family_whose_bridge_has_not_shipped_is_unavailable(resource) ->
 
 
 async def test_without_a_bridge_every_family_fails_closed() -> None:
-    svc = ManagementService(None)
+    svc = ManagementService(None, default_actor=OWNER)
 
     for resource in sorted(set(SPECS) - {"tasks", "features"}):
         snapshot = await svc.resource_snapshot(resource)
@@ -114,7 +121,7 @@ async def test_writes_off_previews_but_refuses_to_commit() -> None:
 )
 async def test_preview_performs_no_write(resource, operation, resource_id, payload) -> None:
     holder = bridge()
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
 
     await preview(svc, resource, operation, resource_id=resource_id, payload=payload)
 
@@ -136,7 +143,7 @@ async def test_every_family_sends_a_non_empty_preview_token(
     resource, operation, resource_id
 ) -> None:
     holder = bridge()
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
     payload = {"name": "שם"} if operation == "rename" else {"value": False}
 
     response = await preview(svc, resource, operation, resource_id=resource_id, payload=payload)
@@ -150,7 +157,7 @@ async def test_every_family_sends_a_non_empty_preview_token(
 
 async def test_the_expected_state_travels_with_the_commit() -> None:
     holder = bridge()
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
 
     response = await preview(
         svc, "settings", "set", resource_id="ai_monthly_cap", payload={"value": 25}
@@ -163,7 +170,7 @@ async def test_the_expected_state_travels_with_the_commit() -> None:
 
 async def test_a_stale_family_commit_is_reported_and_not_retried() -> None:
     holder = bridge()
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
     response = await preview(
         svc, "settings", "set", resource_id="morning_time", payload={"value": "08:00"}
     )
@@ -244,7 +251,7 @@ async def test_an_operation_outside_the_family_is_refused() -> None:
     from app.errors import ValidationError
 
     holder = bridge()
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
 
     with pytest.raises(ValidationError):
         await preview(svc, "settings", "delete", resource_id="morning_enabled", payload={})
@@ -254,7 +261,7 @@ async def test_an_operation_outside_the_family_is_refused() -> None:
 # --- users ------------------------------------------------------------------
 async def test_the_last_enabled_admin_cannot_be_disabled() -> None:
     holder = bridge()
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
 
     response = await preview(svc, "users", "disable", resource_id="user_1")
 
@@ -273,7 +280,7 @@ async def test_the_last_enabled_admin_cannot_be_demoted() -> None:
 async def test_an_admin_can_be_disabled_when_another_one_remains() -> None:
     holder = bridge()
     holder._raw_item("users", "user_2")["role"] = "admin"
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
 
     response = await preview(svc, "users", "disable", resource_id="user_1")
 
@@ -299,7 +306,7 @@ async def test_no_phone_number_or_lid_reaches_a_snapshot() -> None:
 async def test_a_new_phone_number_reaches_the_bridge_but_not_the_preview() -> None:
     """The one field allowed through, and it is still not shown or recorded."""
     holder = bridge()
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
 
     response = await preview(
         svc, "users", "set_phone", resource_id="user_2", payload={"phone": "0000000000"}
@@ -367,7 +374,7 @@ async def test_shabbat_ac_temperatures_respect_the_published_range() -> None:
 
 async def test_a_shabbat_commit_does_not_reach_a_device_service() -> None:
     holder = bridge()
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
     response = await preview(
         svc, "shabbat", "set_timing", resource_id="night_off_time", payload={"value": "23:00"}
     )
@@ -382,7 +389,7 @@ async def test_a_blocking_conflict_refuses_the_change() -> None:
     holder._raw_item("rules", "rule_1")["conflicts"] = [
         {"blocking": True, "message": "כבר יש כלל שמדליק את הדוד באותה שעה"}
     ]
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
 
     response = await preview(svc, "rules", "disable", resource_id="rule_1")
 
@@ -395,7 +402,7 @@ async def test_a_non_blocking_conflict_is_shown_and_allowed() -> None:
     holder._raw_item("rules", "rule_1")["conflicts"] = [
         {"blocking": False, "message": "יש כלל דומה ביום אחר"}
     ]
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
 
     response = await preview(svc, "rules", "disable", resource_id="rule_1")
 
@@ -445,7 +452,7 @@ async def test_deleting_an_event_is_destructive() -> None:
 async def test_an_unsafe_system_action_is_refused(action) -> None:
     """Refused for being what it is — before the question of whether it exists."""
     holder = bridge()
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
 
     response = await preview(svc, "system", "run", resource_id=action)
 
@@ -467,7 +474,7 @@ async def test_an_unsafe_action_the_bridge_advertises_is_still_refused() -> None
             "risk": "low",
         }
     )
-    svc = ManagementService(holder)
+    svc = ManagementService(holder, default_actor=OWNER)
 
     response = await preview(svc, "system", "run", resource_id="ha_restart")
 

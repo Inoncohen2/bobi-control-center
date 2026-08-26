@@ -10,7 +10,14 @@ import pytest
 from app.models.manage import CommitRequest, PreviewRequest
 from app.services.manage import ManagementService
 from app.services.resources import SPECS
+from app.services.roles import Actor, Role
 from tests.conftest import json_response
+
+#: These tests exercise the write flow, not the permission model, so the service
+#: is built with an owner as its default actor. The application's own default is
+#: a viewer — the weakest role — so a route that ever forgot to say who is
+#: asking would be able to read and nothing else.
+OWNER = Actor(role=Role.OWNER, source="ingress")
 
 ALL_RESOURCES = [
     "tasks",
@@ -211,7 +218,7 @@ async def test_3c_generic_previews_are_not_management_unavailable(
     adapter, bridge = bridge_client(
         {"bobi_cc_manage_contract": CONTRACT_3C, service: snapshot}
     )
-    management = ManagementService(bridge)
+    management = ManagementService(bridge, default_actor=OWNER)
 
     preview = await management.preview(resource, preview_request)
     await adapter.aclose()
@@ -264,7 +271,7 @@ async def test_users_commit_uses_plural_bridge_and_nonempty_token(
             },
         }
     )
-    management = ManagementService(bridge)
+    management = ManagementService(bridge, default_actor=OWNER)
     preview = await management.preview(
         "users",
         PreviewRequest(
@@ -295,7 +302,7 @@ async def test_missing_commit_bridge_fails_closed_without_raw_fallback(
             "bobi_cc_settings_snapshot": SETTINGS,
         }
     )
-    management = ManagementService(bridge)
+    management = ManagementService(bridge, default_actor=OWNER)
     preview = await management.preview(
         "settings",
         PreviewRequest(

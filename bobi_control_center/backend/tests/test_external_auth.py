@@ -38,7 +38,16 @@ def test_ingress_host_keeps_working_without_second_login(mock_settings: Settings
     with TestClient(create_app(mock_settings), base_url="https://ha.example.com") as client:
         session = client.get("/api/auth/session")
         assert session.status_code == 200
-        assert session.json() == {"authenticated": True, "mode": "home_assistant"}
+        # Ingress means Home Assistant already authenticated an administrator,
+        # and the manifest restricts the panel to them — so the session is an
+        # owner and says so, which is what the screens read to decide which
+        # controls to draw.
+        assert session.json() == {
+            "authenticated": True,
+            "mode": "home_assistant",
+            "role": "owner",
+            "role_label": "בעלים",
+        }
         assert client.get("/api/bobi/status").status_code == 200
 
 

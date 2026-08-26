@@ -22,12 +22,14 @@ if command -v bashio >/dev/null 2>&1 && [ -f /data/options.json ]; then
     DEBUG_HTTP="$(bashio::config 'debug_http')"
     EXTERNAL_HOSTNAME="$(bashio::config 'external_hostname')"
     EXTERNAL_PASSWORD_HASH="$(bashio::config 'external_password_hash')"
+    EXTERNAL_ROLE="$(bashio::config 'external_role')"
 fi
 
 export BOBI_LOG_LEVEL="${LOG_LEVEL}"
 export BOBI_DEBUG_HTTP="${DEBUG_HTTP}"
 export BOBI_EXTERNAL_HOSTNAME="${EXTERNAL_HOSTNAME}"
 export BOBI_EXTERNAL_PASSWORD_HASH="${EXTERNAL_PASSWORD_HASH}"
+export BOBI_EXTERNAL_ROLE="${EXTERNAL_ROLE:-admin}"
 export BOBI_DATA_DIR="${BOBI_DATA_DIR:-/data}"
 
 # The adapter is chosen by the presence of SUPERVISOR_TOKEN, which the

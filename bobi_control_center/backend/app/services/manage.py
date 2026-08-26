@@ -58,6 +58,7 @@ from app.services.describe import (
 )
 from app.services.resource_normalize import unavailable
 from app.services.resources import SPECS
+from app.services.roles import ANONYMOUS, LABELS, Actor, minimum_role
 
 logger = logging.getLogger("bobi.manage")
 
@@ -129,6 +130,20 @@ class StateChangedError(BobiError):
     status_code = 409
     code = "stale_preview"
     message = "המצב השתנה מאז התצוגה המקדימה. אפשר לנסות שוב."
+
+
+class InsufficientRoleError(BobiError):
+    """The session's role is below what this operation's risk requires.
+
+    Raised before a preview exists, so an operation someone may not run never
+    becomes a token that something else could commit. The message names the
+    role needed rather than the one held: "you need X" is actionable, "you are
+    only Y" is not.
+    """
+
+    status_code = 403
+    code = "insufficient_role"
+    message = "אין לך הרשאה לבצע את הפעולה הזו"
 
 
 class ConfirmationRequiredError(BobiError):
@@ -220,7 +235,10 @@ class ManagementService:
     """The write flow, independent of FastAPI and of any bridge."""
 
     def __init__(
-        self, bridge: ManagementBridge | None, trail: AuditTrail | None = None
+        self,
+        bridge: ManagementBridge | None,
+        trail: AuditTrail | None = None,
+        default_actor: Actor = ANONYMOUS,
     ) -> None:
         self._bridge = bridge
         self._previews: dict[str, _StoredPreview] = {}
@@ -228,6 +246,13 @@ class ManagementService:
         # A memory-only trail keeps every call site identical when there is no
         # `/data` — a test, a laptop — rather than making every write check.
         self._trail = trail if trail is not None else AuditTrail(None)
+        # Who a request is attributed to when it did not say. In the running
+        # application nothing omits it — the routes read the session — so this
+        # stays a viewer, and a route that ever forgot would be able to read and
+        # nothing else. A test that is exercising the write flow rather than the
+        # permission model sets it to an owner once, here, instead of repeating
+        # an actor on forty call sites.
+        self._default_actor = default_actor
 
     # --- discovery --------------------------------------------------------
     async def status(self) -> ManagementStatus:
@@ -269,7 +294,12 @@ class ManagementService:
         return await self._bridge.resource_snapshot(resource)
 
     async def _require_bridge(
-        self, resource_type: str, operation: str, *, for_write: bool = False
+        self,
+        resource_type: str,
+        operation: str,
+        *,
+        for_write: bool = False,
+        actor: Actor = ANONYMOUS,
     ) -> ManagementBridge:
         """Fail closed, and record the refusal.
 
@@ -286,6 +316,7 @@ class ManagementService:
                 resource_id=None,
                 requested_change={},
                 result="refused",
+                actor=actor,
             )
             raise ManagementUnavailableError()
 
@@ -299,6 +330,7 @@ class ManagementService:
                 resource_id=None,
                 requested_change={},
                 result="refused",
+                actor=actor,
             )
             raise ManagementUnavailableError(
                 (resource.detail if resource else None) or UNAVAILABLE_MESSAGE
@@ -318,21 +350,28 @@ class ManagementService:
                 resource_id=None,
                 requested_change={},
                 result="refused",
+                actor=actor,
             )
             raise WritesDisabledError()
         return self._bridge
 
     # --- preview ----------------------------------------------------------
-    async def preview(self, resource_type: str, request: PreviewRequest) -> PreviewResponse:
+    async def preview(
+        self,
+        resource_type: str,
+        request: PreviewRequest,
+        actor: Actor | None = None,
+    ) -> PreviewResponse:
         """Describe the change. Performs no write of any kind."""
-        bridge = await self._require_bridge(resource_type, request.operation)
+        actor = actor or self._default_actor
+        bridge = await self._require_bridge(resource_type, request.operation, actor=actor)
 
         payload = sanitise(
             request.payload, keep=allowed_private_fields(resource_type, request.operation)
         )
 
         if resource_type in GENERIC_RESOURCES:
-            return await self._preview_resource(bridge, resource_type, request, payload)
+            return await self._preview_resource(bridge, resource_type, request, payload, actor)
 
         # Read what the resource looks like *now*. Home Assistant compares
         # against this immediately before it acts, so it is the preview's job to
@@ -362,7 +401,7 @@ class ManagementService:
         else:  # pragma: no cover - the router restricts this first.
             raise NotFoundError("משאב לא מוכר")
 
-        return self._store_preview(response, resource_type, request, payload, observed)
+        return self._store_preview(response, resource_type, request, payload, observed, actor)
 
     async def _preview_resource(
         self,
@@ -370,6 +409,7 @@ class ManagementService:
         resource_type: str,
         request: PreviewRequest,
         payload: dict[str, Any],
+        actor: Actor = ANONYMOUS,
     ) -> PreviewResponse:
         """A 3.0 family's preview, described from what the bridge published.
 
@@ -397,7 +437,7 @@ class ManagementService:
             resource_type, request.operation, request.resource_id, payload, snapshot
         )
         observed = observed_from(find_item(snapshot, request.resource_id))
-        return self._store_preview(response, resource_type, request, payload, observed)
+        return self._store_preview(response, resource_type, request, payload, observed, actor)
 
     def _store_preview(
         self,
@@ -406,8 +446,31 @@ class ManagementService:
         request: PreviewRequest,
         payload: dict[str, Any],
         observed: ObservedState,
+        actor: Actor = ANONYMOUS,
     ) -> PreviewResponse:
-        """Stamp a described change with its ids, keep it, and record the line."""
+        """Stamp a described change with its ids, keep it, and record the line.
+
+        The role is checked here, against the risk the describer decided on —
+        after the change has been described and before it is stored. Describing
+        it first is what lets the refusal name the operation; storing it after
+        is what stops an operation someone may not run from ever having a token.
+        """
+        if response.valid and not actor.may(response.risk):
+            self._record(
+                stage="preview",
+                operation=request.operation,
+                resource_type=resource_type,
+                resource_id=request.resource_id,
+                requested_change=payload,
+                result="refused",
+                actor=actor,
+            )
+            needed = LABELS[minimum_role(response.risk)]
+            raise InsufficientRoleError(
+                f"הפעולה הזו דורשת הרשאת {needed}.",
+                details={"required_role": minimum_role(response.risk).value},
+            )
+
         expires_at = _now() + PREVIEW_TTL
         preview_id = f"pv_{secrets.token_urlsafe(24)}"
         # Minted here, with the preview, and not at commit time: a token created
@@ -435,12 +498,25 @@ class ManagementService:
             resource_id=request.resource_id,
             requested_change=payload,
             result="previewed" if response.valid else "refused",
+            actor=actor,
         )
         return response
 
     # --- commit -----------------------------------------------------------
-    async def commit(self, resource_type: str, request: CommitRequest) -> CommitResponse:
-        """Apply a previewed, confirmed change, then read it back."""
+    async def commit(
+        self,
+        resource_type: str,
+        request: CommitRequest,
+        actor: Actor | None = None,
+    ) -> CommitResponse:
+        """Apply a previewed, confirmed change, then read it back.
+
+        The role is checked again here, against the risk stored with the
+        preview. Checking only at preview time would leave a token that a
+        weaker session could spend — the two requests are independent, and
+        nothing guarantees they came from the same place.
+        """
+        actor = actor or self._default_actor
         stored = self._previews.get(request.preview_id)
         if stored is None or stored.consumed or stored.expires_at < _now():
             raise PreviewExpiredError()
@@ -455,6 +531,13 @@ class ManagementService:
         if request.resource_id is not None and request.resource_id != stored.resource_id:
             raise PreviewExpiredError()
 
+        if not actor.may(preview.risk):
+            needed = LABELS[minimum_role(preview.risk)]
+            raise InsufficientRoleError(
+                f"הפעולה הזו דורשת הרשאת {needed}.",
+                details={"required_role": minimum_role(preview.risk).value},
+            )
+
         if not request.confirmed:
             raise ConfirmationRequiredError()
         if preview.destructive and request.confirm_word != preview.confirm_word:
@@ -463,7 +546,7 @@ class ManagementService:
             )
 
         bridge = await self._require_bridge(
-            resource_type, preview.operation, for_write=True
+            resource_type, preview.operation, for_write=True, actor=actor
         )
 
         # Consume before applying: a failed commit must not leave a preview
@@ -485,9 +568,11 @@ class ManagementService:
                 preview_token=stored.token,
             )
         except BobiError as exc:
-            return self._failed(request, resource_type, preview, stored, exc.message, exc.code)
+            return self._failed(
+                request, resource_type, preview, stored, exc.message, exc.code, actor
+            )
 
-        return self._report(request, resource_type, preview, stored, outcome)
+        return self._report(request, resource_type, preview, stored, outcome, actor)
 
     def _report(
         self,
@@ -496,6 +581,7 @@ class ManagementService:
         preview: PreviewResponse,
         stored: _StoredPreview,
         outcome: BridgeOutcome,
+        actor: Actor = ANONYMOUS,
     ) -> CommitResponse:
         """Turn the bridge's answer into one of three honest outcomes.
 
@@ -515,6 +601,7 @@ class ManagementService:
                 stored,
                 StateChangedError.message,
                 "stale_preview",
+                actor,
             )
 
         if not outcome.executed and outcome.verified and outcome.reason == "already_in_state":
@@ -536,6 +623,7 @@ class ManagementService:
                         detail="המצב כבר היה כמבוקש — לא נדרש שינוי.",
                     ),
                 ),
+                actor,
             )
 
         if not outcome.executed:
@@ -546,6 +634,7 @@ class ManagementService:
                 stored,
                 _REASON_MESSAGES.get(outcome.reason or ""),
                 outcome.reason,
+                actor,
             )
 
         verified = bool(outcome.verified)
@@ -565,6 +654,7 @@ class ManagementService:
                     detail=None if verified else "הפעולה בוצעה אך הקריאה חזרה לא אישרה אותה.",
                 ),
             ),
+            actor,
         )
 
     def _failed(
@@ -575,6 +665,7 @@ class ManagementService:
         stored: _StoredPreview,
         detail: str | None,
         reason: str | None,
+        actor: Actor = ANONYMOUS,
     ) -> CommitResponse:
         return self._respond(
             request,
@@ -588,6 +679,7 @@ class ManagementService:
                 reason=reason,
                 verification=VerificationResult(verified=False, detail=detail),
             ),
+            actor,
         )
 
     def _respond(
@@ -597,6 +689,7 @@ class ManagementService:
         preview: PreviewResponse,
         stored: _StoredPreview,
         result: WriteResult,
+        actor: Actor = ANONYMOUS,
     ) -> CommitResponse:
         audit = self._record(
             stage="commit",
@@ -606,6 +699,7 @@ class ManagementService:
             requested_change=stored.payload,
             result=result.status,
             verified=result.verification.verified,
+            actor=actor,
         )
         return CommitResponse(
             preview_id=request.preview_id,
@@ -626,6 +720,7 @@ class ManagementService:
         requested_change: dict[str, Any],
         result: str,
         verified: bool | None = None,
+        actor: Actor = ANONYMOUS,
     ) -> AuditEntry:
         entry = AuditEntry(
             id=f"au_{secrets.token_urlsafe(8)}",
@@ -641,7 +736,8 @@ class ManagementService:
             requested_change=sanitise(requested_change),
             result=result,
             verified=verified,
-            source="web",
+            source=actor.source,
+            actor=actor.label,
         )
         self._audit.append(entry)
         del self._audit[:-AUDIT_LIMIT]

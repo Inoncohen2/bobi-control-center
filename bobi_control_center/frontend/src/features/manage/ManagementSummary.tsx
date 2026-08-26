@@ -13,6 +13,7 @@ import { ChevronLeft, ShieldCheck, ShieldOff } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { Card, SectionTitle } from '@/components/ui/Card';
 import { useAudit, useManagementContract } from '@/hooks/queries';
+import { useRole } from '@/features/auth/useRole';
 
 const RESOURCE_LABELS: Record<string, string> = {
   tasks: 'משימות',
@@ -43,6 +44,7 @@ const RESULT_LABELS: Record<string, string> = {
 export function ManagementSummary() {
   const contract = useManagementContract();
   const audit = useAudit();
+  const { label: roleLabel } = useRole();
 
   const available = contract.data?.available ?? false;
   const writesEnabled = contract.data?.writes_enabled ?? false;
@@ -66,6 +68,7 @@ export function ManagementSummary() {
               ניהול עדיין לא הופעל ב-Home Assistant
             </Badge>
           )}
+          {roleLabel ? <Badge tone="info">ההרשאה שלך: {roleLabel}</Badge> : null}
           {available ? (
             <span
               aria-hidden

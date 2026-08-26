@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.config import Settings
+from app.services.roles import ANONYMOUS, LABELS, Actor, Role
 
 logger = logging.getLogger("bobi.auth")
 
@@ -93,6 +94,9 @@ def is_external_request(request: Request, settings: Settings) -> bool:
 @dataclass(frozen=True)
 class Session:
     expires_at: float
+    #: Decided when the session is created and read from here afterwards.
+    #: Nothing in a payload, a header or a query string can raise it.
+    role: Role = Role.ADMIN
 
 
 class ExternalAuth:
@@ -100,6 +104,23 @@ class ExternalAuth:
         self.settings = settings
         self._sessions: dict[str, Session] = {}
         self._failures: defaultdict[str, list[float]] = defaultdict(list)
+
+    @property
+    def role(self) -> Role:
+        """The role a successful external login is granted.
+
+        Read from the add-on options, and an unrecognised value falls to
+        `viewer` rather than to the configured intention — a typo in a role
+        name should cost reading, never grant writing.
+        """
+        try:
+            return Role(str(self.settings.external_role).strip().lower())
+        except ValueError:
+            logger.warning(
+                "external_role %r is not a known role; treating this session as viewer",
+                self.settings.external_role,
+            )
+            return Role.VIEWER
 
     def _clean(self, now: float) -> None:
         self._sessions = {
@@ -136,7 +157,7 @@ class ExternalAuth:
 
         self._failures.pop(client_key, None)
         token = secrets.token_urlsafe(32)
-        session = Session(expires_at=now + SESSION_SECONDS)
+        session = Session(expires_at=now + SESSION_SECONDS, role=self.role)
         self._sessions[token] = session
         return token, session
 
@@ -165,6 +186,26 @@ def _same_origin(request: Request, settings: Settings) -> bool:
     return request.headers.get("origin") == f"https://{settings.normalized_external_hostname}"
 
 
+def actor_for(request: Request) -> Actor:
+    """Who this request is, for the permission check and the audit line.
+
+    Ingress means Home Assistant already authenticated an administrator — the
+    manifest restricts the panel to them — so it is `owner`. The public
+    hostname carries whatever role its session was created with. A request that
+    somehow reached a route without either is a viewer: the failure mode of a
+    gap in this function is reading, never writing.
+    """
+    settings: Settings = request.app.state.settings
+    if not is_external_request(request, settings):
+        return Actor(role=Role.OWNER, source="ingress")
+
+    auth: ExternalAuth | None = getattr(request.app.state, "external_auth", None)
+    session = auth.authenticate(request.cookies.get(COOKIE_NAME)) if auth else None
+    if session is None:
+        return ANONYMOUS
+    return Actor(role=session.role, source="external")
+
+
 def _error(status: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(
         status_code=status,
@@ -179,7 +220,12 @@ router = APIRouter(prefix="/api/auth", tags=["authentication"])
 async def session_status(request: Request) -> dict[str, object] | JSONResponse:
     settings: Settings = request.app.state.settings
     if not is_external_request(request, settings):
-        return {"authenticated": True, "mode": "home_assistant"}
+        return {
+            "authenticated": True,
+            "mode": "home_assistant",
+            "role": Role.OWNER.value,
+            "role_label": LABELS[Role.OWNER],
+        }
     if not settings.external_auth_configured:
         return _error(503, "external_auth_unconfigured", "הגישה החיצונית עדיין לא הוגדרה")
 
@@ -190,6 +236,8 @@ async def session_status(request: Request) -> dict[str, object] | JSONResponse:
         "authenticated": True,
         "mode": "external",
         "expires_in_seconds": max(0, int(session.expires_at - time.time())),
+        "role": session.role.value,
+        "role_label": LABELS[session.role],
     }
 
 
@@ -229,6 +277,8 @@ async def login(
         "authenticated": True,
         "mode": "external",
         "expires_in_seconds": int(session.expires_at - time.time()),
+        "role": session.role.value,
+        "role_label": LABELS[session.role],
     }
 
 

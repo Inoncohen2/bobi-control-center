@@ -29,6 +29,10 @@ import { mockApi, renderWithProviders } from '@/test/utils';
 const BASE = {
   '/api/bobi/connection': makeConnection(),
   '/api/bobi/status': makeStatus(),
+  // Ingress, which is what a household member on the panel gets. The tests
+  // below are about what the *bridge* allows; the role tests at the end
+  // override this to say what a *session* allows.
+  '/api/auth/session': { authenticated: true, mode: 'home_assistant', role: 'owner' },
 };
 
 function routes(overrides: Record<string, unknown> = {}) {
@@ -317,5 +321,62 @@ describe('the cameras screen', () => {
 
     expect(await screen.findByText('מצלמת ליה')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /הפעל|כבה/ })).not.toBeInTheDocument();
+  });
+});
+
+describe('what the session is allowed to do', () => {
+  /** The session endpoint answers with a role; everything else stays the same. */
+  function withRole(role: string, overrides: Record<string, unknown> = {}) {
+    return stub({
+      ...routes(overrides),
+      '/api/auth/session': { authenticated: true, mode: 'external', role },
+    });
+  }
+
+  it('an operator gets ordinary controls', async () => {
+    withRole('operator');
+    renderWithProviders(<SettingsManagePage />);
+
+    expect(await screen.findByRole('button', { name: 'כבה' })).toBeInTheDocument();
+  });
+
+  it('a viewer gets none, and is told why', async () => {
+    withRole('viewer');
+    renderWithProviders(<SettingsManagePage />);
+
+    expect(await screen.findByText('סיכום בוקר אוטומטי')).toBeInTheDocument();
+    expect(await screen.findByText(/אין גישה לשינוי/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'כבה' })).not.toBeInTheDocument();
+  });
+
+  it('an operator gets no control over a high-risk row', async () => {
+    withRole('operator', {
+      '/api/bobi/manage/settings/snapshot': makeResourceSnapshot({
+        items: [makeManagedItem({ risk: 'high' })],
+      }),
+    });
+    renderWithProviders(<SettingsManagePage />);
+
+    expect(await screen.findByText(/אין גישה לשינוי/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'כבה' })).not.toBeInTheDocument();
+  });
+
+  it('an admin does', async () => {
+    withRole('admin', {
+      '/api/bobi/manage/settings/snapshot': makeResourceSnapshot({
+        items: [makeManagedItem({ risk: 'high' })],
+      }),
+    });
+    renderWithProviders(<SettingsManagePage />);
+
+    expect(await screen.findByRole('button', { name: 'כבה' })).toBeInTheDocument();
+  });
+
+  it('an unknown role is treated as the weakest one', async () => {
+    withRole('superuser');
+    renderWithProviders(<SettingsManagePage />);
+
+    await screen.findByText('סיכום בוקר אוטומטי');
+    expect(screen.queryByRole('button', { name: 'כבה' })).not.toBeInTheDocument();
   });
 });

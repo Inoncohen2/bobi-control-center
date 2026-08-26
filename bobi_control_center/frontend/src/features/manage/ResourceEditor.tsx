@@ -27,8 +27,10 @@ import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { SelectField, TextField } from '@/components/ui/Field';
+import { allows, useRole } from '@/features/auth/useRole';
 import { cn } from '@/utils/cn';
 import type { ManagedGroup, ManagedItem, ResourceSnapshot } from '@/types/api';
+import type { Role } from '@/features/auth/useRole';
 
 /** Hebrew for the risk words, for the badge beside a sensitive row. */
 const RISK_LABELS: Record<string, string> = {
@@ -131,14 +133,22 @@ function ResourceGroup({
   );
 }
 
-/** Whether this row gets an editor at all. Every condition must hold. */
-function isOperable(item: ManagedItem, writesEnabled: boolean): boolean {
+/**
+ * Whether this row gets an editor at all. Every condition must hold.
+ *
+ * The role check is the last of them and the only one that is advisory: the
+ * backend refuses an operation above the session's role whatever this returns.
+ * Checking here as well means a viewer is not shown a button that would come
+ * back 403 — a kinder screen, not a second lock.
+ */
+function isOperable(item: ManagedItem, writesEnabled: boolean, role: Role | undefined): boolean {
   return (
     writesEnabled &&
     item.controllable &&
     item.operations.length > 0 &&
     item.value !== null &&
-    item.value !== undefined
+    item.value !== undefined &&
+    allows(role, item.risk)
   );
 }
 
@@ -153,8 +163,13 @@ export function ItemRow({
   writesEnabled: boolean;
   renderDetail?: ResourceEditorProps['renderDetail'];
 }) {
-  const operable = isOperable(item, writesEnabled);
+  const { role } = useRole();
+  const operable = isOperable(item, writesEnabled, role);
   const riskLabel = RISK_LABELS[item.risk];
+  // Told apart on purpose: "the bridge will not let anyone do this" and "you
+  // may not do this" are different sentences, and only one of them is about
+  // the person reading it.
+  const blockedByRole = writesEnabled && item.controllable && !allows(role, item.risk);
 
   return (
     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -176,6 +191,11 @@ export function ItemRow({
         {!operable && item.unavailable_reason ? (
           <p className="mt-0.5 text-xs text-amber-700 dark:text-amber-400">
             {item.unavailable_reason}
+          </p>
+        ) : null}
+        {blockedByRole ? (
+          <p className="mt-0.5 text-xs text-amber-700 dark:text-amber-400">
+            להרשאה שלך אין גישה לשינוי הזה.
           </p>
         ) : null}
         {renderDetail?.(item)}

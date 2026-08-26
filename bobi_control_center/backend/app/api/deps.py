@@ -16,9 +16,11 @@ from app.adapters import (
     MockHomeAssistantAdapter,
     RealHomeAssistantAdapter,
 )
+from app.auth import actor_for
 from app.config import Settings
 from app.services.audit import build_trail
 from app.services.manage import ManagementService
+from app.services.roles import Actor
 
 logger = logging.getLogger("bobi")
 
@@ -77,5 +79,16 @@ def get_management(request: Request) -> ManagementService:
     return request.app.state.management
 
 
+def get_actor(request: Request) -> Actor:
+    """Who is asking, resolved from the session rather than from the request body.
+
+    Every write route depends on this. A route that did not would fall to the
+    service's own default, which is a viewer — so forgetting it costs the
+    ability to write, never grants it.
+    """
+    return actor_for(request)
+
+
 AdapterDep = Annotated[HomeAssistantAdapter, Depends(get_adapter)]
 ManagementDep = Annotated[ManagementService, Depends(get_management)]
+ActorDep = Annotated[Actor, Depends(get_actor)]
