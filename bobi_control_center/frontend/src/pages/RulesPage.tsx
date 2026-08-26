@@ -9,6 +9,8 @@ import { EmptyState, QueryBoundary } from '@/components/state/QueryBoundary';
 import { useRules } from '@/hooks/queries';
 import type { BridgeRule } from '@/types/api';
 import { timeAgo } from '@/utils/format';
+import { ManagedSection } from '@/features/manage/ManagedSection';
+import { ResourceEditor } from '@/features/manage/ResourceEditor';
 
 const KIND_LABELS: Record<string, string> = {
   schedule: 'תזמון',
@@ -117,6 +119,11 @@ export function RulesPage() {
           </ul>
         )}
       </QueryBoundary>
+      <ManagedSection resource="rules" title="ניהול אוטומציות">
+        {({ snapshot, request, writesEnabled }) => (
+          <ResourceEditor snapshot={snapshot} onChange={request} writesEnabled={writesEnabled} />
+        )}
+      </ManagedSection>
     </>
   );
 }

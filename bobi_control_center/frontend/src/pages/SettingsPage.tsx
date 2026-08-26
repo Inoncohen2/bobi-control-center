@@ -8,6 +8,9 @@ import { QueryBoundary } from '@/components/state/QueryBoundary';
 import { useTheme, type ThemeChoice } from '@/hooks/useTheme';
 import { useAudit, useConnection, useManagementContract, useStatus } from '@/hooks/queries';
 import { formatDateTime } from '@/utils/format';
+import { ManagedSection } from '@/features/manage/ManagedSection';
+import { ResourceEditor } from '@/features/manage/ResourceEditor';
+import type { ManagedItem } from '@/types/api';
 
 const THEME_LABELS: Record<ThemeChoice, string> = {
   system: 'לפי המערכת',
@@ -211,6 +214,16 @@ export function SettingsPage() {
           </div>
         </Card>
       </div>
+      <ManagedSection resource="settings" title="ההגדרות של בובי">
+        {({ snapshot, request, writesEnabled }) => (
+          <ResourceEditor
+            snapshot={snapshot}
+            onChange={request}
+            writesEnabled={writesEnabled}
+            filter={(item: ManagedItem) => String(item.detail.notification_class ?? '') === ''}
+          />
+        )}
+      </ManagedSection>
     </>
   );
 }

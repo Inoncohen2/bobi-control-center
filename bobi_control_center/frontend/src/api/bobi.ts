@@ -28,6 +28,8 @@ import type {
   PreviewRequest,
   PreviewResponse,
   TaskSnapshot,
+  ManagedResource,
+  ResourceSnapshot,
 } from '@/types/api';
 
 const ROOT = '/api/bobi';
@@ -74,3 +76,12 @@ export const commitChange = (resource: string, request: CommitRequest) =>
   api.post<CommitResponse>(`${MANAGE}/${resource}/commit`, request);
 
 export const fetchAudit = () => api.get<AuditLog>(`${MANAGE}/audit`);
+
+/**
+ * One managed family's current state.
+ *
+ * Always a 200: a family whose bridge has not landed answers `available:
+ * false` with a Hebrew reason, and the screen shows that rather than an error.
+ */
+export const fetchResourceSnapshot = (resource: ManagedResource) =>
+  api.get<ResourceSnapshot>(`${MANAGE}/${encodeURIComponent(resource)}/snapshot`);

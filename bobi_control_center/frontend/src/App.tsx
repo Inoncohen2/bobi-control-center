@@ -3,14 +3,19 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 
 import { AppLayout } from '@/layouts/AppLayout';
+import { ActivityPage } from '@/pages/ActivityPage';
+import { CalendarPage } from '@/pages/CalendarPage';
+import { CamerasPage } from '@/pages/CamerasPage';
 import { CapabilitiesPage } from '@/pages/CapabilitiesPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { DevicesPage } from '@/pages/DevicesPage';
 import { DiagnosticsPage } from '@/pages/DiagnosticsPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
+import { NotificationsPage } from '@/pages/NotificationsPage';
 import { RulesPage } from '@/pages/RulesPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { ShabbatPage } from '@/pages/ShabbatPage';
+import { SystemPage } from '@/pages/SystemPage';
 import { TasksPage } from '@/pages/TasksPage';
 import { TestCenterPage } from '@/pages/TestCenterPage';
 import { UsersPage } from '@/pages/UsersPage';
@@ -29,6 +34,11 @@ export function App() {
         <Route path="tasks" element={<TasksPage />} />
         <Route path="users" element={<UsersPage />} />
         <Route path="test-center" element={<TestCenterPage />} />
+        <Route path="cameras" element={<CamerasPage />} />
+        <Route path="calendar" element={<CalendarPage />} />
+        <Route path="notifications" element={<NotificationsPage />} />
+        <Route path="system" element={<SystemPage />} />
+        <Route path="activity" element={<ActivityPage />} />
         <Route path="diagnostics" element={<DiagnosticsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="*" element={<NotFoundPage />} />

@@ -16,6 +16,7 @@ import type {
 } from '@/types/api';
 import { countLabel } from '@/utils/format';
 import { cn } from '@/utils/cn';
+import { ManagementSummary } from '@/features/manage/ManagementSummary';
 
 /**
  * `ok` is resolved by the backend, so tone follows it directly.
@@ -286,6 +287,8 @@ export function DashboardPage() {
 
       {status.data ? (
         <div className="space-y-8">
+          <ManagementSummary />
+
           <section aria-labelledby="health-heading">
             <h2 id="health-heading" className="sr-only">
               מצב רכיבי המערכת

@@ -21,6 +21,9 @@ import {
 } from '@/features/devices/filter';
 import { DEVICE_SCOPES, type BridgeDevice, type DeviceScope } from '@/types/api';
 import { SCOPE_LABELS, limitEntries, stateLabel, timeAgo } from '@/utils/format';
+import { ManagedSection } from '@/features/manage/ManagedSection';
+import { ResourceEditor } from '@/features/manage/ResourceEditor';
+import { CAMERA_CLASS, DeviceDetail as ManagedDeviceDetail } from '@/pages/DeviceControlPage';
 
 const AVAILABILITY_OPTIONS: Array<{ value: AvailabilityFilter; label: string }> = [
   { value: 'all', label: 'הכול' },
@@ -347,6 +350,18 @@ export function DevicesPage() {
           )
         }
       </QueryBoundary>
+
+      <ManagedSection resource="devices" title="שליטה">
+        {({ snapshot, request, writesEnabled }) => (
+          <ResourceEditor
+            snapshot={snapshot}
+            onChange={request}
+            writesEnabled={writesEnabled}
+            filter={(item) => String(item.detail.device_class ?? '') !== CAMERA_CLASS}
+            renderDetail={(item) => <ManagedDeviceDetail item={item} />}
+          />
+        )}
+      </ManagedSection>
 
       {openDevice ? <DeviceDetail device={openDevice} onClose={() => setOpenId(null)} /> : null}
     </>

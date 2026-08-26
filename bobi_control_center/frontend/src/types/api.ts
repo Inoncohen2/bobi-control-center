@@ -557,3 +557,89 @@ export interface AuditLog {
   count: number;
   records: AuditEntry[];
 }
+
+// --- the contract-driven resources (3.0) -----------------------------------
+// One shape for settings, users, Shabbat, rules, the calendar, devices and the
+// system. The screens render from what the bridge described rather than from
+// anything declared here, so a family Home Assistant has not shipped yet
+// arrives as `available: false` with a reason and is shown as unavailable.
+
+export interface ManagedOption {
+  value: string;
+  label: string;
+  detail: string | null;
+}
+
+export interface ManagedConstraints {
+  minimum: number | null;
+  maximum: number | null;
+  step: number | null;
+  unit: string | null;
+  max_length: number | null;
+  allowed: ManagedOption[];
+}
+
+/** How an item is edited. Anything unrecognised is shown read-only. */
+export type ItemKind =
+  | 'toggle'
+  | 'number'
+  | 'time'
+  | 'date'
+  | 'datetime'
+  | 'choice'
+  | 'text'
+  | 'list'
+  | 'readonly';
+
+/** `read_only` never gets a write control; `high` and `destructive` ask for a typed word. */
+export type RiskLevel = 'read_only' | 'low' | 'medium' | 'high' | 'destructive';
+
+export interface ManagedItem {
+  id: string;
+  label: string;
+  group: string | null;
+  kind: ItemKind | string;
+  value: unknown;
+  display: string | null;
+  description: string | null;
+  risk: RiskLevel | string;
+  /** False unless the bridge said otherwise. No control is rendered without it. */
+  controllable: boolean;
+  operations: string[];
+  options: ManagedOption[];
+  constraints: ManagedConstraints | null;
+  unavailable_reason: string | null;
+  /**
+   * Canonical extras — a rule's days, an event's start, a device's class.
+   * Never a raw Home Assistant entity id: the backend drops those, so there is
+   * nothing here that could be used to name a service.
+   */
+  detail: Record<string, unknown>;
+}
+
+export interface ManagedGroup {
+  id: string;
+  label: string;
+  description: string | null;
+  items: ManagedItem[];
+}
+
+export interface ResourceSnapshot {
+  resource: string;
+  available: boolean;
+  reason: string | null;
+  writes_enabled: boolean;
+  groups: ManagedGroup[];
+  items: ManagedItem[];
+  detail: Record<string, unknown>;
+}
+
+/** The families with a `/{resource}/snapshot` endpoint. */
+export type ManagedResource =
+  | 'settings'
+  | 'users'
+  | 'shabbat'
+  | 'rules'
+  | 'calendar'
+  | 'devices'
+  | 'system';

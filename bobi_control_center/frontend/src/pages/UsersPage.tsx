@@ -8,6 +8,8 @@ import { EmptyState, QueryBoundary } from '@/components/state/QueryBoundary';
 import { useUsers } from '@/hooks/queries';
 import type { BridgeUser } from '@/types/api';
 import { cn } from '@/utils/cn';
+import { ManagedSection } from '@/features/manage/ManagedSection';
+import { ResourceEditor } from '@/features/manage/ResourceEditor';
 
 const PERMISSION_LABELS: Record<string, string> = {
   control_devices: 'שליטה במכשירים',
@@ -210,6 +212,11 @@ export function UsersPage() {
           );
         }}
       </QueryBoundary>
+      <ManagedSection resource="users" title="ניהול משתמשים">
+        {({ snapshot, request, writesEnabled }) => (
+          <ResourceEditor snapshot={snapshot} onChange={request} writesEnabled={writesEnabled} />
+        )}
+      </ManagedSection>
     </>
   );
 }

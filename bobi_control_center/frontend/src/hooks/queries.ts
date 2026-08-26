@@ -9,7 +9,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 
 import * as bobi from '@/api/bobi';
-import type { DeviceScope } from '@/types/api';
+import type { DeviceScope, ManagedResource } from '@/types/api';
 
 export const keys = {
   connection: ['connection'] as const,
@@ -25,6 +25,7 @@ export const keys = {
   managementContract: ['management-contract'] as const,
   taskSnapshot: ['task-snapshot'] as const,
   audit: ['audit'] as const,
+  resource: (resource: ManagedResource) => ['manage', resource] as const,
 };
 
 /**
@@ -103,5 +104,38 @@ export const useManagementContract = () =>
 export const useTaskSnapshot = (enabled: boolean) =>
   useQuery({ queryKey: keys.taskSnapshot, queryFn: bobi.fetchTaskSnapshot, enabled });
 
-/** Recent previews and commits. Loaded on entry to the settings screen. */
+/** Recent previews and commits, newest first. Loaded on entry, refreshed by hand. */
 export const useAudit = () => useQuery({ queryKey: keys.audit, queryFn: bobi.fetchAudit });
+
+/**
+ * How often each managed family is re-read while its screen is open.
+ *
+ * Only the two that reflect the physical world poll at all. A setting, a
+ * household member, a Shabbat profile and a calendar entry change when someone
+ * changes them — and a commit invalidates the query, so the screen is already
+ * up to date the moment it matters. Polling them would be a Home Assistant
+ * service call every interval to be told nothing happened.
+ *
+ * Every interval here is paused while the tab is hidden or unfocused, which is
+ * TanStack's default with `refetchIntervalInBackground: false`.
+ */
+const RESOURCE_POLL_MS: Partial<Record<ManagedResource, number>> = {
+  devices: 20_000,
+  system: 60_000,
+};
+
+/**
+ * One managed family, from the bridge.
+ *
+ * `enabled` is how a screen says "not yet" — a page that has not been opened,
+ * or a family the management contract does not advertise. The request is not
+ * made at all rather than made and discarded.
+ */
+export const useResourceSnapshot = (resource: ManagedResource, enabled = true) =>
+  useQuery({
+    queryKey: keys.resource(resource),
+    queryFn: () => bobi.fetchResourceSnapshot(resource),
+    enabled,
+    refetchInterval: RESOURCE_POLL_MS[resource],
+    refetchIntervalInBackground: false,
+  });

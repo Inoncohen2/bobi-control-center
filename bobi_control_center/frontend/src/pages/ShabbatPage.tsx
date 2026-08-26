@@ -8,6 +8,8 @@ import { DisabledAction, ReadOnlyNotice } from '@/components/ui/ReadOnly';
 import { EmptyState, QueryBoundary } from '@/components/state/QueryBoundary';
 import { useShabbat } from '@/hooks/queries';
 import type { ShabbatProfile } from '@/types/api';
+import { ManagedSection } from '@/features/manage/ManagedSection';
+import { ResourceEditor } from '@/features/manage/ResourceEditor';
 
 /**
  * Profiles are rendered from the list the bridge defines, not a fixed four, so
@@ -194,6 +196,11 @@ export function ShabbatPage() {
           </div>
         )}
       </QueryBoundary>
+      <ManagedSection resource="shabbat" title="עריכת לוח הזמנים">
+        {({ snapshot, request, writesEnabled }) => (
+          <ResourceEditor snapshot={snapshot} onChange={request} writesEnabled={writesEnabled} />
+        )}
+      </ManagedSection>
     </>
   );
 }

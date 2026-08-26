@@ -9,8 +9,8 @@
  *   it back.
  *
  * There is no path from opening this dialog to a change without pressing the
- * confirm button, and for a destructive change the button stays disabled until
- * the confirmation word is typed exactly.
+ * confirm button, and when the preview asked for a typed word the button stays
+ * disabled until it matches exactly.
  */
 
 import { useEffect, useState } from 'react';
@@ -50,7 +50,11 @@ export function ChangeDialog({ change }: { change: ManagedChange }) {
 
   const showingResult = stage === 'result' && result !== null;
   const destructive = preview?.destructive ?? false;
-  const wordMatches = !destructive || word.trim() === (preview?.confirm_word ?? '');
+  // Gate on the word the preview handed out, not on `destructive`. A change can
+  // be sensitive without destroying anything — a household member's phone
+  // number, an undo of Bobi's last action — and those ask for a word too.
+  const required = preview?.confirm_word ?? '';
+  const wordMatches = required === '' || word.trim() === required;
 
   const title = showingResult ? 'ביצוע' : 'תצוגה מקדימה';
 
@@ -69,7 +73,7 @@ export function ChangeDialog({ change }: { change: ManagedChange }) {
               variant={destructive ? 'danger' : 'primary'}
               loading={stage === 'committing'}
               disabled={!preview?.valid || !wordMatches}
-              onClick={() => void change.commit(destructive ? word.trim() : undefined)}
+              onClick={() => void change.commit(required ? word.trim() : undefined)}
             >
               {preview?.confirm_label ?? 'אישור'}
             </Button>
@@ -82,7 +86,7 @@ export function ChangeDialog({ change }: { change: ManagedChange }) {
     >
       {showingResult ? <ResultBody change={change} /> : <PreviewBody change={change} />}
       {error ? <ErrorNote error={error} /> : null}
-      {destructive && !showingResult ? (
+      {required && !showingResult ? (
         <div className="mt-4">
           <TextField
             id="confirm-word"

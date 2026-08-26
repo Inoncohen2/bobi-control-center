@@ -8,11 +8,27 @@ const CONTROL_CLASSES =
   'disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500 ' +
   'dark:border-slate-600 dark:bg-slate-900/40 dark:text-slate-100 dark:disabled:bg-slate-800';
 
-export function Label({ htmlFor, children }: { htmlFor: string; children: ReactNode }) {
+export function Label({
+  htmlFor,
+  children,
+  srOnly = false,
+}: {
+  htmlFor: string;
+  children: ReactNode;
+  /**
+   * Hide the label visually but keep it for a screen reader. For a control
+   * whose row already carries its name — the generic resource editor puts the
+   * label on the left and the control on the right — repeating it above the
+   * field is noise on a phone and a duplicate to anyone listening.
+   */
+  srOnly?: boolean;
+}) {
   return (
     <label
       htmlFor={htmlFor}
-      className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300"
+      className={cn(
+        srOnly ? 'sr-only' : 'mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300',
+      )}
     >
       {children}
     </label>
@@ -22,16 +38,19 @@ export function Label({ htmlFor, children }: { htmlFor: string; children: ReactN
 interface TextFieldProps extends InputHTMLAttributes<HTMLInputElement> {
   label: string;
   help?: string;
+  srOnlyLabel?: boolean;
 }
 
-export function TextField({ label, help, className, id, ...rest }: TextFieldProps) {
+export function TextField({ label, help, className, id, srOnlyLabel, ...rest }: TextFieldProps) {
   const generated = useId();
   const fieldId = id ?? generated;
   const helpId = help ? `${fieldId}-help` : undefined;
 
   return (
     <div className={className}>
-      <Label htmlFor={fieldId}>{label}</Label>
+      <Label htmlFor={fieldId} srOnly={srOnlyLabel}>
+        {label}
+      </Label>
       <input id={fieldId} aria-describedby={helpId} className={CONTROL_CLASSES} {...rest} />
       {help ? (
         <p id={helpId} className="mt-1 text-xs text-slate-500 dark:text-slate-400">
@@ -46,6 +65,7 @@ interface SelectFieldProps extends SelectHTMLAttributes<HTMLSelectElement> {
   label: string;
   options: Array<{ value: string; label: string }>;
   help?: string;
+  srOnlyLabel?: boolean;
 }
 
 export function SelectField({
@@ -54,6 +74,7 @@ export function SelectField({
   help,
   className,
   id,
+  srOnlyLabel,
   ...rest
 }: SelectFieldProps) {
   const generated = useId();
@@ -62,7 +83,9 @@ export function SelectField({
 
   return (
     <div className={className}>
-      <Label htmlFor={fieldId}>{label}</Label>
+      <Label htmlFor={fieldId} srOnly={srOnlyLabel}>
+        {label}
+      </Label>
       <select id={fieldId} aria-describedby={helpId} className={CONTROL_CLASSES} {...rest}>
         {options.map((option) => (
           <option key={option.value} value={option.value}>
