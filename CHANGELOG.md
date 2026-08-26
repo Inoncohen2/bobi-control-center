@@ -4,6 +4,26 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.1.0
+
+Bobi can now run at a dedicated HTTPS hostname through the existing Cloudflare
+Tunnel while Home Assistant Ingress keeps working in parallel.
+
+- Requests on the configured external hostname require a salted-scrypt
+  password and a 12-hour, server-side session. The browser receives only a
+  `Secure`, `HttpOnly`, `SameSite=Strict` session cookie.
+- Login attempts are throttled, state-changing requests require the exact
+  HTTPS origin, and an incomplete external configuration fails closed.
+- Ingress continues to use Home Assistant authentication and needs no second
+  login. There is still no published host port.
+- The frontend includes a Hebrew login screen and logout control. Home
+  Assistant credentials, raw entity IDs and raw services remain backend-only.
+
+## 3.0.1
+
+Support the complete Home Assistant management contract `3c` without filtering
+the seven families added after tasks and features.
+
 ## 3.0.0
 
 The complete management release — settings, users, the Shabbat clock, rules, the

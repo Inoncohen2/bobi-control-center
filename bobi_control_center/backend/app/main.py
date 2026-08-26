@@ -20,6 +20,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.api import router as bobi_router
 from app.api.deps import build_adapter, build_management
 from app.api.manage import router as manage_router
+from app.auth import ExternalAuth, is_external_request, register_external_auth_middleware
+from app.auth import router as auth_router
 from app.config import Settings, get_settings
 from app.errors import INTERNAL, BobiError
 from app.version import APP_NAME, APP_VERSION
@@ -71,6 +73,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.adapter = adapter
     app.state.management = management
+    app.state.external_auth = ExternalAuth(settings)
 
     app.add_middleware(
         CORSMiddleware,
@@ -81,7 +84,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     _register_errors(app)
+    register_external_auth_middleware(app)
     _register_security_headers(app)
+    app.include_router(auth_router)
     app.include_router(bobi_router)
     app.include_router(manage_router)
 
@@ -105,6 +110,7 @@ def _register_security_headers(app: FastAPI) -> None:
     async def security_headers(request: Request, call_next):
         response = await call_next(request)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault(
             "Permissions-Policy", "geolocation=(), microphone=(), camera=()"
@@ -114,8 +120,15 @@ def _register_security_headers(app: FastAPI) -> None:
         response.headers.setdefault(
             "Content-Security-Policy",
             "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
-            "script-src 'self'; connect-src 'self'; frame-ancestors 'self'",
+            "script-src 'self'; connect-src 'self'; frame-ancestors 'self'; "
+            "base-uri 'none'; form-action 'self'; object-src 'none'",
         )
+        if request.url.path.startswith("/api/"):
+            response.headers.setdefault("Cache-Control", "no-store")
+        if is_external_request(request, request.app.state.settings):
+            response.headers.setdefault(
+                "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+            )
         return response
 
 

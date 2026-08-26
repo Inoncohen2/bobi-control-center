@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     #: never written to the add-on log in normal operation.
     debug_http: bool = False
 
+    #: A dedicated Cloudflare hostname may reach the container directly.  It
+    #: is deliberately opt-in: until both this hostname and a password hash are
+    #: configured, no external request can reach Bobi's API.
+    external_hostname: str = ""
+    external_password_hash: str = ""
+
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"]
     )
@@ -76,6 +82,17 @@ class Settings(BaseSettings):
         if self.adapter == "auto":
             return "real" if self.has_supervisor_token else "mock"
         return self.adapter
+
+    @property
+    def normalized_external_hostname(self) -> str:
+        """Hostname only, lower-cased, with accidental URL syntax removed."""
+        value = self.external_hostname.strip().lower()
+        value = value.removeprefix("https://").removeprefix("http://")
+        return value.split("/", 1)[0].split(":", 1)[0]
+
+    @property
+    def external_auth_configured(self) -> bool:
+        return bool(self.normalized_external_hostname and self.external_password_hash)
 
 
 @lru_cache

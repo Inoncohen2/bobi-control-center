@@ -5,7 +5,7 @@
 # plus Preview -> confirmation -> Commit -> HA validation -> verification.
 
 name: Bobi Control Center
-version: "3.0.1"
+version: "3.1.0"
 slug: bobi_control_center
 description: מרכז הניהול של בובי — מכשירים, יכולות, שעון שבת, כללים חכמים ומרכז בדיקות
 url: https://github.com/Inoncohen2/bobi-control-center
@@ -49,12 +49,18 @@ map:
 options:
   log_level: info
   debug_http: false
+  # External access stays fail-closed until both values are configured. The
+  # password itself is never stored: only a salted scrypt hash is kept here.
+  external_hostname: ""
+  external_password_hash: ""
 
 schema:
   log_level: list(debug|info|warning|error)
   # When true, logs bridge request/response bodies. Off by default so real
   # Home Assistant payloads are never written to the log in normal operation.
   debug_http: bool
+  external_hostname: str?
+  external_password_hash: password?
 
 # --- Health ----------------------------------------------------------------
 watchdog: http://[HOST]:[PORT:8099]/health

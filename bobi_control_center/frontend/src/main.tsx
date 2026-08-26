@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HashRouter } from 'react-router-dom';
 
 import { App } from './App';
+import { ExternalAuthGate } from './features/auth/ExternalAuthGate';
 import './index.css';
 
 const queryClient = new QueryClient({
@@ -27,9 +28,11 @@ if (!container) {
 createRoot(container).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <HashRouter>
-        <App />
-      </HashRouter>
+      <ExternalAuthGate>
+        <HashRouter>
+          <App />
+        </HashRouter>
+      </ExternalAuthGate>
     </QueryClientProvider>
   </StrictMode>,
 );

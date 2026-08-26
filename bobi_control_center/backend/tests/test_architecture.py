@@ -352,8 +352,8 @@ def test_management_writes_only_through_declared_operations() -> None:
             assert token not in code, f"{name} must not reach a raw HA service: {token}"
 
 
-def test_every_non_get_route_is_a_probe_or_a_managed_change() -> None:
-    """Enumerate the published surface: nothing writes outside the managed flow.
+def test_every_non_get_route_is_auth_a_probe_or_a_managed_change() -> None:
+    """Enumerate the published surface: nothing writes outside known flows.
 
     Read from the OpenAPI schema rather than `app.routes`, because an included
     router appears there as one opaque entry — the schema is what a client can
@@ -370,6 +370,8 @@ def test_every_non_get_route_is_a_probe_or_a_managed_change() -> None:
     }
 
     assert non_get == {
+        ("/api/auth/login", "POST"),
+        ("/api/auth/logout", "POST"),
         ("/api/bobi/probe", "POST"),
         ("/api/bobi/manage/{resource}/preview", "POST"),
         ("/api/bobi/manage/{resource}/commit", "POST"),
@@ -556,6 +558,12 @@ def test_app_config_is_valid() -> None:
 
     # Needed for SUPERVISOR_TOKEN to be injected.
     assert config["homeassistant_api"] is True
+
+    # A Cloudflare hostname reaches the app only through the internal Docker
+    # network. External auth is opt-in and stores a salted hash, not a password.
+    assert config["options"]["external_hostname"] == ""
+    assert config["options"]["external_password_hash"] == ""
+    assert config["schema"]["external_password_hash"] == "password?"
 
     assert config["watchdog"].endswith("/health")
 

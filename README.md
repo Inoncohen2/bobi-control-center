@@ -73,6 +73,19 @@ If one is missing, the affected screen says so plainly rather than failing:
 | --- | --- | --- | --- |
 | `log_level` | `debug` / `info` / `warning` / `error` | `info` | Add-on log verbosity. |
 | `debug_http` | `true` / `false` | `false` | Log bridge request/response bodies. Off by default so household data never lands in the log. |
+| `external_hostname` | hostname | empty | Dedicated Cloudflare hostname. External API access fails closed until this and the hash are configured. |
+| `external_password_hash` | salted scrypt hash | empty | Password verifier for external sessions. The password itself is never stored. |
+
+### External HTTPS access
+
+The same container can be reached in parallel through Ingress and a dedicated
+Cloudflare Tunnel hostname. Route the hostname to the app's internal service,
+`http://d6ebff28-bobi-control-center:8099`; no host port is published.
+
+Only the dedicated hostname activates Bobi's external login. Successful login
+creates a 12-hour server-side session and a `Secure`, `HttpOnly`,
+`SameSite=Strict` cookie. Ingress continues to use Home Assistant's own
+authentication and does not show a second login screen.
 
 ---
 
@@ -224,6 +237,9 @@ lets the Supervisor build it.
 - `SUPERVISOR_TOKEN` is read from the environment, used only in an
   `Authorization` header, and never serialised, logged or sent to the browser.
 - No long-lived access token is created, and none is ever requested from you.
+- Direct external access requires the dedicated hostname, a salted-scrypt
+  password verifier, login throttling, a short-lived server-side session and
+  exact-origin checks for state-changing requests.
 - The real adapter can call **only** the nine bridge services — anything else is
   refused before a request is made.
 - Response bodies are logged only when `debug_http` is explicitly enabled.

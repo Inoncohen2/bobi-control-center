@@ -107,6 +107,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(apiUrl(path), {
       ...init,
+      credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
     });
   } catch (cause) {
