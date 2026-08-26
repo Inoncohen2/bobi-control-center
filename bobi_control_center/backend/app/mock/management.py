@@ -200,7 +200,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "kind": "toggle",
                 "value": True,
                 "controllable": True,
-                "operations": ["disable", "set_role", "rename", "set_phone"],
+                "operations": ["set", "disable", "set_role", "rename", "set_phone"],
                 "risk": "medium",
                 "role": "admin",
                 "enabled": True,
@@ -222,7 +222,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "kind": "toggle",
                 "value": True,
                 "controllable": True,
-                "operations": ["disable", "set_role", "rename", "set_phone"],
+                "operations": ["set", "disable", "set_role", "rename", "set_phone"],
                 "risk": "medium",
                 "role": "member",
                 "enabled": True,
@@ -247,7 +247,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                         "kind": "number",
                         "value": 30,
                         "controllable": True,
-                        "operations": ["set_timing"],
+                        "operations": ["set", "set_timing"],
                         "constraints": {"min": 0, "max": 120, "step": 5, "unit": " דק׳"},
                     },
                     {
@@ -256,7 +256,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                         "kind": "toggle",
                         "value": True,
                         "controllable": True,
-                        "operations": ["set_timing"],
+                        "operations": ["set", "set_timing"],
                     },
                     {
                         "id": "night_off_time",
@@ -264,7 +264,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                         "kind": "time",
                         "value": "23:30",
                         "controllable": True,
-                        "operations": ["set_timing"],
+                        "operations": ["set", "set_timing"],
                     },
                     {
                         "id": "morning_on_time",
@@ -272,7 +272,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                         "kind": "time",
                         "value": "07:30",
                         "controllable": True,
-                        "operations": ["set_timing"],
+                        "operations": ["set", "set_timing"],
                     },
                 ],
             },
@@ -286,7 +286,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                         "kind": "list",
                         "value": ["mosquito", "laundry"],
                         "controllable": True,
-                        "operations": ["set_membership"],
+                        "operations": ["set", "set_membership"],
                         "profile": "pre_off",
                         "constraints": {
                             "allowed": [
@@ -306,7 +306,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                         "kind": "list",
                         "value": ["kitchen", "dining", "led_salon"],
                         "controllable": True,
-                        "operations": ["set_membership"],
+                        "operations": ["set", "set_membership"],
                         "profile": "pre_on",
                         "constraints": {
                             "allowed": [
@@ -330,7 +330,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                         "kind": "number",
                         "value": 24,
                         "controllable": True,
-                        "operations": ["set_temperature"],
+                        "operations": ["set", "set_temperature"],
                         "constraints": {"min": 16, "max": 30, "step": 1, "unit": "°"},
                     },
                     {
@@ -339,7 +339,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                         "kind": "number",
                         "value": 23,
                         "controllable": True,
-                        "operations": ["set_temperature"],
+                        "operations": ["set", "set_temperature"],
                         "constraints": {"min": 16, "max": 30, "step": 1, "unit": "°"},
                     },
                 ],
@@ -418,6 +418,23 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "operations": ["set"],
                 "device_class": "climate",
                 "capabilities": ["on_off", "temperature", "hvac_mode"],
+                "constraints": {"min": 16, "max": 30, "step": 1, "unit": "°"},
+            },
+            # The live vocabulary, with no `set` to fall back on. This house
+            # names one verb per capability — `power`, `temperature`,
+            # `fan_mode` — and a double that only ever said `set` is what let
+            # every device in a real contract arrive fully described and
+            # entirely inoperable. One device here speaks only the bridge's own
+            # words, so the path that reads them is exercised, not assumed.
+            {
+                "id": "ac_parents",
+                "label": "מזגן הורים",
+                "kind": "number",
+                "value": 23,
+                "controllable": True,
+                "operations": ["power", "temperature", "fan_mode", "swing_mode"],
+                "device_class": "climate",
+                "capabilities": ["on_off", "temperature", "fan_mode", "swing_mode"],
                 "constraints": {"min": 16, "max": 30, "step": 1, "unit": "°"},
             },
             {

@@ -176,6 +176,11 @@ _OPERATION_RISK: dict[tuple[str, str], str] = {
     ("users", "set_phone"): "high",
     ("users", "set_role"): "high",
     ("users", "disable"): "high",
+    # `set` on a user is whichever of the three above the payload turns out to
+    # be, so it is rated as the most sensitive of them rather than as the
+    # family default. At runtime the describer re-rates it from the payload;
+    # this is the standing rating the Home Assistant side should mirror.
+    ("users", "set"): "high",
     ("rules", "delete"): "destructive",
     ("calendar", "delete"): "destructive",
     ("automations", "trigger"): "medium",

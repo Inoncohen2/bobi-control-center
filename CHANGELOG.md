@@ -4,6 +4,84 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.4.0
+
+The two sides now speak the same language, and the house is controllable from
+the web.
+
+Connecting to the live Home Assistant showed three families — users, the
+Shabbat clock and devices — arriving fully described, marked controllable, and
+entirely read-only. Nothing raised. Each verb the bridge declared was a verb
+this side did not know, and a verb only one side knows is dropped in silence by
+the closed-set filter: the contract announced the operation, the app quietly
+did not offer it, and neither reported anything wrong.
+
+Home Assistant's model was the right one. A family is a list of items each
+holding a value, `set` sets it, and a device names one verb per capability.
+The granular verbs were this application's idea.
+
+### What changed here
+
+- **`set` is accepted wherever the live bridge declares it** — users, the
+  Shabbat clock, settings — beside the granular names, which still work where a
+  bridge offers them.
+- **Sixteen device capability verbs**, matching what the house publishes:
+  `power`, `temperature`, `hvac_mode`, `fan_mode`, `swing_mode`, `preset_mode`,
+  `brightness`, `color_temp`, `intensity`, `scent`, `timer`, `fan_speed`,
+  `start`, `pause`, `stop`, `return_to_base` and `locate`.
+- **Every refusal that used to key off a verb now reads the payload.** The
+  last-admin guard catches a `set` that switches off the only administrator or
+  demotes them; the phone door opens for a `phone` field under `set` as it did
+  under `set_phone`, and the change is rated sensitive for what it carries
+  rather than for what it is called.
+- **`primary_operation`** — one item now carries several verbs, and nothing in
+  the payload says which one sets the value it reports. An air conditioner
+  reports a temperature and accepts `power` first, so a screen taking the first
+  name in the list would have sent `power` when someone edited a temperature:
+  the wrong change, previewed honestly, confirmed by a person who read a
+  correct-looking dialog. The backend decides it once; no component guesses.
+- **A switch verb is no longer checked against the item's own limits.**
+  `power: true` measured against a °C range produced "the value must be a
+  number" — the check being wrong about the request rather than the request
+  being wrong. It is still checked against what a switch can hold.
+- **A bare list of choices is understood.** `hvac_modes` and `fan_modes` are
+  plain string lists in Home Assistant, and they were being dropped whole: a
+  choice control with nothing to choose from.
+- **A family declaring no operations is readable, not missing.** An empty
+  `operations` list is the documented way to publish a snapshot bridge before
+  its commit bridge exists, and it was reporting the family as unavailable —
+  the difference between a screen full of values and a screen saying there is
+  nothing here.
+
+### What changed in Home Assistant
+
+- **`bobi_cc_devices`** published `kind` as the Home Assistant domain —
+  `light`, `climate` — where the contract asks for an editor kind, so every
+  device fell through to read-only regardless of vocabulary. It now publishes
+  one canonical item per controllable value, the way the Shabbat bridge already
+  did: sixteen devices become thirty-one items, each with the limits and
+  choices Home Assistant actually holds.
+- **`bobi_cc_device_commit`** is new, and reaches only the sixteen canonical
+  devices, only through a capability the device has, with the kill switch, the
+  preview token, the expected-state match and read-after-write all enforced on
+  that side too.
+- **`bobi_cc_manage_contract`** declares the fourteen device verbs the commit
+  bridge implements, and names `helpers`, `automations`, `scripts` and `scenes`
+  — read-only, honestly, because their write path is not verified.
+- **`bobi_cc_settings_commit`** read `resource_id` while this application sends
+  `setting_id`, so every settings write would have been refused as
+  `invalid_commit_request`. It accepts both now.
+
+An item whose current value Home Assistant cannot read is published with a
+reason and no control rather than with a guess — a light's brightness while it
+is off, a mode the integration does not report. A preview binds to what the
+bridge reports, so a guessed value would be a guess that got confirmed.
+
+Nothing is relaxed. The master switch is still read-only and still off; the
+preview token, the single-use expiry, the payload and observed-state binding,
+the explicit confirmation, read-after-write and the closed service allow-list
+all stand.
+
 ## 3.1.1
 
 External authentication now remains fail-closed when Cloudflared rewrites the

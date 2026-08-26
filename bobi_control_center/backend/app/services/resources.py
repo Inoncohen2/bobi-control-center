@@ -62,11 +62,72 @@ RESOURCE_IDS = (
 #: absent from this tuple cannot be requested at all, whatever a contract says —
 #: a new verb has to be added here, deliberately, with a describer to match.
 SETTINGS_OPERATIONS = ("set",)
-USER_OPERATIONS = ("enable", "disable", "set_role", "rename", "set_phone")
-SHABBAT_OPERATIONS = ("set_timing", "set_membership", "set_temperature")
+#: `set` is here beside the granular verbs, and it is the one the live bridge
+#: actually declares. This house publishes `operations: ["set"]` on every user,
+#: every setting and every Shabbat row: its model is that a family is a list of
+#: items each holding a value, and `set` sets it. The granular names below were
+#: this application's idea, not Home Assistant's, and a verb only one side knows
+#: is dropped by the closed-set filter — which is how `users` and `shabbat`
+#: came back from a live contract fully described and entirely read-only.
+#:
+#: They are kept rather than replaced because they are more precise where a
+#: bridge does offer them, and because dropping them would break the tasks and
+#: features path that already speaks them. What `set` means is decided by the
+#: payload, and the rules that used to key off the verb — the last-admin guard,
+#: the phone door — now read the payload instead.
+USER_OPERATIONS = ("set", "enable", "disable", "set_role", "rename", "set_phone")
+SHABBAT_OPERATIONS = ("set", "set_timing", "set_membership", "set_temperature")
 RULE_OPERATIONS = ("create", "edit", "enable", "disable", "delete")
 CALENDAR_OPERATIONS = ("create", "edit", "move", "delete")
-DEVICE_OPERATIONS = ("set",)
+#: A device capability, named as the verb. The live `bobi_cc_devices` snapshot
+#: declares `operations: ["power"]` on a socket and `["power", "temperature",
+#: "fan_mode", "swing_mode"]` on an air conditioner — one verb per thing the
+#: device can actually do — where this application had only `set`. Each of them
+#: sets one capability to the value in the payload.
+#:
+#: This is still a closed set. A verb outside it is refused, and a verb inside
+#: it is offered only where the bridge named it *on that item*, so a device that
+#: cannot dim is never shown a brightness control.
+DEVICE_CAPABILITY_OPERATIONS = (
+    "power",
+    "brightness",
+    "color_temp",
+    "temperature",
+    #: Cool, heat, dry, fan-only. Declared by all three air conditioners in this
+    #: house and by nothing on this side, so it was dropped in silence — the one
+    #: capability of a climate device that is neither its power nor its target.
+    "hvac_mode",
+    "fan_mode",
+    "fan_speed",
+    "swing_mode",
+    "preset_mode",
+    "intensity",
+    "scent",
+    "timer",
+    "start",
+    "pause",
+    "stop",
+    "return_to_base",
+    "locate",
+)
+DEVICE_OPERATIONS = ("set", *DEVICE_CAPABILITY_OPERATIONS)
+
+#: The capability verbs that operate a switch rather than the item's own value.
+#:
+#: An item publishes one `kind` and one set of `constraints`, and they describe
+#: the value it reports — for an air conditioner, its temperature. Once a family
+#: has one verb per capability, a single item has several values of different
+#: types, and only one of them is the published one. Checking `power: true`
+#: against a number item's limits produces "the value must be a number", which
+#: is the check being wrong rather than the request.
+#:
+#: So these verbs are checked as switches, and every other capability verb is
+#: still checked against the limits the bridge published. Home Assistant
+#: validates its own side either way; this is the earlier and friendlier of the
+#: two refusals, and an earlier refusal that is wrong is worse than none.
+DEVICE_SWITCH_OPERATIONS = frozenset(
+    {"power", "start", "pause", "stop", "return_to_base", "locate"}
+)
 #: Home Assistant helpers. `set` covers every kind — the item's `kind` decides
 #: what a value means — and the timer/counter verbs are named separately
 #: because "start a timer" is not a value being set.
@@ -132,6 +193,7 @@ SPECS: dict[str, ResourceSpec] = {
         id_field="user_id",
         default_risk="medium",
         titles={
+            "set": "שינוי הגדרת משתמש",
             "enable": "הפעלת משתמש",
             "disable": "השבתת משתמש",
             "set_role": "שינוי הרשאה",
@@ -147,6 +209,7 @@ SPECS: dict[str, ResourceSpec] = {
         operations=SHABBAT_OPERATIONS,
         id_field="profile_id",
         titles={
+            "set": "שינוי הגדרת שבת",
             "set_timing": "שינוי תזמון שבת",
             "set_membership": "שינוי מכשירים בפרופיל",
             "set_temperature": "שינוי טמפרטורת מזגן בפרופיל",
@@ -192,7 +255,26 @@ SPECS: dict[str, ResourceSpec] = {
         commit_service="bobi_cc_device_commit",
         operations=DEVICE_OPERATIONS,
         id_field="device_id",
-        titles={"set": "שינוי מצב מכשיר"},
+        titles={
+            "set": "שינוי מצב מכשיר",
+            "power": "הדלקה או כיבוי",
+            "brightness": "שינוי בהירות",
+            "color_temp": "שינוי גוון האור",
+            "temperature": "שינוי טמפרטורה",
+            "hvac_mode": "שינוי מצב הפעלה",
+            "fan_mode": "שינוי עוצמת מאוורר",
+            "fan_speed": "שינוי מהירות מאוורר",
+            "swing_mode": "שינוי הנפה",
+            "preset_mode": "שינוי מצב מוגדר",
+            "intensity": "שינוי עוצמה",
+            "scent": "שינוי ניחוח",
+            "timer": "שינוי טיימר",
+            "start": "הפעלה",
+            "pause": "השהיה",
+            "stop": "עצירה",
+            "return_to_base": "חזרה לעמדת הטעינה",
+            "locate": "איתור המכשיר",
+        },
     ),
     "helpers": ResourceSpec(
         id="helpers",

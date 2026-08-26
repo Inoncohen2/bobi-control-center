@@ -31,7 +31,7 @@ from app.models.manage import (
     ResourceSnapshot,
 )
 from app.services import normalize
-from app.services.resources import humanise, mask_phone
+from app.services.resources import DEVICE_SWITCH_OPERATIONS, humanise, mask_phone
 
 #: `domain.object_id` — a Home Assistant entity id. Matched on the value as
 #: well as the key, because a bridge could hand one over under any name.
@@ -151,6 +151,21 @@ def _safe_value(value: Any) -> Any:
 
 
 def _options(value: Any) -> list[ManagedOption]:
+    """The choices a bridge published, however it published them.
+
+    `[{"value": "auto", "label": "אוטומטי"}]` is the documented shape, but a
+    bare `["auto", "low", "high"]` is what a bridge naturally sends when Home
+    Assistant already holds the list — `hvac_modes`, `fan_modes`, `preset_modes`
+    are all plain string lists. The coercion below drops anything that is not a
+    dict, so those arrived as *no options at all*: a choice control with nothing
+    to choose, and every value refused for not being among them.
+    """
+    if isinstance(value, list):
+        value = [
+            item if isinstance(item, dict) else {"value": item}
+            for item in value
+            if item is not None
+        ]
     options: list[ManagedOption] = []
     for item in normalize._as_items(value, id_key="value"):
         token = normalize._text(normalize._first(item, "value", "id", "key"))
@@ -261,6 +276,51 @@ def _infer_kind(value: Any, options: list[ManagedOption]) -> str:
     return "readonly"
 
 
+def primary_operation(kind: str, value: Any, operations: list[str]) -> str | None:
+    """The declared verb that sets the value this item reports.
+
+    Under the live vocabulary one item carries several verbs — an air
+    conditioner accepts `power`, `temperature`, `fan_mode` and `swing_mode`
+    while reporting a temperature — and the payload never says which of them
+    produces the reported value. Taking the first name in the list would send
+    `power` when someone edits a temperature: the wrong change, previewed
+    honestly, and confirmed by a person who read a correct-looking dialog.
+
+    So it is worked out from the item's own `kind`, which is the one thing that
+    does describe the reported value:
+
+    * a toggle is switched by `enable`/`disable` where the bridge named them,
+      otherwise by `set`, otherwise by `power`;
+    * everything else is set by `set` where it exists, and otherwise by the
+      first verb that is not a switch — because a switch does not set a
+      published number, choice or text.
+
+    A guess remains a guess, and this one is checked twice more: the bridge
+    still has to have named the verb on the item, and Home Assistant still
+    validates the commit it receives.
+    """
+    if not operations:
+        return None
+    if kind == "toggle":
+        on = value is True
+        # `stop`/`start` last: a vacuum is the one device whose on and off are
+        # two different verbs rather than one verb and a value.
+        for candidate in (
+            "disable" if on else "enable",
+            "set",
+            "power",
+            "stop" if on else "start",
+        ):
+            if candidate in operations:
+                return candidate
+    if "set" in operations:
+        return "set"
+    for operation in operations:
+        if operation not in DEVICE_SWITCH_OPERATIONS:
+            return operation
+    return operations[0]
+
+
 def _item(payload: dict[str, Any], *, default_group: str | None = None) -> ManagedItem | None:
     identifier = normalize._text(normalize._first(payload, "id", "key"))
     if identifier is None:
@@ -289,6 +349,7 @@ def _item(payload: dict[str, Any], *, default_group: str | None = None) -> Manag
         risk=normalize._text(payload.get("risk")) or ("low" if controllable else "read_only"),
         controllable=controllable,
         operations=operations,
+        primary_operation=primary_operation(kind, value, operations) if controllable else None,
         options=options,
         constraints=constraints,
         unavailable_reason=normalize._text(

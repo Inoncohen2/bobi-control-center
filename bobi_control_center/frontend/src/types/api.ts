@@ -606,6 +606,14 @@ export interface ManagedItem {
   /** False unless the bridge said otherwise. No control is rendered without it. */
   controllable: boolean;
   operations: string[];
+  /**
+   * Which of `operations` sets the value this item reports, decided by the
+   * backend. Under the live vocabulary one item carries several verbs — an air
+   * conditioner accepts `power`, `temperature`, `fan_mode` — and taking the
+   * first of them would send `power` for a temperature edit. `null` means
+   * there is nothing to operate.
+   */
+  primary_operation: string | null;
   options: ManagedOption[];
   constraints: ManagedConstraints | null;
   unavailable_reason: string | null;

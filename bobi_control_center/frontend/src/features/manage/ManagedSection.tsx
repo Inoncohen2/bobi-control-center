@@ -41,7 +41,7 @@ export function ManagedSection({
   const change = useManagedChange(resource, [keys.resource(resource), keys.audit]);
 
   const request = (item: ManagedItem, value: unknown, operation?: string) => {
-    const chosen = operation ?? item.operations[0];
+    const chosen = operation ?? item.primary_operation ?? item.operations[0];
     if (!chosen) return;
     void change.start({ operation: chosen, resource_id: item.id, payload: { value } });
   };

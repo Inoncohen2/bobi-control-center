@@ -434,7 +434,13 @@ def _operations(
     for name in translated:
         if name in allowed and name not in operations:
             operations.append(name)
-    return operations, bool(operations)
+    # A list is a valid declaration even when it is empty, and an empty one is
+    # the documented way to publish a snapshot bridge whose commit bridge has
+    # not been written yet: the family reads, and draws no save button. Treating
+    # it as invalid reported those families *unavailable* instead — the
+    # difference between a screen full of values and a screen saying there is
+    # nothing here. Only a non-list is malformed, and that is refused above.
+    return operations, True
 
 
 def _task_resource(

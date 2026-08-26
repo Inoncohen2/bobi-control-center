@@ -425,6 +425,17 @@ class ManagedItem(CanonicalModel):
     controllable: bool = False
     #: The operations the bridge accepts for this item, from the closed set.
     operations: list[str] = Field(default_factory=list)
+    #: Which of those operations sets the value this item reports.
+    #:
+    #: An item publishes one value and, under the live vocabulary, several
+    #: verbs — an air conditioner accepts `power`, `temperature`, `fan_mode`
+    #: and `swing_mode` while reporting a temperature. Nothing in the payload
+    #: says which verb produces the reported value, and a screen taking the
+    #: first name in the list would send `power` for a temperature edit.
+    #:
+    #: So it is decided once, here, rather than guessed by every component that
+    #: draws a control. `None` means there is nothing to operate.
+    primary_operation: str | None = None
     options: list[ManagedOption] = Field(default_factory=list)
     constraints: ManagedConstraints | None = None
     #: Hebrew — why this item cannot be operated right now.

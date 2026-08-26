@@ -373,3 +373,73 @@ async def test_what_this_house_says_it_will_not_do_matches_what_we_refuse(
     published = " ".join(NEVER_REQUESTED).lower()
     for word in ("restart", "supervisor", "delet", "backup", "shell"):
         assert word in published, word
+
+
+# --- contract 3c after the vocabulary was reconciled -------------------------
+#: The `resources` block this house publishes now, captured after both sides
+#: were brought into line: `devices` names one verb per capability, and the four
+#: families whose snapshot bridges shipped ahead of their commit bridges are
+#: declared with an empty `operations` list rather than left out.
+LIVE_RESOURCES_AFTER = [
+    {
+        "id": "devices",
+        "label": "מכשירים",
+        "available": True,
+        "operations": [
+            {"id": name, "label": name, "destructive": False}
+            for name in (
+                "power", "temperature", "hvac_mode", "fan_mode", "swing_mode",
+                "preset_mode", "brightness", "color_temp", "fan_speed", "start",
+                "pause", "stop", "return_to_base", "locate",
+            )
+        ],
+        "targets": [],
+    },
+    {"id": "helpers", "label": "עזרים", "available": True, "operations": [], "targets": []},
+    {
+        "id": "automations",
+        "label": "אוטומציות Home Assistant",
+        "available": True,
+        "operations": [],
+        "targets": [],
+    },
+    {"id": "scripts", "label": "סקריפטים", "available": True, "operations": [], "targets": []},
+    {"id": "scenes", "label": "סצנות", "available": True, "operations": [], "targets": []},
+]
+
+
+async def test_every_device_verb_this_house_declares_survives(live_bridge) -> None:
+    """Fourteen verbs, none dropped.
+
+    The closed set on this side is what makes the write path safe, and it is
+    also what silently discarded every device verb this house had — the family
+    came back described and inoperable. If Home Assistant declares a verb and
+    this list does not, that is the same failure returning.
+    """
+    from app.services.resources import DEVICE_OPERATIONS
+
+    contract = dict(LIVE_CONTRACT, resources=LIVE_RESOURCES_AFTER)
+    adapter, bridge = live_bridge({CONTRACT: contract})
+    status = await bridge.status()
+    await adapter.aclose()
+
+    devices = next(entry for entry in status.resources if entry.id == "devices")
+    declared = {op.id for op in devices.operations}
+
+    assert len(declared) == 14
+    assert declared <= set(DEVICE_OPERATIONS), declared - set(DEVICE_OPERATIONS)
+
+
+async def test_a_family_with_no_commit_bridge_is_readable_not_absent(live_bridge) -> None:
+    """An empty `operations` list is the contract's way of saying "snapshot
+    only". It must read as available-and-read-only, never as missing: the
+    difference is a screen full of values against a screen saying nothing."""
+    contract = dict(LIVE_CONTRACT, resources=LIVE_RESOURCES_AFTER)
+    adapter, bridge = live_bridge({CONTRACT: contract})
+    status = await bridge.status()
+    await adapter.aclose()
+
+    for name in ("helpers", "automations", "scripts", "scenes"):
+        family = next(entry for entry in status.resources if entry.id == name)
+        assert family.available is True, name
+        assert family.operations == [], name

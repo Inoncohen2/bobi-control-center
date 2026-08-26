@@ -32,6 +32,7 @@ from app.models.manage import (
 )
 from app.models.manage import ValidationError as FieldError
 from app.services.resources import (
+    DEVICE_SWITCH_OPERATIONS,
     SPECS,
     constraint_errors,
     humanise,
@@ -53,8 +54,14 @@ SENSITIVE_CONFIRM_WORD = "אישור"
 #: one door, opened deliberately: changing a phone number is a thing the spec
 #: asks for, and it cannot be done without the number. Everything else stays
 #: stripped, including on this operation.
+#:
+#: `set` is the same door under the name the live bridge uses. This house
+#: declares `operations: ["set"]` on every user and decides what is being set
+#: from the payload, so keying the door to `set_phone` alone would mean the one
+#: allowed field could never arrive. It is still one field, on one family.
 PRIVATE_FIELDS_ALLOWED: dict[tuple[str, str], frozenset[str]] = {
     ("users", "set_phone"): frozenset({"phone"}),
+    ("users", "set"): frozenset({"phone"}),
 }
 
 
@@ -133,8 +140,21 @@ def last_admin_error(
     if resource_id not in admins:
         return None
 
-    removes_admin = operation == "disable" or (
-        operation == "set_role" and str(payload.get("role") or "").lower() != "admin"
+    removes_admin = (
+        operation == "disable"
+        or (operation == "set_role" and str(payload.get("role") or "").lower() != "admin")
+        # `set` is the verb the live bridge actually declares on users, and what
+        # it sets is in the payload rather than in the name. A guard that reads
+        # only the verb would have let the identical change through under the
+        # one name Home Assistant uses — so it reads the payload: a role that is
+        # not admin, or a value being switched off, is the same removal that
+        # `set_role` and `disable` used to spell out.
+        or (
+            operation == "set"
+            and "role" in payload
+            and str(payload.get("role") or "").lower() != "admin"
+        )
+        or (operation == "set" and "value" in payload and not payload.get("value"))
     )
     if not removes_admin:
         return None
@@ -280,7 +300,11 @@ def describe(
     if resource == "users":
         if (error := last_admin_error(snapshot, operation, resource_id, payload)) is not None:
             errors.append(error)
-        risk = "high" if operation == "set_phone" else risk
+        # Rated on what is changing, not on what the verb is called. A phone
+        # number arriving under `set` is exactly as sensitive as one arriving
+        # under `set_phone`, and only one of those names is the live bridge's.
+        if operation == "set_phone" or "phone" in payload:
+            risk = "high"
 
     if resource == "devices" and item is not None:
         error = device_capability_error(item, payload)
@@ -299,8 +323,22 @@ def describe(
         wanted = False
 
     if item is not None and wanted is not None:
-        for code, message in constraint_errors(item, wanted):
-            errors.append(FieldError(field="value", code=code, message=message))
+        if resource == "devices" and operation in DEVICE_SWITCH_OPERATIONS:
+            # A switch, not the item's published value. See
+            # `DEVICE_SWITCH_OPERATIONS` for why the item's own limits do not
+            # apply here — and note that the value is still checked, against
+            # what a switch can actually hold.
+            if not isinstance(wanted, bool):
+                errors.append(
+                    FieldError(
+                        field="value",
+                        code="invalid",
+                        message="הערך צריך להיות פעיל או כבוי",
+                    )
+                )
+        else:
+            for code, message in constraint_errors(item, wanted):
+                errors.append(FieldError(field="value", code=code, message=message))
 
     if errors:
         return _invalid(resource, operation, resource_id, title, *errors)
@@ -328,7 +366,7 @@ def describe(
         changes.append(ChangeField(label=_FIELD_LABELS.get(key, key), before=before, after=shown))
 
     destructive = operation in spec.destructive
-    explanation = _explain(resource, operation, item, conflicts)
+    explanation = _explain(resource, operation, item, conflicts, payload)
 
     return PreviewResponse(
         preview_id="",
@@ -372,7 +410,11 @@ _FIELD_LABELS = {
 
 
 def _explain(
-    resource: str, operation: str, item: ManagedItem | None, conflicts: list[dict[str, Any]]
+    resource: str,
+    operation: str,
+    item: ManagedItem | None,
+    conflicts: list[dict[str, Any]],
+    payload: dict[str, Any] | None = None,
 ) -> str | None:
     if resource == "shabbat":
         # Said out loud in the dialog, because it is the question a person asks
@@ -388,7 +430,7 @@ def _explain(
         return f"בובי מצא חפיפה עם אוטומציה קיימת: {notes}" if notes else None
     if resource == "devices":
         return "הפעולה תישלח למכשיר, ובובי יקרא את המצב בחזרה כדי לוודא שהיא נקלטה."
-    if resource == "users" and operation == "set_phone":
+    if resource == "users" and (operation == "set_phone" or "phone" in (payload or {})):
         return "המספר יישמר אצל בובי בלבד ולא יוצג במלואו באתר."
     if resource == "system":
         return item.description if item else None

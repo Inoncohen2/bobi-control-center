@@ -70,7 +70,7 @@ export function ManagedResourcePage({
     // The operation comes from what the bridge advertised for this item. An
     // item with none is not operable, and the editor never renders a control
     // for it — this guard is the second lock on the same door.
-    const chosen = operation ?? item.operations[0];
+    const chosen = operation ?? item.primary_operation ?? item.operations[0];
     if (!chosen) return;
     void change.start({ operation: chosen, resource_id: item.id, payload: { value } });
   };

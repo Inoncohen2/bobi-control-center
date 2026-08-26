@@ -236,11 +236,12 @@ function ItemControl({
 
   if (item.kind === 'toggle') {
     const on = item.value === true;
-    // `enable`/`disable` when the bridge named them, `set` otherwise — the
-    // operation comes from what was advertised, never from a guess.
-    const operation = on
-      ? item.operations.find((name) => name === 'disable')
-      : item.operations.find((name) => name === 'enable');
+    // `enable`/`disable` when the bridge named them, `set` or `power`
+    // otherwise. Which one that is comes from the backend, on the item, so the
+    // rule lives in one place and is tested there — this used to be worked out
+    // here, and a screen that reasons about a vocabulary is a screen that has
+    // to be corrected every time the vocabulary grows.
+    const operation = item.primary_operation ?? undefined;
     return (
       <div className="flex sm:justify-end">
         <Button
