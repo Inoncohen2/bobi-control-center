@@ -56,7 +56,15 @@ export function ManagedResourcePage({
   const query = useResourceSnapshot(resource, Boolean(declared?.available));
 
   const change = useManagedChange(resource, [keys.resource(resource), keys.audit]);
-  const writesEnabled = contract.data?.writes_enabled ?? false;
+
+  // Three separate yeses, and all three have to be given before a control is
+  // drawn: Home Assistant's master switch is on, the contract named at least
+  // one operation for this family (so its commit bridge exists), and — per row
+  // — the bridge marked that item controllable. A family announced with no
+  // operations is exactly what a commit bridge still being written looks like
+  // from here, and it gets values rather than a button that would 404.
+  const hasWriteBridge = (declared?.operations.length ?? 0) > 0;
+  const writesEnabled = (contract.data?.writes_enabled ?? false) && hasWriteBridge;
 
   const request = (item: ManagedItem, value: unknown, operation?: string) => {
     // The operation comes from what the bridge advertised for this item. An
@@ -105,7 +113,16 @@ export function ManagedResourcePage({
           {(snapshot) =>
             snapshot.available ? (
               <>
-                {!writesEnabled ? (
+                {!hasWriteBridge ? (
+                  <Notice
+                    icon={Info}
+                    title="קריאה בלבד"
+                    body={
+                      declared?.detail ??
+                      'הגשר של בובי עדיין לא כולל פעולות כתיבה למשאב הזה. הנתונים מוצגים במלואם.'
+                    }
+                  />
+                ) : !writesEnabled ? (
                   <Notice
                     icon={ShieldOff}
                     title="שינויים כבויים כרגע"

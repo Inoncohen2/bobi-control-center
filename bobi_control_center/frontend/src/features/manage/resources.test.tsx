@@ -144,6 +144,39 @@ describe('with the master write switch off', () => {
   });
 });
 
+describe('a family whose commit bridge has not shipped', () => {
+  it('shows the values and offers nothing to press', async () => {
+    stub(
+      routes({
+        '/api/bobi/manage/contract': makeManagementWith('settings', { writes_enabled: true }, []),
+      }),
+    );
+    renderWithProviders(<SettingsManagePage />);
+
+    // The values are all there…
+    expect(await screen.findByText('סיכום בוקר אוטומטי')).toBeInTheDocument();
+    // …and the reason there is no save button is stated, not left to guess.
+    expect(screen.getByText(/קריאה בלבד/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /כבה|הפעל/ })).not.toBeInTheDocument();
+  });
+
+  it('offers no control even when the item says it is controllable', async () => {
+    stub(
+      routes({
+        '/api/bobi/manage/contract': makeManagementWith('settings', { writes_enabled: true }, []),
+        '/api/bobi/manage/settings/snapshot': makeResourceSnapshot({
+          items: [makeManagedItem({ controllable: true, operations: ['set'] })],
+        }),
+      }),
+    );
+    renderWithProviders(<SettingsManagePage />);
+
+    await screen.findByText('סיכום בוקר אוטומטי');
+    // The item says yes; the family has no commit bridge. Both must agree.
+    expect(screen.queryByRole('button', { name: 'כבה' })).not.toBeInTheDocument();
+  });
+});
+
 describe('a control the bridge did advertise', () => {
   it('asks for a preview and writes nothing by itself', async () => {
     const fetchMock = stub(routes());
@@ -256,6 +289,33 @@ describe('the cameras screen', () => {
     // resolve before the snapshot had loaded.
     expect(await screen.findByText('מצלמת ליה')).toBeInTheDocument();
     expect(screen.getByText(/מצלמה כבויה נשארת כבויה/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /הפעל|כבה/ })).not.toBeInTheDocument();
+  });
+
+  it('offers no power control even if the contract marks the camera controllable', async () => {
+    // The one case where trusting a flag is not enough: by the time you could
+    // switch a camera back off, somebody has been recorded.
+    stub({
+      ...BASE,
+      '/api/bobi/manage/contract': makeManagementWith('devices', { writes_enabled: true }),
+      '/api/bobi/manage/devices/snapshot': makeResourceSnapshot({
+        resource: 'devices',
+        items: [
+          makeManagedItem({
+            id: 'cam_lia',
+            label: 'מצלמת ליה',
+            kind: 'toggle',
+            value: false,
+            controllable: true,
+            operations: ['set'],
+            detail: { device_class: 'camera' },
+          }),
+        ],
+      }),
+    });
+    renderWithProviders(<CamerasPage />);
+
+    expect(await screen.findByText('מצלמת ליה')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /הפעל|כבה/ })).not.toBeInTheDocument();
   });
 });

@@ -46,23 +46,27 @@ export function ManagedSection({
     void change.start({ operation: chosen, resource_id: item.id, payload: { value } });
   };
 
+  // A family with no operations in the contract has no commit bridge yet, so
+  // it gets values and no save button.
+  const hasWriteBridge = (declared?.operations.length ?? 0) > 0;
+  const writesEnabled = (contract.data?.writes_enabled ?? false) && hasWriteBridge;
+
   if (!available || !query.data?.available) return null;
 
   return (
     <section className="space-y-3">
       <SectionTitle>{title}</SectionTitle>
-      {!contract.data?.writes_enabled ? (
+      {!writesEnabled ? (
         <Card>
           <p className="text-sm text-slate-600 dark:text-slate-300">
-            אפשר להריץ תצוגה מקדימה. ביצוע שינויים ייפתח כשיופעל המתג ב-Home Assistant.
+            {hasWriteBridge
+              ? 'אפשר להריץ תצוגה מקדימה. ביצוע שינויים ייפתח כשיופעל המתג ב-Home Assistant.'
+              : (declared?.detail ??
+                'הגשר של בובי עדיין לא כולל פעולות כתיבה למשאב הזה. הנתונים מוצגים במלואם.')}
           </p>
         </Card>
       ) : null}
-      {children({
-        snapshot: query.data,
-        request,
-        writesEnabled: contract.data?.writes_enabled ?? false,
-      })}
+      {children({ snapshot: query.data, request, writesEnabled })}
       <ChangeDialog change={change} />
     </section>
   );

@@ -53,6 +53,15 @@ export interface ResourceEditorProps {
   filter?: (item: ManagedItem) => boolean;
   /** Rendered under each row — a family's own extra detail. */
   renderDetail?: (item: ManagedItem) => React.ReactNode;
+  /**
+   * Never draw a control, whatever the bridge says about the items.
+   *
+   * For the camera screen. Switching a camera on from a web page is the one
+   * action on this system that reversing does not undo — by the time you could
+   * switch it off again, somebody has been recorded — so that screen refuses by
+   * construction rather than by trusting a flag to stay false.
+   */
+  readOnly?: boolean;
   emptyLabel?: string;
 }
 
@@ -62,6 +71,7 @@ export function ResourceEditor({
   writesEnabled,
   filter,
   renderDetail,
+  readOnly = false,
   emptyLabel = 'אין כאן פריטים לניהול.',
 }: ResourceEditorProps) {
   const groups = snapshot.groups
@@ -83,7 +93,7 @@ export function ResourceEditor({
           key={group.id}
           group={group}
           onChange={onChange}
-          writesEnabled={writesEnabled}
+          writesEnabled={writesEnabled && !readOnly}
           renderDetail={renderDetail}
         />
       ))}

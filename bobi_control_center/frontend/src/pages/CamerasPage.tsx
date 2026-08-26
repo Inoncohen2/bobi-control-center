@@ -6,9 +6,9 @@
  *
  * * A powered-off camera is **not** switched on to find out how it is. Its
  *   status is whatever the bridge reported, and "off" is a status.
- * * A power control appears only if the bridge explicitly marked the camera
- *   controllable and named the operation. A camera is the one device where a
- *   stray control is worse than a missing one.
+ * * **There is no power control here at all.** Not "unless the bridge says so"
+ *   — none. The screen passes `readOnly`, so a `controllable` that turned true
+ *   in a future contract cannot quietly grow a power button here.
  */
 
 import { Card } from '@/components/ui/Card';
@@ -38,6 +38,7 @@ export function CamerasPage() {
           snapshot={snapshot}
           onChange={request}
           writesEnabled={writesEnabled}
+          readOnly
           filter={isCamera}
           renderDetail={(item) => <DeviceDetail item={item} />}
           emptyLabel="בובי לא פרסם מצלמות."
