@@ -432,6 +432,127 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
             },
         ],
     },
+    "helpers": {
+        "available": True,
+        "groups": [
+            {
+                "id": "toggles",
+                "label": "מתגים",
+                "items": [
+                    {
+                        "id": "guest_mode",
+                        "label": "מצב אורחים",
+                        "kind": "toggle",
+                        "value": False,
+                        "controllable": True,
+                        "operations": ["set"],
+                        "helper_kind": "input_boolean",
+                    },
+                    {
+                        "id": "wake_time",
+                        "label": "שעת השכמה",
+                        "kind": "time",
+                        "value": "06:45",
+                        "controllable": True,
+                        "operations": ["set"],
+                        "helper_kind": "input_datetime",
+                    },
+                ],
+            },
+            {
+                "id": "counters",
+                "label": "מונים וטיימרים",
+                "items": [
+                    {
+                        "id": "laundry_timer",
+                        "label": "טיימר כביסה",
+                        "kind": "readonly",
+                        "value": "idle",
+                        "controllable": True,
+                        "operations": ["start", "pause", "cancel"],
+                        "helper_kind": "timer",
+                    },
+                    {
+                        "id": "coffee_counter",
+                        "label": "מונה קפה",
+                        "kind": "number",
+                        "value": 3,
+                        "controllable": True,
+                        "operations": ["increment", "decrement", "reset"],
+                        "helper_kind": "counter",
+                        "constraints": {"min": 0, "max": 99, "step": 1},
+                    },
+                ],
+            },
+        ],
+    },
+    "automations": {
+        "available": True,
+        "items": [
+            {
+                "id": "morning_lights",
+                "label": "אורות בוקר",
+                "kind": "toggle",
+                "value": True,
+                "controllable": True,
+                "operations": ["disable", "trigger", "rename"],
+                "risk": "medium",
+                "mode": "single",
+                "last_triggered": "2026-08-26T06:45:00",
+                "area": "סלון",
+            },
+            {
+                "id": "away_lock",
+                "label": "נעילה ביציאה",
+                "kind": "toggle",
+                "value": False,
+                "controllable": True,
+                "operations": ["enable", "trigger", "rename"],
+                "risk": "medium",
+                "mode": "restart",
+                "last_triggered": None,
+            },
+        ],
+    },
+    "scripts": {
+        "available": True,
+        "items": [
+            {
+                "id": "goodnight",
+                "label": "לילה טוב",
+                "kind": "readonly",
+                "value": "ready",
+                "controllable": True,
+                "operations": ["run"],
+                "risk": "medium",
+                "description": "מכבה אורות ונועל דלתות.",
+                "last_run": "2026-08-25T23:10:00",
+                "fields": [
+                    {
+                        "id": "delay_minutes",
+                        "label": "השהיה",
+                        "kind": "number",
+                        "constraints": {"min": 0, "max": 30, "step": 5, "unit": " דק׳"},
+                    }
+                ],
+            }
+        ],
+    },
+    "scenes": {
+        "available": True,
+        "items": [
+            {
+                "id": "movie_night",
+                "label": "ערב סרט",
+                "kind": "readonly",
+                "value": "ready",
+                "controllable": True,
+                "operations": ["activate"],
+                "area": "סלון",
+                "affects": ["salon", "led_salon"],
+            }
+        ],
+    },
     "system": {
         "available": True,
         "items": [

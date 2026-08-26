@@ -15,6 +15,7 @@ from app.errors import NotFoundError
 from app.models.manage import (
     MANAGED_RESOURCES,
     AuditLog,
+    BridgeContract,
     CommitRequest,
     CommitResponse,
     ManagementStatus,
@@ -23,6 +24,7 @@ from app.models.manage import (
     ResourceSnapshot,
     TaskSnapshot,
 )
+from app.services.bridge_report import build_bridge_contract
 
 router = APIRouter(prefix="/api/bobi/manage", tags=["manage"])
 
@@ -131,6 +133,27 @@ async def commit_change(
     session could spend.
     """
     return await service.commit(_check(resource), request, actor)
+
+
+@router.get(
+    "/bridge-contract",
+    response_model=BridgeContract,
+    summary="מה כל גשר bobi_cc_* צריך לקבל ולהחזיר",
+)
+async def get_bridge_contract(service: ManagementDep) -> BridgeContract:
+    """The specification every `script.bobi_cc_*` must satisfy, from this build.
+
+    Read-only, and it carries no household data at all — service names, field
+    names, validation rules and risk ratings. It exists so whoever writes the
+    Home Assistant side works from what this build actually calls rather than
+    from a description of it, and so `missing` names precisely which scripts are
+    still to be written.
+
+    `implemented` and `missing` are computed against the **live** contract: a
+    family the bridge does not declare, or declares with no operations, shows
+    its commit service as missing.
+    """
+    return await build_bridge_contract(service)
 
 
 @router.get("/audit", response_model=AuditLog, summary="יומן שינויים")

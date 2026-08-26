@@ -50,6 +50,10 @@ RESOURCE_IDS = (
     "rules",
     "calendar",
     "devices",
+    "helpers",
+    "automations",
+    "scripts",
+    "scenes",
     "system",
 )
 
@@ -63,6 +67,17 @@ SHABBAT_OPERATIONS = ("set_timing", "set_membership", "set_temperature")
 RULE_OPERATIONS = ("create", "edit", "enable", "disable", "delete")
 CALENDAR_OPERATIONS = ("create", "edit", "move", "delete")
 DEVICE_OPERATIONS = ("set",)
+#: Home Assistant helpers. `set` covers every kind — the item's `kind` decides
+#: what a value means — and the timer/counter verbs are named separately
+#: because "start a timer" is not a value being set.
+HELPER_OPERATIONS = ("set", "start", "pause", "cancel", "reset", "increment", "decrement")
+#: Home Assistant automations, which are *not* Bobi's smart rules. Renaming is
+#: the only edit exposed: changing triggers or actions from a web page would
+#: mean either arbitrary YAML or a schema this application cannot validate.
+AUTOMATION_OPERATIONS = ("enable", "disable", "trigger", "rename")
+#: Scripts run with the parameters their own schema declares, and nothing else.
+SCRIPT_OPERATIONS = ("run", "rename")
+SCENE_OPERATIONS = ("activate", "rename")
 SYSTEM_OPERATIONS = ("run",)
 
 #: Risk words, weakest first. The UI escalates its confirmation with the rank,
@@ -178,6 +193,57 @@ SPECS: dict[str, ResourceSpec] = {
         operations=DEVICE_OPERATIONS,
         id_field="device_id",
         titles={"set": "שינוי מצב מכשיר"},
+    ),
+    "helpers": ResourceSpec(
+        id="helpers",
+        label="עזרים",
+        snapshot_service="bobi_cc_helpers_snapshot",
+        commit_service="bobi_cc_helper_commit",
+        operations=HELPER_OPERATIONS,
+        id_field="helper_id",
+        titles={
+            "set": "שינוי ערך",
+            "start": "הפעלת טיימר",
+            "pause": "השהיית טיימר",
+            "cancel": "ביטול טיימר",
+            "reset": "איפוס",
+            "increment": "הגדלה",
+            "decrement": "הקטנה",
+        },
+    ),
+    "automations": ResourceSpec(
+        id="automations",
+        label="אוטומציות Home Assistant",
+        snapshot_service="bobi_cc_automations_snapshot",
+        commit_service="bobi_cc_automation_commit",
+        operations=AUTOMATION_OPERATIONS,
+        id_field="automation_id",
+        default_risk="medium",
+        titles={
+            "enable": "הפעלת אוטומציה",
+            "disable": "השבתת אוטומציה",
+            "trigger": "הרצת אוטומציה עכשיו",
+            "rename": "שינוי שם",
+        },
+    ),
+    "scripts": ResourceSpec(
+        id="scripts",
+        label="סקריפטים",
+        snapshot_service="bobi_cc_scripts_snapshot",
+        commit_service="bobi_cc_script_commit",
+        operations=SCRIPT_OPERATIONS,
+        id_field="script_id",
+        default_risk="medium",
+        titles={"run": "הרצת סקריפט", "rename": "שינוי שם"},
+    ),
+    "scenes": ResourceSpec(
+        id="scenes",
+        label="סצנות",
+        snapshot_service="bobi_cc_scenes_snapshot",
+        commit_service="bobi_cc_scene_commit",
+        operations=SCENE_OPERATIONS,
+        id_field="scene_id",
+        titles={"activate": "הפעלת סצנה", "rename": "שינוי שם"},
     ),
     "system": ResourceSpec(
         id="system",

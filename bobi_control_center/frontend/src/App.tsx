@@ -4,17 +4,22 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 
 import { AppLayout } from '@/layouts/AppLayout';
 import { ActivityPage } from '@/pages/ActivityPage';
+import { AutomationsPage } from '@/pages/AutomationsPage';
+import { BridgeContractPage } from '@/pages/BridgeContractPage';
 import { CalendarPage } from '@/pages/CalendarPage';
 import { CamerasPage } from '@/pages/CamerasPage';
 import { CapabilitiesPage } from '@/pages/CapabilitiesPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { DevicesPage } from '@/pages/DevicesPage';
 import { DiagnosticsPage } from '@/pages/DiagnosticsPage';
+import { HelpersPage } from '@/pages/HelpersPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { NotificationsPage } from '@/pages/NotificationsPage';
 import { RulesPage } from '@/pages/RulesPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { ShabbatPage } from '@/pages/ShabbatPage';
+import { ScenesPage } from '@/pages/ScenesPage';
+import { ScriptsPage } from '@/pages/ScriptsPage';
 import { SystemPage } from '@/pages/SystemPage';
 import { TasksPage } from '@/pages/TasksPage';
 import { TestCenterPage } from '@/pages/TestCenterPage';
@@ -38,6 +43,11 @@ export function App() {
         <Route path="calendar" element={<CalendarPage />} />
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="system" element={<SystemPage />} />
+        <Route path="helpers" element={<HelpersPage />} />
+        <Route path="ha-automations" element={<AutomationsPage />} />
+        <Route path="scripts" element={<ScriptsPage />} />
+        <Route path="scenes" element={<ScenesPage />} />
+        <Route path="bridge-contract" element={<BridgeContractPage />} />
         <Route path="activity" element={<ActivityPage />} />
         <Route path="diagnostics" element={<DiagnosticsPage />} />
         <Route path="settings" element={<SettingsPage />} />

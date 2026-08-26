@@ -642,4 +642,8 @@ export type ManagedResource =
   | 'rules'
   | 'calendar'
   | 'devices'
+  | 'helpers'
+  | 'automations'
+  | 'scripts'
+  | 'scenes'
   | 'system';

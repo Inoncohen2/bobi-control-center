@@ -43,6 +43,10 @@ MANAGED_RESOURCES = (
     "rules",
     "calendar",
     "devices",
+    "helpers",
+    "automations",
+    "scripts",
+    "scenes",
     "system",
 )
 
@@ -460,3 +464,54 @@ class ResourceSnapshot(CanonicalModel):
     #: The family's own canonical extras — a Shabbat profile list, a calendar
     #: range, the device classes present. Already normalized and already safe.
     detail: dict[str, Any] = Field(default_factory=dict)
+
+
+# --- the bridge specification -----------------------------------------------
+class BridgeField(CanonicalModel):
+    """One input a bridge service receives, or one output it returns."""
+
+    name: str
+    type: str
+    note: str
+
+
+class BridgeServiceContract(CanonicalModel):
+    """Everything the Home Assistant side needs to implement one bridge."""
+
+    #: `script.` + this is the service to create.
+    name: str
+    #: `read` or `write`.
+    kind: str
+    purpose: str
+    #: The managed family it serves, when it serves one.
+    resource: str | None = None
+    operations: list[str] = Field(default_factory=list)
+    inputs: list[BridgeField] = Field(default_factory=list)
+    #: The response shape, as a documented example.
+    outputs: str = ""
+    validation: list[str] = Field(default_factory=list)
+    verification: str = ""
+    #: The highest risk any of its operations carries.
+    risk: str = "read_only"
+    #: Per-operation risk, so both sides rate the same change the same way.
+    operation_risk: dict[str, str] = Field(default_factory=dict)
+
+
+class BridgeContract(CanonicalModel):
+    """The full specification, and which parts of it are already live."""
+
+    app_version: str
+    #: Services Home Assistant has implemented, per the live contract.
+    implemented: list[str] = Field(default_factory=list)
+    #: Services this build calls but the live contract does not declare.
+    missing: list[str] = Field(default_factory=list)
+    services: list[BridgeServiceContract] = Field(default_factory=list)
+    #: Sent on every commit, whatever the family.
+    common_commit_inputs: list[BridgeField] = Field(default_factory=list)
+    common_commit_outputs: list[BridgeField] = Field(default_factory=list)
+    #: Home Assistant domains this application never calls.
+    never_called_domains: list[str] = Field(default_factory=list)
+    #: Operations it refuses to ask for, however they are advertised.
+    never_requested: list[str] = Field(default_factory=list)
+    #: risk → the least privileged role allowed to run it.
+    risk_to_role: dict[str, str] = Field(default_factory=dict)
