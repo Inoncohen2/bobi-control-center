@@ -1,42 +1,14 @@
-"""The Home Assistant write bridge.
+"""The Home Assistant management bridge.
 
-A closed list of `script.bobi_cc_*` services and nothing else:
+Only declared `script.bobi_cc_*` bridge services are reachable from this module.
+There is no raw Home Assistant service fallback. The management contract is the
+authoritative discovery source; the application validates it against its own
+closed schemas before exposing a resource or operation.
 
-| Service | Kind |
-| --- | --- |
-| `bobi_cc_manage_contract` | read — what may be managed, and whether writes are on |
-| `bobi_cc_task_snapshot` | read — open and completed tasks |
-| `bobi_cc_task_add_commit` | write |
-| `bobi_cc_task_update_commit` | write — edit · complete · reopen · delete |
-| `bobi_cc_feature_commit` | write |
-
-3.0 adds one read and one write service per managed family — settings, users,
-Shabbat, rules, the calendar, devices and the system — named in
-`app.services.resources` and reached only through `_apply_resource`. The list is
-still closed: `ALLOWED_SERVICES` is built from these declarations, so a service
-that is not declared cannot be called even by name.
-
-`todo.add_item`, `todo.update_item`, `todo.remove_item`, every `input_boolean.*`
-and every device domain — `light.*`, `climate.*`, `switch.*`, `vacuum.*`,
-`camera.*`, `calendar.*`, `automation.*` — are **never** called. The adapter's
-allow-list rejects them before a request is built, and a test asserts none of
-them appears anywhere on this path. Bobi's bridge owns those entities; this
-application only asks the bridge, by operation name, to do one of the things it
-has declared.
-
-## The two layers
-
-Home Assistant enforces its own master switch, whitelists, duplicate checks,
-expected-state comparison and read-after-write. This module does not repeat that
-work and, more importantly, does not relax anything because of it: the token,
-expiry, single-use and confirmation checks in `services/manage.py` run whatever
-the bridge would have done.
-
-## The master switch
-
-`writes_enabled` is read here and reported upward. There is no code path that
-sets it, and none may ever be added: enabling writes is a Home Assistant-side
-decision, taken after its own end-to-end testing.
+Home Assistant remains authoritative for the master write switch, validation,
+stale-preview detection and read-after-write verification. The server-side
+preview store in `services/manage.py` adds the five-minute, single-use,
+payload-bound confirmation gate before any commit service can be reached.
 """
 
 from __future__ import annotations
@@ -62,6 +34,7 @@ from app.models.manage import (
 from app.services import normalize
 from app.services.resource_normalize import normalize_resource, unavailable
 from app.services.resources import (
+    RESOURCE_IDS,
     RESOURCE_READ_SERVICES,
     RESOURCE_WRITE_SERVICES,
     SPECS,
@@ -102,7 +75,7 @@ _OPEN = "needs_action"
 
 
 class RealManagementBridge(ManagementBridge):
-    """Talks to the five bridge services, and to nothing else."""
+    """Talk to Bobi's closed management bridge surface, and nothing else."""
 
     def __init__(self, adapter: RealHomeAssistantAdapter) -> None:
         self._adapter = adapter
@@ -112,11 +85,7 @@ class RealManagementBridge(ManagementBridge):
 
     # --- discovery --------------------------------------------------------
     async def status(self) -> ManagementStatus:
-        """`script.bobi_cc_manage_contract`. Read-only.
-
-        A bridge that cannot be reached, or that says it is not available, is
-        reported as unavailable — never assumed present.
-        """
+        """Read and validate `script.bobi_cc_manage_contract`."""
         payload = await self._payload(CONTRACT)
         return _contract(payload)
 
@@ -126,13 +95,10 @@ class RealManagementBridge(ManagementBridge):
         return _snapshot(await self._payload(TASK_SNAPSHOT))
 
     async def resource_snapshot(self, resource: str) -> ResourceSnapshot:
-        """One 3.0 family, read from its own snapshot service.
+        """Read one contract-driven family from its declared Bobi bridge.
 
-        A service Home Assistant has not published yet answers 404, which the
-        adapter raises as `bridge_service_missing`. That is turned into an
-        unavailable snapshot rather than an error page: "this is not in Home
-        Assistant yet" is the true answer, and it is the *only* thing to do
-        about it — there is no second way to fetch this and none may be added.
+        A missing bridge is represented as unavailable. It is never replaced by
+        an entity lookup or a raw Home Assistant service call.
         """
         spec = SPECS.get(resource)
         if spec is None or spec.snapshot_service is None:
@@ -148,13 +114,12 @@ class RealManagementBridge(ManagementBridge):
         return normalize_resource(resource, payload)
 
     async def observe(self, resource_type: str, resource_id: str | None) -> ObservedState | None:
-        """The current state a preview binds to, read fresh from the bridge."""
+        """Read the current state a preview binds to."""
         if resource_type in SPECS and resource_type not in ("tasks", "features"):
             return await self._observe_resource(resource_type, resource_id)
 
         if resource_type == "tasks":
             if resource_id is None:
-                # Adding a task binds to nothing that exists yet.
                 return ObservedState(resource_id=None, label=None, values={})
             snapshot = await self.snapshot()
             task = next((item for item in snapshot.tasks if item.uid == resource_id), None)
@@ -177,8 +142,6 @@ class RealManagementBridge(ManagementBridge):
             target = next(
                 (t for t in (resource.targets if resource else []) if t.id == resource_id), None
             )
-            # The bridge must report the current state: it compares against it
-            # immediately before acting, so an unknown state is not previewable.
             if target is None or target.enabled is None:
                 return None
             return ObservedState(
@@ -192,14 +155,7 @@ class RealManagementBridge(ManagementBridge):
     async def _observe_resource(
         self, resource: str, resource_id: str | None
     ) -> ObservedState | None:
-        """Find the item a preview is about, and keep what the bridge will compare.
-
-        Creating something binds to nothing, so an absent id is an empty
-        observation rather than a failure. Everything else must be found: an
-        item the snapshot does not report is an item whose current value is
-        unknown, and a preview against an unknown value would describe a change
-        that may never have been true.
-        """
+        """Find the item a preview is about and retain its expected state."""
         if resource_id is None:
             return ObservedState(resource_id=None, label=None, values={})
 
@@ -210,9 +166,6 @@ class RealManagementBridge(ManagementBridge):
         if item is None or item.value is None:
             return None
 
-        # `value` under its own name plus the canonical extras the bridge
-        # published for this item — a rule's version, an event's start. Home
-        # Assistant compares whichever of them it cares about.
         values: dict[str, Any] = {"value": item.value}
         for key, value in item.detail.items():
             if isinstance(value, str | int | float | bool):
@@ -231,11 +184,7 @@ class RealManagementBridge(ManagementBridge):
         request_id: str,
         preview_token: str,
     ) -> BridgeOutcome:
-        """One declared operation, mapped onto one declared service."""
-        # Every commit service requires the token. A blank one is a bug on this
-        # side, and Home Assistant would reject the call anyway — so it is
-        # caught here, before a request is built, rather than being sent for the
-        # bridge to refuse.
+        """Map one validated operation onto one declared commit bridge."""
         if not preview_token:
             raise _missing_token(resource_type, operation)
         if resource_type == "tasks":
@@ -262,27 +211,17 @@ class RealManagementBridge(ManagementBridge):
         request_id: str,
         preview_token: str,
     ) -> BridgeOutcome:
-        """One 3.0 family's commit, on the shape Phase 3A established.
-
-        Flat fields, the target under the name its bridge expects, and one
-        `expected_*` per value the preview observed — the same convention as
-        `expected_summary` and `expected_state`, extended rather than replaced,
-        so a bridge author reading one script can write the next.
-        """
+        """Commit one contract-driven family using only its explicit bridge."""
         spec = SPECS[resource]
         if operation not in spec.operations:
             raise _unsupported(resource, operation)
-        if spec.commit_service is None:  # pragma: no cover - every spec has one today
+        if spec.commit_service is None:
             raise _unsupported(resource, operation)
 
         data: dict[str, Any] = {"operation": operation}
         if resource_id is not None:
             data[spec.id_field] = resource_id
-        # What the user asked for, already validated and already stripped of
-        # anything private by the preview store.
         data.update(payload)
-        # What the preview saw. Straight from the observation, never re-read
-        # here — re-reading would defeat the staleness check it exists for.
         for key, value in observed.values.items():
             data[f"expected_{key}"] = value
         data["preview_token"] = preview_token
@@ -306,7 +245,6 @@ class RealManagementBridge(ManagementBridge):
             data = {
                 "user_id": payload.get("user_id"),
                 "summary": payload.get("summary"),
-                # The bridge accepts an empty string for "no date".
                 "due_date": payload.get("due_date") or "",
                 "preview_token": preview_token,
                 "confirmed": True,
@@ -319,8 +257,6 @@ class RealManagementBridge(ManagementBridge):
             "user_id": observed.values.get("user_id") or payload.get("user_id"),
             "uid": resource_id,
             "new_summary": payload.get("new_summary") or "",
-            # Straight from what the preview observed — never from the client,
-            # and never re-read here, or the staleness check would be pointless.
             "expected_summary": observed.values.get("summary") or "",
             "expected_status": observed.values.get("status") or "",
             "preview_token": preview_token,
@@ -352,9 +288,7 @@ class RealManagementBridge(ManagementBridge):
         return _outcome(await self._payload(FEATURE_COMMIT, data))
 
 
-def _unsupported(resource_type: str, operation: str):
-    from app.errors import BobiError
-
+def _unsupported(resource_type: str, operation: str) -> BobiError:
     return BobiError(
         "הפעולה הזו אינה נתמכת על ידי הגשר של בובי",
         code="operation_not_supported",
@@ -363,15 +297,8 @@ def _unsupported(resource_type: str, operation: str):
     )
 
 
-def _missing_token(resource_type: str, operation: str):
-    """No token, no request. The message stays the same as a stale preview's.
-
-    From the screen's point of view the situation is identical — the change was
-    not made and the preview has to be taken again — and there is nothing a
-    household member could do differently if told which of the two it was.
-    """
-    from app.errors import BobiError
-
+def _missing_token(resource_type: str, operation: str) -> BobiError:
+    """No token means no Home Assistant request is built."""
     return BobiError(
         "התצוגה המקדימה כבר אינה בתוקף. בצעו תצוגה מקדימה מחדש.",
         code="preview_token_missing",
@@ -380,9 +307,7 @@ def _missing_token(resource_type: str, operation: str):
     )
 
 
-# --- normalization ----------------------------------------------------------
-# The same rule as everywhere else: this is the only layer that knows the
-# bridge's field names, and it never raises on a missing or odd one.
+# --- contract normalization -------------------------------------------------
 def _bool(value: Any) -> bool | None:
     return normalize._bool(value)
 
@@ -391,82 +316,195 @@ def _text(value: Any) -> str | None:
     return normalize._text(value)
 
 
-def _contract(payload: dict[str, Any]) -> ManagementStatus:
-    """`bobi_cc_manage_contract` → the canonical management status."""
-    available = _bool(payload.get("bridge_available"))
-    writes_enabled = bool(_bool(payload.get("writes_enabled")))
+def _contract_entries(payload: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Validate `resources[]` and return known declarations in wire order.
 
-    resources: list[ManagementResource] = []
+    Contract 3c makes this array authoritative. Unknown resources and malformed
+    entries are ignored rather than guessed. If the key exists but is not a
+    list, the result is deliberately empty: malformed new discovery data must
+    not silently fall back to broader permissions.
 
-    tasks = payload.get("tasks")
-    if isinstance(tasks, dict):
-        supported = bool(_bool(tasks.get("supported")))
-        operations = [
+    Older contracts did not have `resources`; for those only the legacy tasks
+    and features blocks are admitted, preserving 3.0.0 compatibility without
+    manufacturing any of the newer families.
+    """
+    if "resources" not in payload:
+        return [
+            (resource, {})
+            for resource in ("tasks", "features")
+            if isinstance(payload.get(resource), dict)
+        ]
+
+    raw = payload.get("resources")
+    if not isinstance(raw, list):
+        return []
+
+    known = set(RESOURCE_IDS)
+    result: list[tuple[str, dict[str, Any]]] = []
+    seen: set[str] = set()
+    for entry in raw:
+        meta: dict[str, Any]
+        if isinstance(entry, str):
+            resource = _text(entry)
+            meta = {}
+        elif isinstance(entry, dict):
+            resource = _text(normalize._first(entry, "id", "resource"))
+            meta = entry
+        else:
+            continue
+        if resource not in known or resource in seen:
+            continue
+        seen.add(resource)
+        result.append((resource, meta))
+    return result
+
+
+def _merged_meta(payload: dict[str, Any], resource: str, meta: dict[str, Any]) -> dict[str, Any]:
+    """Combine a legacy per-family block with its 3c declaration."""
+    legacy = payload.get(resource)
+    if not isinstance(legacy, dict):
+        legacy = {}
+    return {**legacy, **meta}
+
+
+def _supported(meta: dict[str, Any]) -> bool:
+    """Explicit false denies; omission is allowed only after resources[] declared it."""
+    for key in ("supported", "available"):
+        if key in meta:
+            return _bool(meta.get(key)) is True
+    return True
+
+
+def _operations(
+    meta: dict[str, Any], allowed: tuple[str, ...]
+) -> tuple[list[str], bool]:
+    """Intersect advertised operations with the application's closed schema.
+
+    A missing `operations` field means the 3c resource declaration itself is the
+    family-level capability declaration, so the app's already-audited operation
+    schema applies. An explicit malformed or empty list grants nothing and makes
+    the resource unavailable for management.
+    """
+    if "operations" not in meta:
+        return list(allowed), True
+    raw = meta.get("operations")
+    if not isinstance(raw, list):
+        return [], False
+    operations = [name for name in normalize._str_list(raw) if name in allowed]
+    return operations, bool(operations)
+
+
+def _task_resource(
+    payload: dict[str, Any], meta: dict[str, Any], bridge_available: bool
+) -> ManagementResource:
+    merged = _merged_meta(payload, "tasks", meta)
+    operations, operations_valid = _operations(merged, TASK_OPERATIONS)
+    supported = _supported(merged) and operations_valid
+    return ManagementResource(
+        id="tasks",
+        label=_text(merged.get("label")) or "משימות",
+        available=bridge_available and supported,
+        operations=[
             ManagedOperation(
                 id=name,
                 label=_TASK_OPERATION_LABELS.get(name, name),
                 destructive=name == "delete",
             )
-            for name in normalize._str_list(tasks.get("operations"))
-            # An operation this application does not implement is ignored rather
-            # than offered: the closed set is the contract on both sides.
-            if name in TASK_OPERATIONS
-        ]
-        resources.append(
-            ManagementResource(
-                id="tasks",
-                label="משימות",
-                available=supported and available is not False,
-                operations=operations,
-                targets=[
-                    ManagedTarget(id=user_id, label=name)
-                    for item in normalize._as_items(tasks.get("users"))
-                    if (user_id := _text(item.get("id")))
-                    and (name := _text(item.get("name")) or user_id)
-                ],
-            )
-        )
+            for name in operations
+        ],
+        targets=[
+            ManagedTarget(id=user_id, label=name)
+            for item in normalize._as_items(merged.get("users"))
+            if (user_id := _text(item.get("id")))
+            and (name := _text(item.get("name")) or user_id)
+        ],
+        detail=None if supported else _text(normalize._first(merged, "reason", "detail")),
+    )
 
-    features = payload.get("features")
-    if isinstance(features, dict):
-        supported = bool(_bool(features.get("supported")))
-        targets = [
-            ManagedTarget(
-                id=feature_id,
-                label=_text(item.get("label")) or feature_id,
-                risk=_text(item.get("risk")),
-                # Absent today. Read tolerantly so it works the moment the
-                # bridge starts reporting it — and blocks a preview until then,
-                # rather than guessing.
-                enabled=_bool(normalize._first(item, "enabled", "state", "value")),
-            )
-            for item in normalize._as_items(features.get("items"))
-            if (feature_id := _text(item.get("id")))
-        ]
-        resources.append(
-            ManagementResource(
-                id="features",
-                label="תכונות",
-                available=supported and available is not False,
-                operations=[ManagedOperation(id="set", label="הפעלה או כיבוי")],
-                targets=targets,
-            )
+
+def _feature_resource(
+    payload: dict[str, Any], meta: dict[str, Any], bridge_available: bool
+) -> ManagementResource:
+    merged = _merged_meta(payload, "features", meta)
+    operations, operations_valid = _operations(merged, FEATURE_OPERATIONS)
+    supported = _supported(merged) and operations_valid
+    targets = [
+        ManagedTarget(
+            id=feature_id,
+            label=_text(item.get("label")) or feature_id,
+            risk=_text(item.get("risk")),
+            enabled=_bool(normalize._first(item, "enabled", "state", "value")),
         )
+        for item in normalize._as_items(merged.get("items"))
+        if (feature_id := _text(item.get("id")))
+    ]
+    return ManagementResource(
+        id="features",
+        label=_text(merged.get("label")) or "תכונות",
+        available=bridge_available and supported,
+        operations=[ManagedOperation(id="set", label="הפעלה או כיבוי")]
+        if "set" in operations
+        else [],
+        targets=targets,
+        detail=None if supported else _text(normalize._first(merged, "reason", "detail")),
+    )
+
+
+def _generic_resource(
+    payload: dict[str, Any], resource: str, meta: dict[str, Any], bridge_available: bool
+) -> ManagementResource:
+    spec = SPECS[resource]
+    merged = _merged_meta(payload, resource, meta)
+    operations, operations_valid = _operations(merged, spec.operations)
+    supported = _supported(merged) and operations_valid
+    return ManagementResource(
+        id=resource,
+        label=_text(merged.get("label")) or spec.label,
+        available=bridge_available and supported,
+        operations=[
+            ManagedOperation(
+                id=operation,
+                label=spec.titles.get(operation, operation),
+                destructive=operation in spec.destructive,
+            )
+            for operation in operations
+        ],
+        detail=(
+            _text(normalize._first(merged, "reason", "detail"))
+            if not supported
+            else None
+        ),
+    )
+
+
+def _contract(payload: dict[str, Any]) -> ManagementStatus:
+    """`bobi_cc_manage_contract` → validated canonical management status."""
+    available = _bool(payload.get("bridge_available")) is True
+    writes_enabled = _bool(payload.get("writes_enabled")) is True
+
+    resources: list[ManagementResource] = []
+    for resource, meta in _contract_entries(payload):
+        if resource == "tasks":
+            resources.append(_task_resource(payload, meta, available))
+        elif resource == "features":
+            resources.append(_feature_resource(payload, meta, available))
+        elif resource in SPECS:
+            resources.append(_generic_resource(payload, resource, meta, available))
 
     return ManagementStatus(
-        available=bool(available),
+        available=available,
         reason=None if available else UNAVAILABLE_MESSAGE,
         contract_version=_text(payload.get("contract_version")),
         resources=resources,
         writes_enabled=writes_enabled,
-        # Defaulting to True: a bridge that omits these is not granting
-        # permission to skip a step.
+        # Missing/false flags never relax the application's mandatory flow.
         requires_preview=_bool(payload.get("requires_preview")) is not False,
         requires_confirmation=_bool(payload.get("requires_confirmation")) is not False,
         requires_read_after_write=_bool(payload.get("requires_read_after_write")) is not False,
     )
 
 
+# --- task snapshot / commit outcome normalization ---------------------------
 def _snapshot(payload: dict[str, Any]) -> TaskSnapshot:
     """`bobi_cc_task_snapshot` → one flat list, with the owner on each task."""
     tasks: list[SnapshotTask] = []
@@ -506,11 +544,7 @@ def _snapshot(payload: dict[str, Any]) -> TaskSnapshot:
 
 
 def _outcome(payload: dict[str, Any]) -> BridgeOutcome:
-    """A commit response → the canonical outcome.
-
-    `verified` stays `None` when the bridge did not say, so an unverified write
-    is never reported as a verified one.
-    """
+    """A commit response → the canonical outcome."""
     return BridgeOutcome(
         executed=bool(_bool(payload.get("executed"))),
         verified=_bool(payload.get("verified")),

@@ -1,11 +1,11 @@
 # Home Assistant App manifest for Bobi Control Center.
 #
-# Phase 2 is READ-ONLY: the app calls only Bobi's `script.bobi_cc_*` bridge
-# services, and every one of them is a read or a probe. No write service is
-# ever called.
+# Home Assistant access is server-side only. Management writes can reach only
+# the explicit script.bobi_cc_* bridges and remain gated by the HA master switch
+# plus Preview -> confirmation -> Commit -> HA validation -> verification.
 
 name: Bobi Control Center
-version: "3.0.0"
+version: "3.0.1"
 slug: bobi_control_center
 description: מרכז הניהול של בובי — מכשירים, יכולות, שעון שבת, כללים חכמים ומרכז בדיקות
 url: https://github.com/Inoncohen2/bobi-control-center
@@ -28,7 +28,7 @@ ingress_port: 8099
 panel_title: Bobi
 panel_icon: mdi:robot-outline
 # Restricts the sidebar entry to Home Assistant admins. Set to false to let
-# every household member see it; the app is read-only either way.
+# every household member see it.
 panel_admin: true
 
 init: false

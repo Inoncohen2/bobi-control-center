@@ -1,8 +1,8 @@
 {
   "name": "bobi-control-center",
   "private": true,
-  "version": "3.0.0",
-  "description": "מרכז הניהול של בובי — Home Assistant App, שלב 2 (קריאה בלבד)",
+  "version": "3.0.1",
+  "description": "מרכז הניהול של בובי — Home Assistant App",
   "license": "MIT",
   "scripts": {
     "setup": "npm --prefix bobi_control_center/frontend install && python3 -m venv .venv && .venv/bin/pip install -r bobi_control_center/backend/requirements-dev.txt",
