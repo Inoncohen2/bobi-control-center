@@ -42,6 +42,23 @@ def test_ingress_host_keeps_working_without_second_login(mock_settings: Settings
         assert client.get("/api/bobi/status").status_code == 200
 
 
+def test_cloudflare_headers_stay_external_when_origin_host_is_rewritten(tmp_path) -> None:
+    settings = Settings(
+        adapter="mock",
+        data_dir=tmp_path / "data",
+        external_hostname=HOSTNAME,
+        external_password_hash=hash_external_password(PASSWORD),
+    )
+    headers = {
+        "CF-Connecting-IP": "203.0.113.10",
+        "CF-Ray": "1234567890abcdef-TLV",
+    }
+    with TestClient(create_app(settings), base_url="http://internal-addon:8099") as client:
+        response = client.get("/api/bobi/status", headers=headers)
+        assert response.status_code == 401
+        assert response.json()["code"] == "authentication_required"
+
+
 def test_external_api_fails_closed_but_login_screen_can_load(tmp_path) -> None:
     with external_client(tmp_path) as client:
         protected = client.get("/api/bobi/status")

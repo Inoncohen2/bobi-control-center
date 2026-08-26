@@ -66,10 +66,27 @@ def verify_external_password(password: str, encoded: str) -> bool:
 
 
 def is_external_request(request: Request, settings: Settings) -> bool:
-    """Match only the dedicated hostname routed to Bobi by Cloudflared."""
-    host = request.headers.get("host", "").strip().lower().split(":", 1)[0]
-    return bool(settings.normalized_external_hostname) and hmac.compare_digest(
-        host, settings.normalized_external_hostname
+    """Recognize the dedicated hostname even when cloudflared rewrites Host.
+
+    The add-on has no published port, so an unauthenticated Internet request
+    can reach it only through Cloudflare.  HA Ingress remains authenticated by
+    Home Assistant; if an authenticated HA user supplies Cloudflare-looking
+    headers they merely opt into the stricter second login.
+    """
+    if not settings.normalized_external_hostname:
+        return False
+
+    forwarded_host = request.headers.get("x-forwarded-host", "").split(",", 1)[0]
+    for candidate in (request.headers.get("host", ""), forwarded_host):
+        host = candidate.strip().lower().split(":", 1)[0]
+        if hmac.compare_digest(host, settings.normalized_external_hostname):
+            return True
+
+    # Cloudflare overwrites CF-Connecting-IP and creates CF-Ray at its edge.
+    # Requiring both also avoids classifying ordinary reverse-proxy traffic as
+    # external when the origin Host is the add-on's internal Docker hostname.
+    return bool(
+        request.headers.get("cf-connecting-ip") and request.headers.get("cf-ray")
     )
 
 

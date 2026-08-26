@@ -4,6 +4,13 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.1.1
+
+External authentication now remains fail-closed when Cloudflared rewrites the
+origin `Host` header to the add-on's internal Docker hostname. Bobi recognizes
+the paired headers that Cloudflare creates at its edge, while its unpublished
+container port keeps that trust boundary inside Home Assistant's app network.
+
 ## 3.1.0
 
 Bobi can now run at a dedicated HTTPS hostname through the existing Cloudflare
