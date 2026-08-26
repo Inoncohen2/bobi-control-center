@@ -4,6 +4,25 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.4.1
+
+Commits now carry their target under the name the bridge actually reads.
+
+Reconnecting to the live house and comparing every `script.bobi_cc_*_commit`
+against what this side sends turned the settings bug found in 3.4.0 into a
+pattern: this application names the target field per family — `user_id`,
+`profile_id`, `helper_id`, `automation_id` — and five of the six bridges call
+it `resource_id`. The field each script read arrived undefined, so **users, the
+Shabbat clock, helpers and automations would have refused every write** as
+`invalid_commit_request`. Nothing would have been written, and from this side
+it would have looked exactly like a bridge declining the change.
+
+The target is now sent twice: under the family's own field name and as
+`resource_id`. One value, two names, and a script ignores the one it does not
+use — which is also the only fix that suits a bridge written before this field
+was named and one written after. The published bridge contract says so, so the
+next bridge author reads it rather than discovers it.
+
 ## 3.4.0
 
 The two sides now speak the same language, and the house is controllable from

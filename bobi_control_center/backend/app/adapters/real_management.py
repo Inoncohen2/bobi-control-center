@@ -223,6 +223,19 @@ class RealManagementBridge(ManagementBridge):
         if resource_id is not None:
             data[spec.id_field] = resource_id
         data.update(payload)
+        # …and again under the name every bridge in this house actually reads.
+        #
+        # This side names the target field per family — `user_id`, `profile_id`,
+        # `helper_id` — and five of the six bridges call it `resource_id`, so
+        # the field each one reads arrived undefined and the commit was refused
+        # as `invalid_commit_request`. Nothing was written and nothing said why:
+        # from here it looked exactly like a bridge declining the change.
+        #
+        # Sending both is additive — one value, two names, and a script ignores
+        # the name it does not use. It is also the one fix that covers a bridge
+        # written before this field was named and one written after.
+        if resource_id is not None:
+            data["resource_id"] = resource_id
         for key, value in observed.values.items():
             data[f"expected_{key}"] = value
         data["preview_token"] = preview_token

@@ -233,7 +233,18 @@ def _family_services(resource: str) -> list[BridgeService]:
                     (
                         spec.id_field,
                         "string",
-                        "The canonical id of the target. Absent when creating.",
+                        "The canonical id of the target. Absent when creating. "
+                        "Also sent as `resource_id` with the same value — read "
+                        "whichever you prefer, but read one of them.",
+                    ),
+                    (
+                        "resource_id",
+                        "string",
+                        "The same target id under a family-independent name. It "
+                        "exists because five bridges named this field "
+                        "`resource_id` while this side named it per family, so "
+                        "the field each script read arrived undefined and every "
+                        "commit was refused as `invalid_commit_request`.",
                     ),
                     (
                         "<operation fields>",

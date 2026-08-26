@@ -28,7 +28,7 @@ import pytest
 
 from app.errors import ValidationError
 from app.mock.management import PRIVATE_CANARY, MockManagementBridge
-from app.models.manage import CommitRequest, PreviewRequest
+from app.models.manage import CommitRequest, ObservedState, PreviewRequest
 from app.services.manage import ManagementService
 from app.services.resources import DEVICE_OPERATIONS, SPECS
 from app.services.roles import Actor, Role
@@ -521,3 +521,55 @@ def test_the_published_contract_carries_the_live_vocabulary() -> None:
     # Rated as the most sensitive thing it can turn out to be, so the other
     # side mirrors this judgement rather than inventing a milder one.
     assert users.operation_risk["set"] == "high"
+
+
+# --- the name the target arrives under ---------------------------------------
+@pytest.mark.parametrize(
+    ("resource", "operation", "item", "wanted"),
+    [
+        ("users", "set", "user_2", False),
+        ("shabbat", "set", "pre_shabbat_offset_minutes", 45),
+        ("devices", "set", "kitchen", True),
+        ("settings", "set", "morning_enabled", False),
+    ],
+)
+async def test_the_target_is_sent_under_both_names(resource, operation, item, wanted) -> None:
+    """Every commit carries its target twice: once under the family's own field
+    name and once as `resource_id`.
+
+    This side names the field per family — `user_id`, `profile_id`, `helper_id`
+    — and five of the six live bridges read `resource_id`. The field each one
+    reads arrived undefined, so the commit was refused as
+    `invalid_commit_request`: nothing written, and nothing to distinguish it
+    from a bridge legitimately declining the change.
+    """
+    from app.adapters.real_management import RealManagementBridge
+    from app.services.resources import SPECS
+
+    sent: dict[str, object] = {}
+
+    class Recorder(RealManagementBridge):
+        async def _payload(self, service, data=None):  # type: ignore[override]
+            sent.update(data or {})
+            return {"executed": True, "verified": True, "reason": "ok"}
+
+    holder = bridge()
+    svc = ManagementService(holder, default_actor=OWNER)
+    response = await preview(
+        svc, resource, operation, resource_id=item, payload={"value": wanted}
+    )
+    assert response.valid is True, codes(response)
+
+    recorder = Recorder.__new__(Recorder)
+    await recorder._apply_resource(
+        resource,
+        operation,
+        item,
+        {"value": wanted},
+        ObservedState(resource_id=item, label=item, values={"value": wanted}),
+        "req_1",
+        "pt_test_token_value",
+    )
+
+    assert sent["resource_id"] == item
+    assert sent[SPECS[resource].id_field] == item
