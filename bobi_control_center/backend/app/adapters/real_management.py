@@ -156,12 +156,23 @@ class RealManagementBridge(ManagementBridge):
         payload: dict[str, Any],
         observed: ObservedState,
         request_id: str,
+        preview_token: str,
     ) -> BridgeOutcome:
         """One declared operation, mapped onto one declared service."""
+        # Every commit service requires the token. A blank one is a bug on this
+        # side, and Home Assistant would reject the call anyway — so it is
+        # caught here, before a request is built, rather than being sent for the
+        # bridge to refuse.
+        if not preview_token:
+            raise _missing_token(resource_type, operation)
         if resource_type == "tasks":
-            return await self._apply_task(operation, resource_id, payload, observed, request_id)
+            return await self._apply_task(
+                operation, resource_id, payload, observed, request_id, preview_token
+            )
         if resource_type == "features":
-            return await self._apply_feature(operation, resource_id, payload, observed, request_id)
+            return await self._apply_feature(
+                operation, resource_id, payload, observed, request_id, preview_token
+            )
         raise _unsupported(resource_type, operation)
 
     async def _apply_task(
@@ -171,6 +182,7 @@ class RealManagementBridge(ManagementBridge):
         payload: dict[str, Any],
         observed: ObservedState,
         request_id: str,
+        preview_token: str,
     ) -> BridgeOutcome:
         if operation not in TASK_OPERATIONS:
             raise _unsupported("tasks", operation)
@@ -181,6 +193,7 @@ class RealManagementBridge(ManagementBridge):
                 "summary": payload.get("summary"),
                 # The bridge accepts an empty string for "no date".
                 "due_date": payload.get("due_date") or "",
+                "preview_token": preview_token,
                 "confirmed": True,
                 "request_id": request_id,
             }
@@ -195,6 +208,7 @@ class RealManagementBridge(ManagementBridge):
             # and never re-read here, or the staleness check would be pointless.
             "expected_summary": observed.values.get("summary") or "",
             "expected_status": observed.values.get("status") or "",
+            "preview_token": preview_token,
             "confirmed": True,
             "request_id": request_id,
         }
@@ -207,6 +221,7 @@ class RealManagementBridge(ManagementBridge):
         payload: dict[str, Any],
         observed: ObservedState,
         request_id: str,
+        preview_token: str,
     ) -> BridgeOutcome:
         if operation not in FEATURE_OPERATIONS:
             raise _unsupported("features", operation)
@@ -215,6 +230,7 @@ class RealManagementBridge(ManagementBridge):
             "feature_id": resource_id,
             "enabled": bool(payload.get("enabled")),
             "expected_state": observed.values.get("state"),
+            "preview_token": preview_token,
             "confirmed": True,
             "request_id": request_id,
         }
@@ -228,6 +244,23 @@ def _unsupported(resource_type: str, operation: str):
         "הפעולה הזו אינה נתמכת על ידי הגשר של בובי",
         code="operation_not_supported",
         status_code=422,
+        details={"resource": resource_type, "operation": operation},
+    )
+
+
+def _missing_token(resource_type: str, operation: str):
+    """No token, no request. The message stays the same as a stale preview's.
+
+    From the screen's point of view the situation is identical — the change was
+    not made and the preview has to be taken again — and there is nothing a
+    household member could do differently if told which of the two it was.
+    """
+    from app.errors import BobiError
+
+    return BobiError(
+        "התצוגה המקדימה כבר אינה בתוקף. בצעו תצוגה מקדימה מחדש.",
+        code="preview_token_missing",
+        status_code=409,
         details={"resource": resource_type, "operation": operation},
     )
 

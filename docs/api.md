@@ -58,7 +58,7 @@ Stack traces never leave the process.
 ### `GET /health`
 
 ```json
-{ "ok": true, "app": "bobi-control-center", "version": "2.2.0",
+{ "ok": true, "app": "bobi-control-center", "version": "2.2.1",
   "adapter": "home_assistant", "writes_enabled": false }
 ```
 
@@ -68,7 +68,7 @@ Whether the app is showing real or demo data. Contains no secret.
 
 ```json
 { "adapter": "home_assistant", "connected": true, "writes_enabled": false,
-  "phase": 2, "app_version": "2.2.0", "detail": "מחובר לגשר של בובי" }
+  "phase": 2, "app_version": "2.2.1", "detail": "מחובר לגשר של בובי" }
 ```
 
 ---
@@ -400,8 +400,19 @@ edit → preview → explicit confirmation → commit → read-after-write → r
 | Token bound to operation, target, values **and observed state** | Operation and target whitelists |
 | Commit carries no payload — only the stored one is sent | `expected_summary` / `expected_status` / `expected_state` |
 | Explicit confirmation; a typed word when destructive | Duplicate protection, read-after-write |
+| `preview_token` sent on every commit | Refuses a commit that carries none |
 
 Both must approve. Neither is relaxed because the other exists.
+
+### `preview_token`
+
+Minted when the preview is taken and stored beside it. Every write service
+carries it, and Home Assistant answers `invalid_commit_request` without one.
+
+It is **not** the `preview_id`. The id identifies the preview to the browser;
+the token proves to Home Assistant that a commit came through this flow, so no
+endpoint returns it and it leaves the process only on the commit call. With
+`debug_http` on, the log records its length rather than its value.
 
 ### The bridge services
 

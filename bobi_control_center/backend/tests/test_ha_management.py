@@ -10,6 +10,7 @@ The payloads below are the shapes from that contract, not invented ones.
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 
 import httpx
 import pytest
@@ -21,9 +22,14 @@ from app.adapters.real_management import (
     TASK_SNAPSHOT,
     TASK_UPDATE_COMMIT,
 )
-from app.models.manage import ObservedState
-from app.services.manage import ManagementService
+from app.models.manage import CommitRequest, ObservedState, PreviewRequest
+from app.services import manage
+from app.services.manage import ManagementService, PreviewExpiredError
 from tests.conftest import json_response
+
+#: Stands in for the token the preview store mints. Its value is opaque to the
+#: bridge; what matters is that this exact string reaches Home Assistant.
+PREVIEW_TOKEN = "pt_ThIsIsTheOpaquePreviewToken_0123456789"
 
 CONTRACT_PAYLOAD = {
     "api_version": "1",
@@ -48,6 +54,22 @@ CONTRACT_PAYLOAD = {
         ],
     },
 }
+
+WRITES_ON = {**CONTRACT_PAYLOAD, "writes_enabled": True}
+#: The contract now reports each feature's current state, so a feature is
+#: previewable. Read from here — never from a raw `input_boolean`.
+WRITES_ON_WITH_FEATURE_STATE = {
+    **WRITES_ON,
+    "features": {
+        **CONTRACT_PAYLOAD["features"],
+        "items": [
+            {**item, "enabled": True}
+            for item in CONTRACT_PAYLOAD["features"]["items"]
+        ],
+    },
+}
+COMMITTED = {"executed": True, "verified": True, "reason": "ok"}
+
 
 SNAPSHOT_PAYLOAD = {
     "api_version": "1",
@@ -117,8 +139,47 @@ async def test_the_contract_is_read_and_never_assumed(bridge_client, recorded_re
         "travel_alerts_default",
     ]
     assert features.targets[0].label == "סיכום בוקר אוטומטי"
-    # No state in the contract today, so it stays unknown rather than assumed.
+    # This older contract carried no state, and an absent one stays unknown
+    # rather than being assumed. See the test below for the current shape.
     assert features.targets[0].enabled is None
+
+
+async def test_the_contract_is_the_only_source_of_a_feature_state(
+    bridge_client, recorded_requests
+) -> None:
+    """The bridge now reports `enabled` per feature, and it is authoritative.
+
+    Nothing here reads an `input_boolean`, or any entity, to work out whether a
+    feature is on: the contract says so, or the feature is not operable. Asking
+    Home Assistant directly would be a second answer to a question that already
+    has one, and the two could disagree.
+    """
+    adapter, bridge = bridge_client({CONTRACT: WRITES_ON_WITH_FEATURE_STATE})
+    status = await bridge.status()
+    await adapter.aclose()
+
+    features = next(r for r in status.resources if r.id == "features")
+    assert [t.enabled for t in features.targets] == [True, True, True, True]
+    assert features.targets[0].risk == "low"
+    for request in recorded_requests:
+        assert "/input_boolean/" not in request.url.path
+        assert "/states/" not in request.url.path
+
+
+async def test_a_feature_the_contract_says_nothing_about_is_not_previewable(
+    bridge_client,
+) -> None:
+    """Shown, but not operable: `expected_state` must be observed, not guessed."""
+    adapter, bridge = bridge_client({CONTRACT: WRITES_ON})
+    management = ManagementService(bridge)
+    preview = await management.preview(
+        "features",
+        PreviewRequest(operation="set", resource_id="morning_auto", payload={"enabled": False}),
+    )
+    await adapter.aclose()
+
+    assert preview.valid is False
+    assert [e.code for e in preview.errors] == ["state_unavailable"]
 
 
 async def test_a_bridge_that_says_it_is_unavailable_is_believed(bridge_client) -> None:
@@ -182,6 +243,7 @@ async def test_adding_a_task_calls_the_add_service_with_the_contract_fields(
         payload={"user_id": "user_1", "summary": "לקנות חלב", "due_date": "2026-09-01"},
         observed=ObservedState(values={}),
         request_id="req_x",
+        preview_token=PREVIEW_TOKEN,
     )
     await adapter.aclose()
 
@@ -190,6 +252,7 @@ async def test_adding_a_task_calls_the_add_service_with_the_contract_fields(
         "user_id": "user_1",
         "summary": "לקנות חלב",
         "due_date": "2026-09-01",
+        "preview_token": PREVIEW_TOKEN,
         "confirmed": True,
         "request_id": "req_x",
     }
@@ -209,6 +272,7 @@ async def test_a_missing_due_date_is_sent_as_an_empty_string(
         payload={"user_id": "user_1", "summary": "לקנות חלב"},
         observed=ObservedState(values={}),
         request_id="req_x",
+        preview_token=PREVIEW_TOKEN,
     )
     await adapter.aclose()
 
@@ -237,6 +301,7 @@ async def test_updating_sends_the_observed_state_as_expected(
             },
         ),
         request_id="req_y",
+        preview_token=PREVIEW_TOKEN,
     )
     await adapter.aclose()
 
@@ -246,6 +311,7 @@ async def test_updating_sends_the_observed_state_as_expected(
     assert body["user_id"] == "user_1"
     assert body["expected_summary"] == "לקבוע תור לרופא"
     assert body["expected_status"] == "needs_action"
+    assert body["preview_token"] == PREVIEW_TOKEN
     assert body["confirmed"] is True
     assert body["request_id"] == "req_y"
     assert set(body) == {
@@ -255,6 +321,7 @@ async def test_updating_sends_the_observed_state_as_expected(
         "new_summary",
         "expected_summary",
         "expected_status",
+        "preview_token",
         "confirmed",
         "request_id",
     }
@@ -271,6 +338,7 @@ async def test_a_stale_preview_is_reported_not_retried(bridge_client) -> None:
         payload={},
         observed=ObservedState(values={"summary": "x", "status": "needs_action"}),
         request_id="req_z",
+        preview_token=PREVIEW_TOKEN,
     )
     await adapter.aclose()
 
@@ -292,6 +360,7 @@ async def test_a_feature_commit_sends_the_expected_state(
         payload={"enabled": False},
         observed=ObservedState(values={"state": "on", "enabled": True}),
         request_id="req_f",
+        preview_token=PREVIEW_TOKEN,
     )
     await adapter.aclose()
 
@@ -300,6 +369,7 @@ async def test_a_feature_commit_sends_the_expected_state(
         "feature_id": "morning_auto",
         "enabled": False,
         "expected_state": "on",
+        "preview_token": PREVIEW_TOKEN,
         "confirmed": True,
         "request_id": "req_f",
     }
@@ -323,6 +393,7 @@ async def test_already_in_state_comes_through_untouched(bridge_client) -> None:
         payload={"enabled": True},
         observed=ObservedState(values={"state": "on"}),
         request_id="req_f",
+        preview_token=PREVIEW_TOKEN,
     )
     await adapter.aclose()
 
@@ -366,6 +437,7 @@ async def test_an_undeclared_operation_raises_before_any_request(
             payload={},
             observed=ObservedState(values={}),
             request_id="req_q",
+            preview_token=PREVIEW_TOKEN,
         )
     await adapter.aclose()
 
@@ -384,3 +456,206 @@ async def test_the_service_reports_the_master_switch_it_read(bridge_client) -> N
     assert status.requires_preview is True
     assert status.requires_confirmation is True
     assert status.requires_read_after_write is True
+
+
+# --- the preview token, over the wire ---------------------------------------
+# The tests above hand `apply()` a token directly, so they can only prove the
+# bridge forwards one it is given. These drive the whole flow — preview, then
+# commit — and read the body that actually left for Home Assistant. That is the
+# gap 2.2.0 shipped through: the flow was right, the bridge was right, and no
+# token was passed between them, so every live commit came back
+# `invalid_commit_request`.
+async def committed_body(bridge_client, recorded_requests, responses, resource, request_, service):
+    """Preview then commit through the service; return what reached HA."""
+    adapter, bridge = bridge_client(responses)
+    management = ManagementService(bridge)
+    preview = await management.preview(resource, request_)
+    assert preview.valid, preview.errors
+    response = await management.commit(
+        resource, CommitRequest(preview_id=preview.preview_id, confirmed=True)
+    )
+    await adapter.aclose()
+    assert response.result.status == "committed"
+    return sent(recorded_requests, service)
+
+
+async def test_a_task_add_commit_reaches_home_assistant_with_its_token(
+    bridge_client, recorded_requests
+) -> None:
+    body = await committed_body(
+        bridge_client,
+        recorded_requests,
+        {CONTRACT: WRITES_ON, TASK_ADD_COMMIT: {**COMMITTED, "uid": "u-9"}},
+        "tasks",
+        PreviewRequest(
+            operation="add",
+            payload={"user_id": "user_1", "summary": "בדיקת Bobi CC E2E", "due_date": ""},
+        ),
+        TASK_ADD_COMMIT,
+    )
+
+    assert "preview_token" in body
+    assert isinstance(body["preview_token"], str)
+    assert body["preview_token"] != ""
+    # The shape Home Assistant's script reads, in full.
+    assert set(body) == {
+        "user_id",
+        "summary",
+        "due_date",
+        "preview_token",
+        "confirmed",
+        "request_id",
+    }
+
+
+async def test_a_task_update_commit_reaches_home_assistant_with_its_token(
+    bridge_client, recorded_requests
+) -> None:
+    body = await committed_body(
+        bridge_client,
+        recorded_requests,
+        {
+            CONTRACT: WRITES_ON,
+            TASK_SNAPSHOT: SNAPSHOT_PAYLOAD,
+            TASK_UPDATE_COMMIT: {**COMMITTED, "uid": "u-1"},
+        },
+        "tasks",
+        PreviewRequest(operation="complete", resource_id="u-1"),
+        TASK_UPDATE_COMMIT,
+    )
+
+    assert body["preview_token"]
+    # The token travels with the staleness evidence, not instead of it.
+    assert body["expected_summary"] == "לקבוע תור לרופא"
+    assert body["expected_status"] == "needs_action"
+
+
+async def test_a_feature_commit_reaches_home_assistant_with_its_token(
+    bridge_client, recorded_requests
+) -> None:
+    body = await committed_body(
+        bridge_client,
+        recorded_requests,
+        {
+            CONTRACT: WRITES_ON_WITH_FEATURE_STATE,
+            FEATURE_COMMIT: {**COMMITTED, "feature_id": "morning_auto"},
+        },
+        "features",
+        PreviewRequest(operation="set", resource_id="morning_auto", payload={"enabled": False}),
+        FEATURE_COMMIT,
+    )
+
+    assert body["preview_token"]
+    assert body["expected_state"] == "on"
+    assert body["enabled"] is False
+
+
+async def test_the_token_sent_is_the_one_the_preview_minted(
+    bridge_client, recorded_requests
+) -> None:
+    """Not a fresh value made up at commit time — that would prove nothing."""
+    adapter, bridge = bridge_client(
+        {CONTRACT: WRITES_ON, TASK_ADD_COMMIT: {**COMMITTED, "uid": "u-9"}}
+    )
+    management = ManagementService(bridge)
+    preview = await management.preview(
+        "tasks",
+        PreviewRequest(operation="add", payload={"user_id": "user_1", "summary": "לקנות חלב"}),
+    )
+    minted = management._previews[preview.preview_id].token
+    await management.commit(
+        "tasks", CommitRequest(preview_id=preview.preview_id, confirmed=True)
+    )
+    await adapter.aclose()
+
+    assert sent(recorded_requests, TASK_ADD_COMMIT)["preview_token"] == minted
+    # And it is not the id the browser was given.
+    assert minted != preview.preview_id
+
+
+async def test_a_stale_or_replayed_preview_never_becomes_a_request(
+    bridge_client, recorded_requests
+) -> None:
+    """Expired, consumed, or pointed at a different target: no HTTP call."""
+    adapter, bridge = bridge_client(
+        {CONTRACT: WRITES_ON, TASK_ADD_COMMIT: {**COMMITTED, "uid": "u-9"}}
+    )
+    management = ManagementService(bridge)
+
+    async def take_preview():
+        return await management.preview(
+            "tasks",
+            PreviewRequest(operation="add", payload={"user_id": "user_1", "summary": "לקנות חלב"}),
+        )
+
+    expired = await take_preview()
+    management._previews[expired.preview_id].expires_at = manage._now() - timedelta(seconds=1)
+
+    replayed = await take_preview()
+    await management.commit(
+        "tasks", CommitRequest(preview_id=replayed.preview_id, confirmed=True)
+    )
+    commits_after_the_legitimate_one = 1
+
+    altered = await take_preview()
+
+    for request_ in (
+        CommitRequest(preview_id=expired.preview_id, confirmed=True),
+        CommitRequest(preview_id=replayed.preview_id, confirmed=True),
+        CommitRequest(preview_id="pv_invented", confirmed=True),
+        CommitRequest(preview_id=altered.preview_id, confirmed=True, operation="delete"),
+    ):
+        with pytest.raises(PreviewExpiredError):
+            await management.commit("tasks", request_)
+    await adapter.aclose()
+
+    commits = [r for r in recorded_requests if r.url.path.endswith(f"/{TASK_ADD_COMMIT}")]
+    assert len(commits) == commits_after_the_legitimate_one
+
+
+async def test_a_bridge_called_without_a_token_refuses_before_the_request(
+    bridge_client, recorded_requests
+) -> None:
+    """Defence in depth: the adapter will not build a tokenless commit at all.
+
+    Home Assistant would reject it anyway — that is exactly what happened in
+    2.2.0 — but a refusal that never leaves the process is the honest place to
+    stop, and it keeps the failure attributable to this side.
+    """
+    from app.errors import BobiError
+
+    adapter, bridge = bridge_client({TASK_ADD_COMMIT: COMMITTED})
+    with pytest.raises(BobiError) as raised:
+        await bridge.apply(
+            resource_type="tasks",
+            operation="add",
+            resource_id=None,
+            payload={"user_id": "user_1", "summary": "לקנות חלב"},
+            observed=ObservedState(values={}),
+            request_id="req_x",
+            preview_token="",
+        )
+    await adapter.aclose()
+
+    assert raised.value.code == "preview_token_missing"
+    assert recorded_requests == []
+
+
+async def test_the_token_is_not_written_to_the_debug_log(bridge_client, recorded_requests) -> None:
+    """`debug_http` shows what was sent; a five-minute secret outlives the log."""
+    from app.adapters.real import _loggable
+
+    body = await committed_body(
+        bridge_client,
+        recorded_requests,
+        {CONTRACT: WRITES_ON, TASK_ADD_COMMIT: {**COMMITTED, "uid": "u-9"}},
+        "tasks",
+        PreviewRequest(operation="add", payload={"user_id": "user_1", "summary": "לקנות חלב"}),
+        TASK_ADD_COMMIT,
+    )
+    logged = _loggable(body)
+
+    assert body["preview_token"] not in str(logged)
+    # Still enough to answer the question the flag is turned on to answer.
+    assert "chars" in logged["preview_token"]
+    assert logged["summary"] == "לקנות חלב"

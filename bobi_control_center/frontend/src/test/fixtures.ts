@@ -25,7 +25,7 @@ export function makeConnection(overrides: Partial<ConnectionInfo> = {}): Connect
     connected: true,
     writes_enabled: false,
     phase: 2,
-    app_version: '2.2.0',
+    app_version: '2.2.1',
     detail: 'מחובר לגשר של בובי',
     ...overrides,
   };

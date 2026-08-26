@@ -163,6 +163,7 @@ class MockManagementBridge(ManagementBridge):
         payload: dict[str, Any],
         observed: ObservedState,
         request_id: str,
+        preview_token: str,
     ) -> BridgeOutcome:
         self.applied.append(
             {
@@ -172,8 +173,14 @@ class MockManagementBridge(ManagementBridge):
                 "payload": payload,
                 "observed": observed.values,
                 "request_id": request_id,
+                "preview_token": preview_token,
             }
         )
+        # What the live bridge does with a commit carrying no token, and the
+        # reason it is mimicked here: a tokenless commit reached a real Home
+        # Assistant once, because this double did not care about the field.
+        if not preview_token:
+            return BridgeOutcome(executed=False, verified=False, reason="invalid_commit_request")
         # The bridge's own master switch, checked again on its side.
         if not self.writes_enabled:
             return BridgeOutcome(executed=False, verified=False, reason="writes_disabled")

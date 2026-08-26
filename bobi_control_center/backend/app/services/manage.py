@@ -153,6 +153,13 @@ class _StoredPreview:
     when the preview was taken**. The client gets an opaque id and nothing else,
     so it cannot alter what it is confirming — there is no payload on the commit
     request for it to alter.
+
+    `token` is a *second* secret, minted at the same moment and never leaving
+    this process except on the commit call to Home Assistant, which refuses a
+    commit that does not carry one. It is deliberately not the `preview_id`:
+    the id is handed to the browser, and a value the browser has seen is one
+    that could be replayed straight at `script.bobi_cc_*` from Developer Tools.
+    The token is the half that proves a commit came through this preview flow.
     """
 
     __slots__ = (
@@ -164,6 +171,7 @@ class _StoredPreview:
         "resource_id",
         "resource_type",
         "response",
+        "token",
     )
 
     def __init__(
@@ -173,6 +181,7 @@ class _StoredPreview:
         payload: dict[str, Any],
         observed: ObservedState,
         expires_at: datetime,
+        token: str,
     ) -> None:
         self.response = response
         self.resource_type = resource_type
@@ -181,6 +190,7 @@ class _StoredPreview:
         self.payload = payload
         self.observed = observed
         self.expires_at = expires_at
+        self.token = token
         self.consumed = False
 
 
@@ -311,6 +321,10 @@ class ManagementService:
 
         expires_at = _now() + PREVIEW_TTL
         preview_id = f"pv_{secrets.token_urlsafe(24)}"
+        # Minted here, with the preview, and not at commit time: a token created
+        # when the commit arrives would prove nothing about a preview having
+        # happened, which is the one thing Home Assistant is asking it to prove.
+        preview_token = f"pt_{secrets.token_urlsafe(32)}"
         response = response.model_copy(
             update={
                 "preview_id": preview_id,
@@ -322,7 +336,7 @@ class ManagementService:
 
         if response.valid:
             self._previews[preview_id] = _StoredPreview(
-                response, resource_type, payload, observed, expires_at
+                response, resource_type, payload, observed, expires_at, preview_token
             )
 
         self._record(
@@ -376,6 +390,10 @@ class ManagementService:
                 payload=stored.payload,
                 observed=stored.observed,
                 request_id=request_id,
+                # The token this very preview was issued, never one made up
+                # here — Home Assistant reads it as proof that a preview was
+                # taken and confirmed before anything was asked of it.
+                preview_token=stored.token,
             )
         except BobiError as exc:
             return self._failed(request, resource_type, preview, stored, exc.message, exc.code)

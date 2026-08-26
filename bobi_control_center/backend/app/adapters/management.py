@@ -68,8 +68,16 @@ class ManagementBridge(ABC):
         payload: dict[str, Any],
         observed: ObservedState,
         request_id: str,
+        preview_token: str,
     ) -> BridgeOutcome:
         """Perform one declared operation and report what happened.
+
+        `preview_token` is the opaque server-side token minted when the preview
+        was taken, held only in the preview store and never sent to a client.
+        Home Assistant refuses a commit that does not carry one. It is a
+        required argument rather than an optional one precisely so a bridge
+        cannot be called without it: the shape of the call is what enforces
+        "no commit without a preview", not a reviewer's memory.
 
         The bridge does its own read-after-write, so the outcome's `verified` is
         its answer rather than a guess made here. It must never fall back to a

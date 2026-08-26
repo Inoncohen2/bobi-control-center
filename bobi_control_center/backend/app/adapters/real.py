@@ -138,7 +138,7 @@ class RealHomeAssistantAdapter(HomeAssistantAdapter):
         params = {"return_response": ""} if return_response else None
 
         if self._debug_http:
-            logger.debug("→ %s.%s data=%s", domain, service, data)
+            logger.debug("→ %s.%s data=%s", domain, service, _loggable(data))
 
         try:
             response = await self._get_client().post(
@@ -299,6 +299,22 @@ class RealHomeAssistantAdapter(HomeAssistantAdapter):
     async def probe(self, text: str) -> BridgeProbe:
         payload = await self._payload(PROBE, {"text": text})
         return normalize.normalize_probe(payload, text)
+
+
+def _loggable(data: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A copy of an outgoing body with secrets replaced by their length.
+
+    `debug_http` exists to show what was sent, and a commit body now carries the
+    preview token. A token in a log file outlives the five minutes it is valid
+    for, so the log gets enough to answer "was it there, was it empty" — which
+    is the question this flag is turned on to answer — and nothing more.
+    """
+    if not data:
+        return data
+    return {
+        key: (f"<{len(str(value))} chars>" if "token" in key.lower() else value)
+        for key, value in data.items()
+    }
 
 
 def extract_service_response(payload: Any) -> Any:

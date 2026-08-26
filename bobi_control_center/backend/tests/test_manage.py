@@ -289,6 +289,98 @@ async def test_only_the_stored_payload_reaches_home_assistant() -> None:
     assert sent == {"summary": "לקנות חלב", "user_id": "user_1", "due_date": "2026-09-01"}
 
 
+# --- the preview token ------------------------------------------------------
+# Home Assistant refuses a commit that does not carry the token its preview was
+# issued. 2.2.0 sent none at all: the flow was correct on this side and every
+# commit was rejected on the other, which is the failure these tests exist to
+# make impossible to reintroduce.
+async def test_a_commit_carries_the_token_of_its_own_preview() -> None:
+    holder = bridge(writes_enabled=True)
+    svc = ManagementService(holder)
+    preview = await preview_add(svc)
+
+    await commit(svc, preview)
+
+    sent = holder.applied[0]["preview_token"]
+    assert sent, "no preview token reached the bridge"
+    assert sent == svc._previews[preview.preview_id].token
+
+
+@pytest.mark.parametrize(
+    ("resource", "request_"),
+    [
+        ("tasks", PreviewRequest(operation="add", payload={"summary": "x", "user_id": "user_1"})),
+        ("tasks", PreviewRequest(operation="complete", resource_id="uid_1")),
+        ("features", PreviewRequest(operation="set", resource_id="morning_auto",
+                                    payload={"enabled": True})),
+    ],
+)
+async def test_every_write_path_carries_a_token(resource, request_) -> None:
+    """Not just the one that was tested by hand — all three commit services."""
+    holder = bridge(writes_enabled=True)
+    svc = ManagementService(holder)
+    preview = await svc.preview(resource, request_)
+
+    await svc.commit(resource, CommitRequest(preview_id=preview.preview_id, confirmed=True))
+
+    assert holder.applied[0]["preview_token"]
+
+
+async def test_each_preview_gets_its_own_token() -> None:
+    svc = service(writes_enabled=True)
+    first = await preview_add(svc, summary="לקנות חלב")
+    second = await preview_add(svc, summary="לקנות לחם")
+
+    tokens = {svc._previews[p.preview_id].token for p in (first, second)}
+    assert len(tokens) == 2
+
+
+async def test_the_token_is_not_the_preview_id_and_never_leaves_the_server() -> None:
+    """The browser holds the id; only Home Assistant is told the token.
+
+    Keeping them distinct is what stops someone who watched the network tab
+    from replaying a commit straight at `script.bobi_cc_*`.
+    """
+    svc = service(writes_enabled=True)
+    preview = await preview_add(svc)
+    token = svc._previews[preview.preview_id].token
+
+    assert token.startswith("pt_")
+    assert token != preview.preview_id
+    assert token not in preview.model_dump_json()
+
+
+async def test_a_tokenless_commit_is_what_home_assistant_refuses() -> None:
+    """The double now behaves like the live bridge, so the bug is reproducible.
+
+    Without this the mock would happily accept a commit carrying nothing, and a
+    regression would once again pass every test and fail on a real install.
+    """
+    holder = bridge(writes_enabled=True)
+    svc = ManagementService(holder)
+    preview = await preview_add(svc)
+    svc._previews[preview.preview_id].token = ""
+
+    response = await commit(svc, preview)
+
+    assert response.result.status == "failed"
+    assert response.result.reason == "invalid_commit_request"
+    assert holder.tasks.keys() == {"uid_1", "uid_2"}
+
+
+async def test_a_replayed_commit_never_reaches_the_bridge_a_second_time() -> None:
+    """One token, one call — the retry is stopped here, not by Home Assistant."""
+    holder = bridge(writes_enabled=True)
+    svc = ManagementService(holder)
+    preview = await preview_add(svc)
+
+    await commit(svc, preview)
+    with pytest.raises(PreviewExpiredError):
+        await commit(svc, preview)
+
+    assert len(holder.applied) == 1
+
+
 # --- confirmation -----------------------------------------------------------
 async def test_commit_requires_an_explicit_confirmation() -> None:
     svc = service(writes_enabled=True)

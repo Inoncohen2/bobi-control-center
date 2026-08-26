@@ -4,6 +4,41 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 2.2.1
+
+Commits now carry their preview token, which is what Home Assistant was asking
+for all along.
+
+2.2.0 was correct on both sides and wired wrongly between them. The preview
+store held everything a commit needed, the bridge built a faithful service call,
+and nothing passed the token from one to the other — `apply()` had no parameter
+for it. Live testing with the master switch briefly on showed the script
+receiving `user_id`, `summary`, `due_date`, `confirmed` and `request_id`, an
+empty `token`, and answering `invalid_commit_request`. Nothing was written, on
+either side of the failure, which is the flow behaving as designed.
+
+- **The token is minted with the preview, never at commit time.** A value
+  created when the commit arrives would prove nothing about a preview having
+  happened, and proving exactly that is its whole job.
+- **It is not the `preview_id`.** The id goes to the browser; the token stays in
+  this process and is spoken only to Home Assistant. Someone who read the id out
+  of a network tab still cannot drive `script.bobi_cc_*` themselves.
+- **All three write services carry it** — `task_add_commit`,
+  `task_update_commit` and `feature_commit` — alongside the `expected_*`
+  evidence, never instead of it.
+- **A tokenless commit is refused before a request is built**, and the test
+  double now refuses one the way the live bridge does, so the gap cannot reopen
+  unnoticed.
+- `debug_http` logs the token's length rather than the token: a five-minute
+  secret should not outlive the log file.
+- Home Assistant's side is untouched. Its token requirement, whitelists,
+  duplicate checks, `expected_*` comparison and read-after-write all stand, and
+  the master switch remains read-only and off.
+
+Feature state comes from the management contract, which now reports `enabled`
+for all four targets. No raw `input_boolean` is read, then or now: a feature
+whose state the contract does not report is shown but stays inoperable.
+
 ## 2.2.0
 
 Phase 3A wired to Home Assistant's real write bridge.
