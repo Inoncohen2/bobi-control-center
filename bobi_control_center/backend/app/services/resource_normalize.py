@@ -23,6 +23,7 @@ import re
 from typing import Any
 
 from app.models.manage import (
+    ITEM_KINDS,
     ManagedConstraints,
     ManagedGroup,
     ManagedItem,
@@ -198,6 +199,53 @@ def _constraints(payload: dict[str, Any]) -> ManagedConstraints | None:
     return None
 
 
+#: The bridge's word for a control → this application's.
+#:
+#: The live contract says `boolean` and `select` where the specification says
+#: `toggle` and `choice`. Both are reasonable names for the same thing, and the
+#: cost of not reconciling them is not an error but something worse: an
+#: unrecognised kind falls through to the text editor, so a household member is
+#: shown a free-text box where a switch belongs. Synonyms are cheap; a screen
+#: that renders a boolean as a string is not.
+_KIND_SYNONYMS = {
+    "boolean": "toggle",
+    "bool": "toggle",
+    "switch": "toggle",
+    "on_off": "toggle",
+    "select": "choice",
+    "enum": "choice",
+    "option": "choice",
+    "options": "choice",
+    "numeric": "number",
+    "int": "number",
+    "integer": "number",
+    "float": "number",
+    "string": "text",
+    "str": "text",
+    "multi": "list",
+    "members": "list",
+    "timestamp": "datetime",
+    "date_time": "datetime",
+}
+
+
+def canonical_kind(kind: str | None, value: Any, options: list[ManagedOption]) -> str:
+    """One of `ITEM_KINDS`, or `readonly`.
+
+    A kind this application does not recognise becomes `readonly` rather than
+    being passed through. Rendering an unknown kind as a text field would let
+    someone type a value the bridge never said it would accept; showing it as a
+    reading is the honest failure.
+    """
+    if kind is None:
+        return _infer_kind(value, options)
+    name = kind.strip().lower()
+    name = _KIND_SYNONYMS.get(name, name)
+    if name in ITEM_KINDS:
+        return name
+    return _infer_kind(value, options)
+
+
 #: Value shape → how it is edited, when the bridge did not say. Deliberately
 #: conservative: anything unrecognised is read-only rather than guessed into an
 #: editor that would send the wrong type.
@@ -221,8 +269,8 @@ def _item(payload: dict[str, Any], *, default_group: str | None = None) -> Manag
     label = normalize._text(normalize._first(payload, "label", "name", "title"))
     options = _options(normalize._first(payload, "options", "choices"))
     value = normalize._first(payload, "value", "state")
-    kind = normalize._text(normalize._first(payload, "kind", "type")) or _infer_kind(
-        value, options
+    kind = canonical_kind(
+        normalize._text(normalize._first(payload, "kind", "type")), value, options
     )
 
     operations = normalize._str_list(payload.get("operations"))

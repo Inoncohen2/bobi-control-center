@@ -38,6 +38,7 @@ from app.services.resources import (
     RESOURCE_READ_SERVICES,
     RESOURCE_WRITE_SERVICES,
     SPECS,
+    canonical_operation,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle only matters to type checkers
@@ -327,6 +328,14 @@ def _contract_entries(payload: dict[str, Any]) -> list[tuple[str, dict[str, Any]
     Older contracts did not have `resources`; for those only the legacy tasks
     and features blocks are admitted, preserving 3.0.0 compatibility without
     manufacturing any of the newer families.
+
+    **`tasks` and `features` are admitted from their own blocks even when
+    `resources` is present.** The live 3c contract sends both shapes and lists
+    neither of those two in the array — so reading the array alone dropped the
+    only two families that actually work today, and task management would have
+    gone dark the moment the newer families were declared. Authority still rests
+    with `resources` where it names something: a family listed there wins, and
+    the legacy block only fills a gap it left.
     """
     if "resources" not in payload:
         return [
@@ -356,6 +365,10 @@ def _contract_entries(payload: dict[str, Any]) -> list[tuple[str, dict[str, Any]
             continue
         seen.add(resource)
         result.append((resource, meta))
+
+    for legacy in ("tasks", "features"):
+        if legacy not in seen and isinstance(payload.get(legacy), dict):
+            result.append((legacy, {}))
     return result
 
 
@@ -376,7 +389,7 @@ def _supported(meta: dict[str, Any]) -> bool:
 
 
 def _operations(
-    meta: dict[str, Any], allowed: tuple[str, ...]
+    meta: dict[str, Any], allowed: tuple[str, ...], resource: str | None = None
 ) -> tuple[list[str], bool]:
     """Intersect advertised operations with the application's closed schema.
 
@@ -384,13 +397,43 @@ def _operations(
     family-level capability declaration, so the app's already-audited operation
     schema applies. An explicit malformed or empty list grants nothing and makes
     the resource unavailable for management.
+
+    Names are translated through the synonym table first — the live contract
+    says `add` where this application says `create`, and an unreconciled synonym
+    is silently dropped by the closed-set filter, so the bridge would announce
+    an operation, the app would quietly not offer it, and neither side would
+    report anything wrong. Only true synonyms translate; a verb this application
+    cannot describe and check stays dropped, because the closed set is what
+    makes the write path safe.
     """
     if "operations" not in meta:
         return list(allowed), True
     raw = meta.get("operations")
     if not isinstance(raw, list):
         return [], False
-    operations = [name for name in normalize._str_list(raw) if name in allowed]
+    # The live contract sends `[{"id": "add", "label": …, "destructive": …}]`
+    # where the older one sent `["add"]`. Both are read: a list of objects that
+    # only `_str_list` understood came back empty, which read as "this family
+    # declares no operations" — the family went read-only and nothing said why.
+    names: list[str] = []
+    for entry in raw:
+        if isinstance(entry, str):
+            name = _text(entry)
+        elif isinstance(entry, dict):
+            name = _text(normalize._first(entry, "id", "operation", "name"))
+        else:
+            continue
+        if name:
+            names.append(name)
+
+    translated = [
+        canonical_operation(resource, name) if resource else name for name in names
+    ]
+    # De-duplicated in wire order: two synonyms of one verb are one operation.
+    operations: list[str] = []
+    for name in translated:
+        if name in allowed and name not in operations:
+            operations.append(name)
     return operations, bool(operations)
 
 
@@ -398,7 +441,7 @@ def _task_resource(
     payload: dict[str, Any], meta: dict[str, Any], bridge_available: bool
 ) -> ManagementResource:
     merged = _merged_meta(payload, "tasks", meta)
-    operations, operations_valid = _operations(merged, TASK_OPERATIONS)
+    operations, operations_valid = _operations(merged, TASK_OPERATIONS, "tasks")
     supported = _supported(merged) and operations_valid
     return ManagementResource(
         id="tasks",
@@ -426,7 +469,7 @@ def _feature_resource(
     payload: dict[str, Any], meta: dict[str, Any], bridge_available: bool
 ) -> ManagementResource:
     merged = _merged_meta(payload, "features", meta)
-    operations, operations_valid = _operations(merged, FEATURE_OPERATIONS)
+    operations, operations_valid = _operations(merged, FEATURE_OPERATIONS, "features")
     supported = _supported(merged) and operations_valid
     targets = [
         ManagedTarget(
@@ -455,7 +498,7 @@ def _generic_resource(
 ) -> ManagementResource:
     spec = SPECS[resource]
     merged = _merged_meta(payload, resource, meta)
-    operations, operations_valid = _operations(merged, spec.operations)
+    operations, operations_valid = _operations(merged, spec.operations, spec.id)
     supported = _supported(merged) and operations_valid
     return ManagementResource(
         id=resource,

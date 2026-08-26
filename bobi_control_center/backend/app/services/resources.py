@@ -274,6 +274,14 @@ RESOURCE_WRITE_SERVICES = frozenset(
 #: with, not to obey. Matching is on the substring, so a prefixed variant of a
 #: forbidden name is caught too.
 FORBIDDEN_SYSTEM_ACTIONS = (
+    # The bare words first. The live bridge publishes its own refusal list and
+    # calls one of them simply `restart` — which the prefixed entries below did
+    # not match, because the test runs the other way round: each banned string
+    # must appear *inside* the action name. Anything containing "restart",
+    # "reboot" or "shutdown" is now caught however it is spelled.
+    "restart",
+    "reboot",
+    "shutdown",
     "ha_restart",
     "core_restart",
     "host_reboot",
@@ -316,6 +324,42 @@ def mask_phone(value: object) -> str:
     if len(digits) < 4:
         return "•" * len(digits)
     return "•••• ••• " + "".join(digits[-2:])
+
+
+#: The bridge's word for an operation → this application's.
+#:
+#: The live 3c contract declares `add` for rules and calendar events where this
+#: application calls it `create`. They are the same verb, and an unreconciled
+#: synonym is dropped by the closed-set filter — so the contract would announce
+#: the operation, the app would silently not offer it, and neither side would
+#: report anything wrong.
+#:
+#: Only true synonyms belong here. A bridge verb that means something this
+#: application cannot describe and check must stay dropped, because the closed
+#: set is what makes the write path safe.
+OPERATION_SYNONYMS: dict[str, str] = {
+    "add": "create",
+    "new": "create",
+    "remove": "delete",
+    "toggle": "set",
+    "activate_scene": "activate",
+}
+
+
+def canonical_operation(resource: str, operation: str) -> str:
+    """The name this application knows an operation by.
+
+    A synonym is translated only when the family actually declares the target
+    verb — `add` becomes `create` for rules, and stays `add` for tasks, where
+    `add` is the declared name and `create` means nothing.
+    """
+    spec = SPECS.get(resource)
+    if spec is None or operation in spec.operations:
+        return operation
+    mapped = OPERATION_SYNONYMS.get(operation)
+    if mapped and mapped in spec.operations:
+        return mapped
+    return operation
 
 
 def rank(risk: str | None) -> int:
