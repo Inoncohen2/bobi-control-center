@@ -4,6 +4,60 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.7.0
+
+A pass over every screen with the screens open — fifteen of them, photographed
+at iPhone size, checked for horizontal bleed, and read.
+
+### One pattern was wrong on four screens
+
+Devices, the Shabbat clock, the rules and the household each had a good
+read-only screen from Phase 2 and, since 3.0, a working management section
+underneath it. Both were rendered. So every screen said everything twice: once
+as a card you could not touch, and again, several thumb-lengths down, as the
+field you actually needed. The editable copy was always the one you had to
+scroll to find.
+
+They are now one screen each. The control goes **on the thing it controls** —
+a switch on the device, on the rule, on the person — and the separate section
+appears only when there is no bridge to put a switch on, which is exactly when
+the read-only screen is the right screen.
+
+### The Shabbat clock
+
+The worst of them, and the one that prompted this.
+
+- **Choosing what turns on and off was a text box** holding
+  `kitchen,dining,led_salon`. To add a device you had to know its internal
+  token, type it, and get the commas right. That is not a control; it is trust
+  in someone's memory. It is now one tappable chip per device, labelled the way
+  the household names it, with the ones in the profile filled in.
+- The profiles and the air-conditioner temperatures were printed twice — once
+  as cards, once as fields. Now once, editable.
+- The page is a little over half its former length.
+
+### Everywhere
+
+- **A managed toggle is a switch**, not a button reading "כבה". A button states
+  the *action*; a column of them reads as instructions rather than a panel you
+  can scan.
+- **The household permissions matrix no longer runs off the screen.** A hard
+  512px floor pushed a two-person household's second column past the edge with
+  nothing to say it had gone.
+- **Rules lost six locked "עריכה" buttons.** Rewriting a rule is a compound
+  change no bridge implements, and saying so six times is furniture.
+- **A published range reads `0–120 דק׳`**, not `0-120דק׳`.
+- Two labels pointed at a "שליטה" section that no longer exists on their page;
+  they now say where the control really is.
+
+### And in the test double
+
+The mock's rules were named one thing on the read side and another on the
+management side. In the live house both take a rule's name from the same field,
+and a screen joins them on it — so a double that disagreed with itself would
+have made that join look broken here and work there, or the reverse, which is
+worse.
+
 ## 3.6.0
 
 A phone-first pass over the screens, done with the screens open rather than

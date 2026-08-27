@@ -346,12 +346,18 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
             },
         ],
     },
+    # The labels are the names `bobi_cc_rules` publishes on the read side, and
+    # deliberately so: in the live house both halves take a rule's name from the
+    # same `summary` field, and a screen joins them on it to put a switch on the
+    # rule's own card. A double whose two halves name the same rule differently
+    # would make that join look broken here and work there — or the reverse,
+    # which is worse.
     "rules": {
         "available": True,
         "items": [
             {
                 "id": "rule_1",
-                "label": "להדליק דוד ביום שלישי",
+                "label": "אור מטבח בערב",
                 "kind": "toggle",
                 "value": True,
                 "controllable": True,
@@ -364,7 +370,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
             },
             {
                 "id": "rule_2",
-                "label": "תזכורת לקחת תרופה",
+                "label": "רובי בימי שני",
                 "kind": "toggle",
                 "value": False,
                 "controllable": True,

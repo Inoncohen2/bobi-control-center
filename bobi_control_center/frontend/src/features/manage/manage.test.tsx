@@ -76,7 +76,7 @@ describe('with no Home Assistant write bridge', () => {
 
     await screen.findByText('מתגים ראשיים');
     expect(screen.queryByRole('switch')).not.toBeInTheDocument();
-    expect(screen.getAllByText('לעריכה: קטע "שליטה" בעמוד הזה').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('להפעלה או כיבוי: מסך ההגדרות').length).toBeGreaterThan(0);
   });
 
   it('keeps the capability master switches read-only even when it is on', async () => {
@@ -93,7 +93,7 @@ describe('with no Home Assistant write bridge', () => {
         control.getAttribute('aria-label'),
       );
     }
-    expect(screen.getAllByText('לעריכה: קטע "שליטה" בעמוד הזה').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('להפעלה או כיבוי: מסך ההגדרות').length).toBeGreaterThan(0);
   });
 
   it('shows a feature whose state the bridge does not report as not operable', async () => {

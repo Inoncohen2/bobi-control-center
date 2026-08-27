@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { Check, MessageCircle, Users, X } from 'lucide-react';
 
 import { Badge } from '@/components/ui/Badge';
@@ -6,9 +7,12 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { NextPhaseBadge } from '@/components/ui/ReadOnly';
 import { EmptyState, QueryBoundary } from '@/components/state/QueryBoundary';
 import { useUsers } from '@/hooks/queries';
-import type { BridgeUser } from '@/types/api';
+import type { BridgeUser, ManagedItem } from '@/types/api';
 import { cn } from '@/utils/cn';
 import { ManagedSection } from '@/features/manage/ManagedSection';
+import { ChangeDialog } from '@/features/manage/ChangeDialog';
+import { operableWith, useManagedFamily } from '@/features/manage/useManagedFamily';
+import { Switch } from '@/components/ui/Switch';
 import { ResourceEditor } from '@/features/manage/ResourceEditor';
 
 const PERMISSION_LABELS: Record<string, string> = {
@@ -39,8 +43,20 @@ function avatarColor(seed: string): string {
   return palette[hash] as string;
 }
 
-function UserCard({ user }: { user: BridgeUser }) {
+function UserCard({
+  user,
+  managed,
+  writesEnabled,
+  onToggle,
+}: {
+  user: BridgeUser;
+  managed: ManagedItem | undefined;
+  writesEnabled: boolean;
+  onToggle: (item: ManagedItem, next: boolean) => void;
+}) {
   const role = (user.role ?? '').toLowerCase();
+  const operation = operableWith(managed, writesEnabled);
+  const togglable = operation !== null && managed?.kind === 'toggle';
 
   return (
     <Card as="li">
@@ -56,9 +72,17 @@ function UserCard({ user }: { user: BridgeUser }) {
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="font-semibold text-slate-900 dark:text-slate-100">{user.name}</h3>
             {user.role ? <Badge tone="neutral">{ROLE_LABELS[role] ?? user.role}</Badge> : null}
-            <Badge tone={user.enabled === false ? 'muted' : 'ok'} dot>
-              {user.enabled === false ? 'מושבת' : 'פעיל'}
-            </Badge>
+            {togglable && managed ? (
+              <Switch
+                on={managed.value === true}
+                label={`${user.name} — פעיל`}
+                onChange={(next) => onToggle(managed, next)}
+              />
+            ) : (
+              <Badge tone={user.enabled === false ? 'muted' : 'ok'} dot>
+                {user.enabled === false ? 'מושבת' : 'פעיל'}
+              </Badge>
+            )}
           </div>
 
           <dl className="mt-3 space-y-1.5 text-sm">
@@ -102,6 +126,18 @@ function UserCard({ user }: { user: BridgeUser }) {
 
 export function UsersPage() {
   const query = useUsers();
+  const managed = useManagedFamily('users');
+
+  // Joined on the household name, which both halves take from the same field.
+  // A name shared by two people matches neither.
+  const managedByName = useMemo(() => {
+    const seen = new Map<string, ManagedItem | null>();
+    for (const item of managed.itemsById.values()) {
+      if (item.kind !== 'toggle') continue;
+      seen.set(item.label, seen.has(item.label) ? null : item);
+    }
+    return seen;
+  }, [managed.itemsById]);
 
   return (
     <>
@@ -132,18 +168,24 @@ export function UsersPage() {
                 </SectionTitle>
                 <ul className="grid gap-3 lg:grid-cols-2">
                   {data.users.map((user) => (
-                    <UserCard key={user.id} user={user} />
+                    <UserCard
+                      key={user.id}
+                      user={user}
+                      managed={managedByName.get(user.name) ?? undefined}
+                      writesEnabled={managed.writesEnabled}
+                      onToggle={(item, next) => managed.request(item, next)}
+                    />
                   ))}
                 </ul>
               </section>
 
               {permissions.length > 0 ? (
                 <section aria-labelledby="matrix-heading">
-                  <SectionTitle action={<NextPhaseBadge />}>
+                  <SectionTitle action={<NextPhaseBadge reason="הרשאות נקבעות ב-Home Assistant" />}>
                     <span id="matrix-heading">הרשאות</span>
                   </SectionTitle>
                   <Card className="overflow-x-auto p-0">
-                    <table className="w-full min-w-[32rem] border-collapse text-sm">
+                    <table className="w-full border-collapse text-sm">
                       <caption className="sr-only">
                         מטריצת הרשאות: לכל משתמש, אילו פעולות מותרות. לקריאה בלבד.
                       </caption>
@@ -208,11 +250,17 @@ export function UsersPage() {
           );
         }}
       </QueryBoundary>
-      <ManagedSection resource="users" title="ניהול משתמשים">
-        {({ snapshot, request, writesEnabled }) => (
-          <ResourceEditor snapshot={snapshot} onChange={request} writesEnabled={writesEnabled} />
-        )}
-      </ManagedSection>
+      {/* Only when the switch could not go on the card: otherwise this is the
+          household listed a second time, by name and nothing else. */}
+      {managed.available ? null : (
+        <ManagedSection resource="users" title="ניהול משתמשים">
+          {({ snapshot, request, writesEnabled }) => (
+            <ResourceEditor snapshot={snapshot} onChange={request} writesEnabled={writesEnabled} />
+          )}
+        </ManagedSection>
+      )}
+
+      <ChangeDialog change={managed.change} />
     </>
   );
 }

@@ -309,7 +309,7 @@ describe('CapabilitiesPage', () => {
     expect(await screen.findByText('מתגים ראשיים')).toBeInTheDocument();
     // Not a switch: this catalogue lists, it does not operate.
     expect(screen.queryByRole('switch')).not.toBeInTheDocument();
-    expect(screen.getAllByText('לעריכה: קטע "שליטה" בעמוד הזה').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('להפעלה או כיבוי: מסך ההגדרות').length).toBeGreaterThan(0);
   });
 });
 
@@ -324,14 +324,15 @@ describe('RulesPage', () => {
     expect(screen.getByText('מושבת')).toBeInTheDocument();
   });
 
-  it('disables editing with an explanation', async () => {
+  it('offers no edit control, because no bridge implements one', async () => {
+    // Rewriting a rule is a compound change the contract cannot carry, so no
+    // bridge implements it. A locked button repeated on every card was
+    // furniture: it said the same nothing six times.
     vi.stubGlobal('fetch', mockApi(ALL_ROUTES));
     renderWithProviders(<RulesPage />);
 
     await screen.findByText('אור מטבח בערב');
-    const editButtons = screen.getAllByTitle('לעריכה: קטע "שליטה" בעמוד הזה');
-    expect(editButtons.length).toBeGreaterThan(0);
-    editButtons.forEach((button) => expect(button).toBeDisabled());
+    expect(screen.queryByText('עריכה')).not.toBeInTheDocument();
   });
 
   it('has an empty state', async () => {
@@ -402,15 +403,19 @@ describe('ShabbatPage', () => {
     expect(screen.getByText('auto')).toBeInTheDocument();
   });
 
-  it('is read-only, with saving disabled', async () => {
+  it('shows the times and saves nothing by itself', async () => {
+    // Without a management bridge the screen is the read-only one: profiles and
+    // temperatures as cards, and no control that could write.
     vi.stubGlobal('fetch', mockApi(ALL_ROUTES));
     renderWithProviders(<ShabbatPage />);
 
     await screen.findByText('18:52');
-    const edit = screen.getByTitle('לעריכה: קטע "שליטה" בעמוד הזה');
-    expect(edit).toBeDisabled();
+    expect(screen.getByText('פרופילים')).toBeInTheDocument();
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
 
-    for (const button of screen.getAllByRole('button')) {
+    // queryAll, not getAll: with the locked edit button gone there may be no
+    // buttons at all on this screen, which is the point.
+    for (const button of screen.queryAllByRole('button')) {
       expect(button.textContent ?? '').not.toMatch(/^שמירה$|תצוגה מקדימה/);
     }
   });

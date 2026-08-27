@@ -134,7 +134,7 @@ function ToggleRow({ toggle }: { toggle: CapabilityToggle }) {
         <span className="text-xs text-slate-500 dark:text-slate-400">
           {on ? 'מופעל' : 'כבוי'}
         </span>
-        <NextPhaseBadge />
+        <NextPhaseBadge reason="להפעלה או כיבוי: מסך ההגדרות" />
       </div>
     </li>
   );

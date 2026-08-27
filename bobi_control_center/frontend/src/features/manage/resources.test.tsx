@@ -99,7 +99,7 @@ describe('an item the bridge did not mark controllable', () => {
 
     expect(await screen.findByText('סיכום בוקר אוטומטי')).toBeInTheDocument();
     expect(screen.getByText('פעיל')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'כבה' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
   });
 
   it('renders as a reading when the bridge named no operations', async () => {
@@ -113,7 +113,7 @@ describe('an item the bridge did not mark controllable', () => {
     renderWithProviders(<SettingsManagePage />);
 
     await screen.findByText('סיכום בוקר אוטומטי');
-    expect(screen.queryByRole('button', { name: 'כבה' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
   });
 
   it('shows the reason the bridge gave for it being unavailable', async () => {
@@ -147,7 +147,7 @@ describe('with the master write switch off', () => {
     expect(await screen.findByText(/שינויים כבויים כרגע/)).toBeInTheDocument();
     // Not presented as a fault — nothing is broken.
     expect(screen.queryByText(/שגיאה|נכשל/)).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'כבה' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
   });
 });
 
@@ -180,7 +180,7 @@ describe('a family whose commit bridge has not shipped', () => {
 
     await screen.findByText('סיכום בוקר אוטומטי');
     // The item says yes; the family has no commit bridge. Both must agree.
-    expect(screen.queryByRole('button', { name: 'כבה' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
   });
 });
 
@@ -189,7 +189,7 @@ describe('a control the bridge did advertise', () => {
     const fetchMock = stub(routes());
     renderWithProviders(<SettingsManagePage />);
 
-    await userEvent.click(await screen.findByRole('button', { name: 'כבה' }));
+    await userEvent.click(await screen.findByRole('switch'));
 
     await waitFor(() =>
       expect(paths(fetchMock).some((path) => path.endsWith('/settings/preview'))).toBe(true),
@@ -340,7 +340,7 @@ describe('what the session is allowed to do', () => {
     withRole('operator');
     renderWithProviders(<SettingsManagePage />);
 
-    expect(await screen.findByRole('button', { name: 'כבה' })).toBeInTheDocument();
+    expect(await screen.findByRole('switch')).toBeInTheDocument();
   });
 
   it('a viewer gets none, and is told why', async () => {
@@ -349,7 +349,7 @@ describe('what the session is allowed to do', () => {
 
     expect(await screen.findByText('סיכום בוקר אוטומטי')).toBeInTheDocument();
     expect(await screen.findByText(/אין גישה לשינוי/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'כבה' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
   });
 
   it('an operator gets no control over a high-risk row', async () => {
@@ -361,7 +361,7 @@ describe('what the session is allowed to do', () => {
     renderWithProviders(<SettingsManagePage />);
 
     expect(await screen.findByText(/אין גישה לשינוי/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'כבה' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
   });
 
   it('an admin does', async () => {
@@ -372,7 +372,7 @@ describe('what the session is allowed to do', () => {
     });
     renderWithProviders(<SettingsManagePage />);
 
-    expect(await screen.findByRole('button', { name: 'כבה' })).toBeInTheDocument();
+    expect(await screen.findByRole('switch')).toBeInTheDocument();
   });
 
   it('an unknown role is treated as the weakest one', async () => {
@@ -380,7 +380,7 @@ describe('what the session is allowed to do', () => {
     renderWithProviders(<SettingsManagePage />);
 
     await screen.findByText('סיכום בוקר אוטומטי');
-    expect(screen.queryByRole('button', { name: 'כבה' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
   });
 });
 

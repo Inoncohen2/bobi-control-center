@@ -20,13 +20,14 @@
  *    in the field rather than in a dialog.
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Lock } from 'lucide-react';
 
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader } from '@/components/ui/Card';
-import { SelectField, TextField } from '@/components/ui/Field';
+import { Chip, SelectField, TextField } from '@/components/ui/Field';
+import { Switch } from '@/components/ui/Switch';
 import { allows, useRole } from '@/features/auth/useRole';
 import { cn } from '@/utils/cn';
 import type { ManagedGroup, ManagedItem, ResourceSnapshot } from '@/types/api';
@@ -238,6 +239,16 @@ function ItemControl({
   const current = item.value === null || item.value === undefined ? '' : String(item.value);
   const dirty = draft !== current;
 
+  // A list is edited as a set, not as text, so it needs its own draft. Both
+  // hooks run unconditionally — the branch comes after them.
+  const chosen = useMemo(
+    () => (Array.isArray(item.value) ? item.value.map(String) : []),
+    [item.value],
+  );
+  const [members, setMembers] = useState<string[]>(chosen);
+  const membersDirty =
+    members.length !== chosen.length || members.some((value) => !chosen.includes(value));
+
   if (item.kind === 'action') {
     // One button, and the label is the bridge's own word for it.
     return (
@@ -257,13 +268,62 @@ function ItemControl({
     // here, and a screen that reasons about a vocabulary is a screen that has
     // to be corrected every time the vocabulary grows.
     const operation = item.primary_operation ?? undefined;
+    // The same switch the device cards use. It was a button reading "כבה" or
+    // "הפעל", which states the *action* rather than the state, so a row of them
+    // read as a column of instructions instead of a panel you can scan.
     return (
       <div className="flex sm:justify-end">
+        <Switch on={on} label={item.label} onChange={(next) => onChange(item, next, operation)} />
+      </div>
+    );
+  }
+
+  if (item.kind === 'list') {
+    const allowed = item.constraints?.allowed ?? [];
+    // Without a published list there is nothing safe to offer: the bridge has
+    // not said what may go in, so this stays a reading.
+    if (allowed.length === 0) {
+      return (
+        <p className="text-sm text-slate-600 sm:text-end dark:text-slate-300">
+          {item.display ?? '—'}
+        </p>
+      );
+    }
+    return (
+      <div className="space-y-2">
+        {/*
+          One chip per thing the bridge said may be in this list, labelled the
+          way the household names it. This used to be a text box holding
+          `kitchen,dining,led_salon`: to add a device you had to know its
+          internal token, type it, and get the commas right — which is not a
+          control, it is a form of trust in the person's memory.
+        */}
+        <div className="flex flex-wrap gap-1.5 sm:justify-end">
+          {allowed.map((option) => {
+            const selected = members.includes(option.value);
+            return (
+              <Chip
+                key={option.value}
+                selected={selected}
+                onClick={() =>
+                  setMembers((current) =>
+                    selected
+                      ? current.filter((value) => value !== option.value)
+                      : [...current, option.value],
+                  )
+                }
+              >
+                {option.label}
+              </Chip>
+            );
+          })}
+        </div>
         <Button
-          variant={on ? 'secondary' : 'primary'}
-          onClick={() => onChange(item, !on, operation)}
+          className={cn('w-full', !membersDirty && 'invisible')}
+          onClick={() => onChange(item, members)}
+          disabled={!membersDirty}
         >
-          {on ? 'כבה' : 'הפעל'}
+          בדוק שינוי
         </Button>
       </div>
     );
@@ -326,7 +386,8 @@ function describeLimits(limits: ManagedItem['constraints']): string | undefined 
   if (!limits) return undefined;
   const parts: string[] = [];
   if (limits.minimum !== null && limits.maximum !== null) {
-    parts.push(`${limits.minimum}–${limits.maximum}${limits.unit ?? ''}`);
+    const unit = (limits.unit ?? '').trim();
+    parts.push(`${limits.minimum}–${limits.maximum}${unit ? ` ${unit}` : ''}`);
   }
   if (limits.step) parts.push(`בקפיצות של ${limits.step}`);
   if (limits.max_length) parts.push(`עד ${limits.max_length} תווים`);

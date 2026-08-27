@@ -42,8 +42,9 @@ export function ReadOnlyNotice({
   );
 }
 
-/** A small inline badge marking one control as coming later. */
-export function NextPhaseBadge({ className }: { className?: string }) {
+/** A small inline badge saying why a section has no controls, and where the
+ *  working ones are. `reason` when this section's answer is not the default. */
+export function NextPhaseBadge({ className, reason }: { className?: string; reason?: string }) {
   return (
     <span
       className={cn(
@@ -53,7 +54,7 @@ export function NextPhaseBadge({ className }: { className?: string }) {
       )}
     >
       <Lock aria-hidden="true" size={10} />
-      {NEXT_PHASE_LABEL}
+      {reason ?? NEXT_PHASE_LABEL}
     </span>
   );
 }

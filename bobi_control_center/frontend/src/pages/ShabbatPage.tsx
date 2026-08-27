@@ -4,11 +4,11 @@ import { Badge } from '@/components/ui/Badge';
 import { Card, SectionTitle } from '@/components/ui/Card';
 import { AdvancedDisclosure, TechnicalDetails } from '@/components/ui/Advanced';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { DisabledAction } from '@/components/ui/ReadOnly';
 import { EmptyState, QueryBoundary } from '@/components/state/QueryBoundary';
 import { useShabbat } from '@/hooks/queries';
 import type { ShabbatProfile } from '@/types/api';
 import { ManagedSection } from '@/features/manage/ManagedSection';
+import { useManagedFamily } from '@/features/manage/useManagedFamily';
 import { ResourceEditor } from '@/features/manage/ResourceEditor';
 
 /**
@@ -81,6 +81,7 @@ function ProfileCard({ profile }: { profile: ShabbatProfile }) {
 
 export function ShabbatPage() {
   const query = useShabbat();
+  const managed = useManagedFamily('shabbat');
 
   return (
     <>
@@ -146,57 +147,75 @@ export function ShabbatPage() {
               </Card>
             ) : null}
 
-            <section aria-labelledby="profiles-heading">
-              <SectionTitle action={<DisabledAction>עריכת פרופילים</DisabledAction>}>
-                <span id="profiles-heading">פרופילים</span>
-              </SectionTitle>
-              {config.profiles.length === 0 ? (
-                <EmptyState title="לא הוגדרו פרופילים לשבת" />
-              ) : (
-                <ul className="grid gap-3 lg:grid-cols-2">
-                  {config.profiles.map((profile) => (
-                    <ProfileCard key={profile.id} profile={profile} />
-                  ))}
-                </ul>
-              )}
-            </section>
+            {/*
+              The profiles and the air-conditioner temperatures, read-only.
 
-            <section aria-labelledby="ac-heading">
-              <SectionTitle>
-                <span id="ac-heading">טמפרטורות מזגנים</span>
-              </SectionTitle>
-              {config.ac_temperatures.length === 0 ? (
-                <EmptyState title="לא הוגדרו טמפרטורות למזגנים" />
-              ) : (
-                <Card className="p-0">
-                  <dl className="divide-y divide-slate-100 dark:divide-slate-700/60">
-                    {config.ac_temperatures.map((entry) => (
-                      <div
-                        key={entry.id}
-                        className="flex items-baseline justify-between gap-4 px-4 py-3"
-                      >
-                        <dt className="text-sm text-slate-700 dark:text-slate-200">
-                          {entry.label}
-                        </dt>
-                        <dd className="text-sm font-medium tabular-nums text-slate-900 dark:text-slate-100">
-                          {/* A setting the bridge does not express as a number
-                              — "auto", say — is shown as it came. */}
-                          {entry.temperature !== null ? `${entry.temperature}°` : entry.text}
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
-                </Card>
-              )}
-            </section>
+              Shown only while the management bridge is absent. When it is
+              there, the section below renders the same three groups — timing,
+              profiles, temperatures — with working controls, and printing both
+              meant the screen said everything twice: once as a card you could
+              not touch and again as a field you could, several thumb-lengths
+              apart. Same values, twice the page, and the editable copy was the
+              one you had to scroll to find.
+            */}
+            {managed.available ? null : (
+              <>
+                <section aria-labelledby="profiles-heading">
+                  <SectionTitle>
+                    <span id="profiles-heading">פרופילים</span>
+                  </SectionTitle>
+                  {config.profiles.length === 0 ? (
+                    <EmptyState title="לא הוגדרו פרופילים לשבת" />
+                  ) : (
+                    <ul className="grid gap-3 lg:grid-cols-2">
+                      {config.profiles.map((profile) => (
+                        <ProfileCard key={profile.id} profile={profile} />
+                      ))}
+                    </ul>
+                  )}
+                </section>
+
+                <section aria-labelledby="ac-heading">
+                  <SectionTitle>
+                    <span id="ac-heading">טמפרטורות מזגנים</span>
+                  </SectionTitle>
+                  {config.ac_temperatures.length === 0 ? (
+                    <EmptyState title="לא הוגדרו טמפרטורות למזגנים" />
+                  ) : (
+                    <Card className="p-0">
+                      <dl className="divide-y divide-slate-100 dark:divide-slate-700/60">
+                        {config.ac_temperatures.map((entry) => (
+                          <div
+                            key={entry.id}
+                            className="flex items-baseline justify-between gap-4 px-4 py-3"
+                          >
+                            <dt className="text-sm text-slate-700 dark:text-slate-200">
+                              {entry.label}
+                            </dt>
+                            <dd className="text-sm font-medium tabular-nums text-slate-900 dark:text-slate-100">
+                              {/* A setting the bridge does not express as a
+                                  number — "auto", say — is shown as it came. */}
+                              {entry.temperature !== null ? `${entry.temperature}°` : entry.text}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </Card>
+                  )}
+                </section>
+              </>
+            )}
           </div>
         )}
       </QueryBoundary>
-      <ManagedSection resource="shabbat" title="עריכת לוח הזמנים">
-        {({ snapshot, request, writesEnabled }) => (
-          <ResourceEditor snapshot={snapshot} onChange={request} writesEnabled={writesEnabled} />
-        )}
-      </ManagedSection>
+
+      <div className="mt-6">
+        <ManagedSection resource="shabbat" title="פרופילים וזמנים">
+          {({ snapshot, request, writesEnabled }) => (
+            <ResourceEditor snapshot={snapshot} onChange={request} writesEnabled={writesEnabled} />
+          )}
+        </ManagedSection>
+      </div>
     </>
   );
 }
