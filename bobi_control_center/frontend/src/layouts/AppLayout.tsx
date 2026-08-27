@@ -122,38 +122,67 @@ function BottomNav({ onMore }: { onMore: () => void }) {
       aria-label="ניווט ראשי"
       className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden dark:border-slate-700 dark:bg-slate-900/95"
     >
-      <ul className="grid grid-cols-5">
+      {/* One column per destination plus one for "עוד". It was fixed at five
+          while holding six, so the sixth wrapped onto a second row and ate a
+          thumb's worth of screen on every page. Deriving the count means adding
+          a primary destination can never quietly do that again. */}
+      <ul
+        className="grid"
+        style={{ gridTemplateColumns: `repeat(${PRIMARY_NAV.length + 1}, minmax(0, 1fr))` }}
+      >
         {PRIMARY_NAV.map(({ to, label, icon: Icon }) => (
-          <li key={to}>
+          <li key={to} className="min-w-0">
             <NavLink
               to={to}
               end={to === '/'}
               className={({ isActive }) =>
                 cn(
-                  'flex flex-col items-center gap-1 py-2 text-[11px] font-medium transition-colors',
+                  'flex min-w-0 flex-col items-center gap-1 px-0.5 pb-1.5 pt-2',
+                  'text-[10px] font-medium leading-none transition-colors',
                   isActive
                     ? 'text-bobi-600 dark:text-bobi-400'
                     : 'text-slate-500 dark:text-slate-400',
                 )
               }
             >
-              <Icon aria-hidden="true" size={20} />
-              {label}
+              {({ isActive }) => (
+                <>
+                  {/* A filled pill behind the active icon, so the current tab
+                      reads at a glance without relying on colour alone. */}
+                  <span
+                    className={cn(
+                      'flex h-7 w-12 items-center justify-center rounded-full transition-colors',
+                      isActive ? 'bg-bobi-50 dark:bg-bobi-500/15' : 'bg-transparent',
+                    )}
+                  >
+                    <Icon aria-hidden="true" size={19} />
+                  </span>
+                  <span className="w-full truncate text-center">{label}</span>
+                </>
+              )}
             </NavLink>
           </li>
         ))}
-        <li>
+        <li className="min-w-0">
           <button
             type="button"
             onClick={onMore}
             aria-label="תפריט נוסף"
             className={cn(
-              'flex w-full flex-col items-center gap-1 py-2 text-[11px] font-medium transition-colors',
+              'flex w-full min-w-0 flex-col items-center gap-1 px-0.5 pb-1.5 pt-2',
+              'text-[10px] font-medium leading-none transition-colors',
               onSecondary ? 'text-bobi-600 dark:text-bobi-400' : 'text-slate-500 dark:text-slate-400',
             )}
           >
-            <MoreHorizontal aria-hidden="true" size={20} />
-            עוד
+            <span
+              className={cn(
+                'flex h-7 w-12 items-center justify-center rounded-full transition-colors',
+                onSecondary ? 'bg-bobi-50 dark:bg-bobi-500/15' : 'bg-transparent',
+              )}
+            >
+              <MoreHorizontal aria-hidden="true" size={19} />
+            </span>
+            <span className="w-full truncate text-center">עוד</span>
           </button>
         </li>
       </ul>
@@ -170,14 +199,12 @@ export function AppLayout() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-slate-200 bg-white/80 px-4 py-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] backdrop-blur lg:px-8 dark:border-slate-700 dark:bg-slate-900/80">
+          {/* The sidebar already carries the mark on a wide screen; repeating
+              it in the header would be branding twice and saying nothing. */}
           <div className="lg:hidden">
             <BobiMark />
           </div>
-          <div className="hidden lg:block">
-            <p className="text-sm text-slate-500 dark:text-slate-400">
-              מצב הדגמה — הנתונים מדומים ואין שליטה במכשירים אמיתיים
-            </p>
-          </div>
+          <div className="hidden lg:block" />
           <ThemeToggle />
         </header>
 

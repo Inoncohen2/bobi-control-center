@@ -4,6 +4,58 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.6.0
+
+A phone-first pass over the screens, done with the screens open rather than
+from memory: the app was built, served with canned responses in the real
+shapes, and photographed at iPhone size in both themes. Every change below is
+something that was visibly wrong in those pictures.
+
+### The bottom bar fits on one row
+
+It was a five-column grid holding six items, so the sixth wrapped onto a second
+row and took a thumb's worth of height from every page. The column count is now
+derived from the number of destinations, so adding one can never quietly do
+that again. The active tab gets a filled pill behind its icon, which reads at a
+glance without relying on colour alone.
+
+### A light turns on from the light
+
+Turning one on used to mean: open the page, scroll past the whole catalogue to
+a second list, find the same light again by name, press there. Each device row
+now carries its own switch.
+
+- **It asks; it does not act.** Pressing it opens the same preview → confirm →
+  commit dialog as every other change, and the knob stays where the bridge says
+  it is until a commit has been read back. A switch that slid over and slid
+  back would be the interface lying twice.
+- **The tap target is 44px** around a 28px track, which is the smallest a thumb
+  reliably hits.
+- **Fail closed, unchanged**: no contract entry, no declared operation, nothing
+  marked controllable, master switch off — no switch. The section below the
+  catalogue kept every device a second time; it now holds only what a switch
+  cannot express, a target temperature or a fan mode.
+- The catalogue and the management snapshot are keyed differently and the
+  canonical id deliberately never reaches the browser, so the two are joined on
+  the bridge's own `canonical` name — the same field on both sides, not two
+  renderings that agree. A name is weaker than an id, so **a name shared by two
+  switchable devices matches neither**: a missing switch is a bad afternoon,
+  the wrong light going off in a child's room is worse.
+
+### Density and honesty
+
+- **Rows, not tiles.** Two-up tiles were too narrow for a name and a switch to
+  share a line, so each grew to three rows and five devices filled the screen.
+- **The state pill is gone where there is a switch** — it was the same fact
+  twice, costing a row of height each time.
+- **A device's group is in Hebrew.** The cards read `vacuum` and `people`.
+- **Eleven filter chips scroll in one row** instead of wrapping onto three and
+  pushing the devices below the fold.
+- **The search icon no longer sits on the first characters** — its padding was
+  physical while the text direction is not.
+- The desktop header claimed *"מצב הדגמה — הנתונים מדומים"*. It has not been a
+  demo since 2.0.0.
+
 ## 3.5.1
 
 Five screens were telling people not to look for controls that were already

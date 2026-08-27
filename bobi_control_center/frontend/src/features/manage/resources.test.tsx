@@ -14,9 +14,11 @@ import userEvent from '@testing-library/user-event';
 import { SettingsManagePage } from '@/pages/SettingsManagePage';
 import { SystemPage } from '@/pages/SystemPage';
 import { CamerasPage } from '@/pages/CamerasPage';
+import { DevicesPage } from '@/pages/DevicesPage';
 import { CalendarPage } from '@/pages/CalendarPage';
 import {
   makeConnection,
+  makeDevices,
   makeManagedItem,
   makeManagementOff,
   makeManagementOn,
@@ -472,5 +474,106 @@ describe('the calendar', () => {
       start: '2026-09-10T09:00:00',
       end: '2026-09-10T10:00:00',
     });
+  });
+});
+
+/**
+ * The switch on a device card.
+ *
+ * The card is the point: turning a light on used to mean opening the page,
+ * scrolling past the whole catalogue to a second list, finding the same light
+ * again by name, and pressing there. What must not change is what the switch
+ * means — it asks, it does not act.
+ */
+describe('a device card', () => {
+  const KITCHEN = makeManagedItem({
+    id: 'kitchen',
+    label: 'אור מטבח', // the same `canonical` the catalogue names it by
+    kind: 'toggle',
+    value: false,
+    risk: 'medium',
+    controllable: true,
+    operations: ['power'],
+    primary_operation: 'power',
+  });
+
+  const deviceRoutes = (item = KITCHEN, writes = true) => ({
+    ...BASE,
+    '/api/bobi/devices': makeDevices(),
+    '/api/bobi/manage/contract': makeManagementWith('devices', { writes_enabled: writes }, [
+      { id: 'power', label: 'הדלקה או כיבוי', destructive: false },
+    ]),
+    '/api/bobi/manage/devices/snapshot': makeResourceSnapshot({
+      resource: 'devices',
+      items: [item],
+      groups: [{ id: 'devices', label: 'מכשירים', description: null, items: [item] }],
+    }),
+    '/api/bobi/manage/devices/preview': makePreview(),
+  });
+
+  it('puts a switch on the card, matched to the catalogue row', async () => {
+    stub(deviceRoutes());
+    renderWithProviders(<DevicesPage />);
+
+    const toggle = await screen.findByRole('switch', { name: 'אור מטבח' });
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('asks rather than acts', async () => {
+    const fetchMock = stub(deviceRoutes());
+    renderWithProviders(<DevicesPage />);
+
+    await userEvent.click(await screen.findByRole('switch', { name: 'אור מטבח' }));
+
+    await waitFor(() =>
+      expect(paths(fetchMock).some((path) => path.endsWith('/devices/preview'))).toBe(true),
+    );
+    const call = fetchMock.mock.calls.find(([input]) =>
+      String(input).endsWith('/devices/preview'),
+    );
+    const body = JSON.parse(String(call?.[1]?.body));
+    expect(body).toMatchObject({
+      operation: 'power',
+      resource_id: 'kitchen',
+      payload: { value: true },
+    });
+    // Nothing was committed by the press itself.
+    expect(paths(fetchMock).some((path) => path.endsWith('/devices/commit'))).toBe(false);
+  });
+
+  it('draws no switch while the master write switch is off', async () => {
+    stub(deviceRoutes(KITCHEN, false));
+    renderWithProviders(<DevicesPage />);
+
+    await screen.findByText('אור מטבח');
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
+  });
+
+  it('draws no switch for an item the bridge did not mark controllable', async () => {
+    stub(deviceRoutes({ ...KITCHEN, controllable: false }));
+    renderWithProviders(<DevicesPage />);
+
+    await screen.findByText('אור מטבח');
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
+  });
+
+  it('refuses to guess when two switchable devices share a name', async () => {
+    // A name is weaker than an id. Matching neither is the safe answer: a
+    // missing switch is a bad afternoon, the wrong light going off is worse.
+    const twin = { ...KITCHEN, id: 'kitchen_2' };
+    stub({
+      ...deviceRoutes(),
+      '/api/bobi/manage/devices/snapshot': makeResourceSnapshot({
+        resource: 'devices',
+        items: [KITCHEN, twin],
+        groups: [
+          { id: 'devices', label: 'מכשירים', description: null, items: [KITCHEN, twin] },
+        ],
+      }),
+    });
+    renderWithProviders(<DevicesPage />);
+
+    await screen.findByText('אור מטבח');
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
   });
 });

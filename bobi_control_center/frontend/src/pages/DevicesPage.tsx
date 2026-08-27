@@ -23,6 +23,11 @@ import { SCOPE_LABELS, limitEntries, stateLabel, timeAgo } from '@/utils/format'
 import { ManagedSection } from '@/features/manage/ManagedSection';
 import { ResourceEditor } from '@/features/manage/ResourceEditor';
 import { CAMERA_CLASS, DeviceDetail as ManagedDeviceDetail } from '@/pages/DeviceControlPage';
+import { ChangeDialog } from '@/features/manage/ChangeDialog';
+import { operableWith, useManagedFamily } from '@/features/manage/useManagedFamily';
+import { Switch } from '@/components/ui/Switch';
+import { cn } from '@/utils/cn';
+import type { ManagedItem } from '@/types/api';
 
 const AVAILABILITY_OPTIONS: Array<{ value: AvailabilityFilter; label: string }> = [
   { value: 'all', label: 'הכול' },
@@ -133,27 +138,92 @@ function DeviceDetail({ device, onClose }: { device: BridgeDevice; onClose: () =
   );
 }
 
-function DeviceCard({ device, onOpen }: { device: BridgeDevice; onOpen: () => void }) {
+/**
+ * One device in the catalogue — and its switch, when it has one.
+ *
+ * The card used to be a single button that opened a detail sheet, so turning a
+ * light on meant: open the page, scroll past the whole catalogue to a second
+ * list, find the same light again by name, and press there. Now the switch is
+ * on the light.
+ *
+ * The card body is still the detail sheet, and the switch is a separate control
+ * beside it rather than nested inside it — a button inside a button is invalid
+ * markup and, more to the point, makes "which one did I just press" a question.
+ *
+ * `managed` is the item from the management snapshot, matched to this catalogue
+ * row by its canonical id. Absent, not controllable, or no value reported means
+ * no switch: the reading stays, and it is the honest thing to show.
+ */
+function DeviceCard({
+  device,
+  managed,
+  writesEnabled,
+  pending,
+  onOpen,
+  onToggle,
+}: {
+  device: BridgeDevice;
+  managed: ManagedItem | undefined;
+  writesEnabled: boolean;
+  pending: boolean;
+  onOpen: () => void;
+  onToggle: (item: ManagedItem, next: boolean) => void;
+}) {
+  const operation = operableWith(managed, writesEnabled);
+  // A switch belongs on something with two states. A thermostat's target
+  // temperature is managed in the detail sheet, not by a knob on a card.
+  const togglable = operation !== null && managed?.kind === 'toggle';
+  const on = managed?.value === true;
+
   return (
     <li>
-      <button
-        type="button"
-        onClick={onOpen}
-        className="w-full rounded-2xl border border-slate-200/80 bg-white p-4 text-right shadow-card transition-shadow hover:shadow-lift focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bobi-600 dark:border-slate-700/60 dark:bg-slate-800/60"
+      <div
+        className={cn(
+          'flex items-center gap-3 rounded-2xl border border-slate-200/80 bg-white',
+          'px-4 py-3 shadow-card transition-shadow hover:shadow-lift',
+          'dark:border-slate-700/60 dark:bg-slate-800/60',
+        )}
       >
-        {/* The user-facing name only — never the entity id. */}
-        <p className="line-clamp-2 font-medium leading-snug text-slate-900 dark:text-slate-100">
-          {device.name}
-        </p>
-        {device.group ? (
-          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{device.group}</p>
+        <button
+          type="button"
+          onClick={onOpen}
+          className="min-w-0 flex-1 text-right focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bobi-600"
+        >
+          {/* The user-facing name only — never the entity id. */}
+          <p className="truncate font-medium leading-tight text-slate-900 dark:text-slate-100">
+            {device.name}
+          </p>
+          <p className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+            {/* A switch already says on or off. Repeating it in a pill beside
+                the switch is the same fact twice and a whole row of height for
+                it. The state is spelled out only where there is no switch to
+                read it from — a camera, a vacuum's dock, anything unavailable. */}
+            {togglable ? null : (
+              <span
+                aria-hidden="true"
+                className={cn(
+                  'h-1.5 w-1.5 shrink-0 rounded-full',
+                  device.available ? 'bg-emerald-500' : 'bg-rose-500',
+                )}
+              />
+            )}
+            <span className="truncate">
+              {togglable
+                ? (SCOPE_LABELS[device.group ?? ''] ?? device.group ?? '')
+                : stateLabel(device.state)}
+            </span>
+          </p>
+        </button>
+
+        {togglable && managed ? (
+          <Switch
+            on={on}
+            pending={pending}
+            label={device.name}
+            onChange={(next) => onToggle(managed, next)}
+          />
         ) : null}
-        <div className="mt-3">
-          <Badge tone={device.available ? 'ok' : 'error'} dot>
-            {stateLabel(device.state)}
-          </Badge>
-        </div>
-      </button>
+      </div>
     </li>
   );
 }
@@ -176,31 +246,54 @@ export function DevicesPage() {
   const openDevice = devices.find((device) => device.id === openId) ?? null;
   const filtersActive = hasActiveFilters(filters);
 
+  const managed = useManagedFamily('devices');
+
+  /**
+   * Catalogue row → its management item.
+   *
+   * The two halves are keyed differently — the catalogue by entity id, the
+   * management snapshot by canonical id — and the canonical id deliberately
+   * never reaches this client, so there is no id to join on. What both do carry
+   * is the bridge's own `canonical` name: `BridgeDevice.name` and
+   * `ManagedItem.label` are the same field from the same entry, not two
+   * renderings that happen to agree.
+   *
+   * A name is still weaker than an id, so a name shared by two switchable
+   * devices matches neither. A missing switch is a bad afternoon; the wrong
+   * light going off in a child's room is worse.
+   */
+  const managedByName = useMemo(() => {
+    const seen = new Map<string, ManagedItem | null>();
+    for (const item of managed.itemsById.values()) {
+      if (item.kind !== 'toggle') continue;
+      seen.set(item.label, seen.has(item.label) ? null : item);
+    }
+    return seen;
+  }, [managed.itemsById]);
+
+  const busy = managed.change.stage !== 'idle';
+
   return (
     <>
       <PageHeader title="מכשירים" description="הקטלוג של בובי, מסודר לפי חדרים." />
 
-      <ManagedSection resource="devices" title="שליטה">
-        {({ snapshot, request, writesEnabled }) => (
-          <ResourceEditor
-            snapshot={snapshot}
-            onChange={request}
-            writesEnabled={writesEnabled}
-            filter={(item) => String(item.detail.device_class ?? '') !== CAMERA_CLASS}
-            renderDetail={(item) => <ManagedDeviceDetail item={item} />}
-          />
-        )}
-      </ManagedSection>
-
-
       <div className="mb-4 space-y-3">
-        {/* Scope is a bridge parameter, so changing it refetches. */}
-        <div className="flex flex-wrap gap-2">
-          {DEVICE_SCOPES.map((value) => (
-            <Chip key={value} selected={scope === value} onClick={() => setScope(value)}>
-              {SCOPE_LABELS[value] ?? value}
-            </Chip>
-          ))}
+        {/*
+          Scope is a bridge parameter, so changing it refetches.
+
+          One scrolling row rather than a wrapped block: eleven scopes wrapped
+          onto three lines on a phone and pushed the devices themselves below
+          the fold. The negative margin lets the row bleed to the screen edge,
+          which is the cue that it scrolls.
+        */}
+        <div className="-mx-4 overflow-x-auto px-4 pb-1 lg:mx-0 lg:px-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="flex w-max gap-2">
+            {DEVICE_SCOPES.map((value) => (
+              <Chip key={value} selected={scope === value} onClick={() => setScope(value)}>
+                {SCOPE_LABELS[value] ?? value}
+              </Chip>
+            ))}
+          </div>
         </div>
 
         <div className="flex gap-2">
@@ -208,7 +301,7 @@ export function DevicesPage() {
             <Search
               aria-hidden="true"
               size={18}
-              className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
+              className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-slate-400"
             />
             <input
               type="search"
@@ -218,7 +311,7 @@ export function DevicesPage() {
               }
               placeholder="חיפוש לפי שם, חדר או כינוי…"
               aria-label="חיפוש מכשירים"
-              className="w-full rounded-xl border border-slate-300 bg-white py-2.5 pr-10 ps-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-bobi-500 focus:outline-none focus:ring-2 focus:ring-bobi-500/30 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+              className="w-full rounded-xl border border-slate-300 bg-white py-2.5 pe-3 ps-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-bobi-500 focus:outline-none focus:ring-2 focus:ring-bobi-500/30 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
             />
           </div>
           <Button
@@ -331,24 +424,26 @@ export function DevicesPage() {
               }
             />
           ) : (
-            <div className="space-y-7">
+            <div className="space-y-5">
               {grouped.map(([area, areaDevices]) => (
                 <section key={area} aria-labelledby={`area-${area}`}>
                   <h2
                     id={`area-${area}`}
-                    className="mb-3 flex items-baseline gap-2 text-sm font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500"
+                    className="mb-2 flex items-baseline gap-2 px-1 text-xs font-semibold tracking-wide text-slate-400 dark:text-slate-500"
                   >
                     {area}
-                    <span className="text-xs font-normal normal-case">
-                      ({areaDevices.length})
-                    </span>
+                    <span className="font-normal">({areaDevices.length})</span>
                   </h2>
-                  <ul className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+                  <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     {areaDevices.map((device) => (
                       <DeviceCard
                         key={device.id}
                         device={device}
+                        managed={managedByName.get(device.name) ?? undefined}
+                        writesEnabled={managed.writesEnabled}
+                        pending={busy}
                         onOpen={() => setOpenId(device.id)}
+                        onToggle={(item, next) => managed.request(item, next)}
                       />
                     ))}
                   </ul>
@@ -358,6 +453,26 @@ export function DevicesPage() {
           )
         }
       </QueryBoundary>
+
+      <ManagedSection resource="devices" title="הגדרות מכשירים">
+        {({ snapshot, request, writesEnabled }) => (
+          <ResourceEditor
+            snapshot={snapshot}
+            onChange={request}
+            writesEnabled={writesEnabled}
+            // On/off lives on the card now. What is left here is everything a
+            // switch cannot express — a target temperature, a fan mode, a
+            // brightness — so the section stopped being the same list twice.
+            filter={(item) =>
+              String(item.detail.device_class ?? '') !== CAMERA_CLASS && item.kind !== 'toggle'
+            }
+            renderDetail={(item) => <ManagedDeviceDetail item={item} />}
+            emptyLabel="אין כאן הגדרות נוספות."
+          />
+        )}
+      </ManagedSection>
+
+      <ChangeDialog change={managed.change} />
 
       {openDevice ? <DeviceDetail device={openDevice} onClose={() => setOpenId(null)} /> : null}
     </>
