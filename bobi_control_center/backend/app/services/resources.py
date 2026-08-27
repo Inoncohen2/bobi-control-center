@@ -180,6 +180,20 @@ VALUELESS_OPERATIONS = frozenset(
     }
 )
 
+#: The verbs a toggle's switch already stands for.
+#:
+#: `primary_operation` picks one of these for a toggle, and which one depends on
+#: the item's current value — an enabled automation names `disable`, a stopped
+#: vacuum names `start`. So excluding only the verb it picked would leave the
+#: other half of the same switch sitting beside it as a button: a switch that is
+#: on, and a "הפעלה" button that turns it on again.
+#:
+#: `power`, `start` and `stop` are all here for the same reason on a vacuum,
+#: whose on and off are two verbs rather than one verb and a value. What is left
+#: after these — pause, return to base, locate — is the part a switch genuinely
+#: cannot express.
+TOGGLE_VERBS = frozenset({"enable", "disable", "set", "power", "start", "stop"})
+
 #: Risk words, weakest first. The UI escalates its confirmation with the rank,
 #: and `read_only` never gets a write control at all.
 RISK_ORDER = ("read_only", "low", "medium", "high", "destructive")

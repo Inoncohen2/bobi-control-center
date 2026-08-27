@@ -204,14 +204,16 @@ function isOperable(item: ManagedItem, writesEnabled: boolean, role: Role | unde
 /**
  * The verbs this row can offer as a single button.
  *
- * Only for a row that has no editor: an item the bridge described well enough
- * to edit already has the control it needs, and adding "start", "pause",
- * "stop", "return to base" and "locate" beside a vacuum's switch would be five
- * more things to read on a phone rather than one more thing you can do.
+ * `item.run_operations` is the backend's answer to "which verbs did the control
+ * for this kind not already send" — a scene's `activate`, an automation's
+ * `trigger`, a vacuum's pause and locate. It is decided there because deciding
+ * it needs to know that a switch stands for six verbs at once, which is the
+ * bridge vocabulary this screen has never known and must not learn.
  *
- * Every condition fails closed, and the arity comes from the contract rather
- * than from a list of verbs kept here — this screen has never known what any
- * of them mean and must not start now.
+ * What is decided here is narrower, and it is a judgement rather than a fact:
+ * which of them this application is willing to put one tap away, and what to
+ * call them. `delete` takes no payload and still does not get a button; the
+ * words come from the contract.
  */
 function runnable(
   item: ManagedItem,
@@ -221,13 +223,7 @@ function runnable(
 ): ManagedOperation[] {
   if (!writesEnabled || !item.controllable || !allows(role, item.risk)) return [];
   return operations.filter(
-    (operation) =>
-      operation.valueless &&
-      // Taking no payload is a fact; putting it one tap away is a judgement,
-      // and this is where it is made. Deleting a thing is not a button on the
-      // thing's own row.
-      !operation.destructive &&
-      item.operations.includes(operation.id),
+    (operation) => !operation.destructive && item.run_operations.includes(operation.id),
   );
 }
 
@@ -259,8 +255,8 @@ export function ItemRow({
   // may not do this" are different sentences, and only one of them is about
   // the person reading it.
   const blockedByRole = writesEnabled && editable && item.controllable && !allows(role, item.risk);
-  // A scene, a script, a timer: nothing to edit, but something to run.
-  const runs = operable ? [] : runnable(item, operations, writesEnabled, role);
+  // A scene, a script, a timer, "run this automation now".
+  const runs = runnable(item, operations, writesEnabled, role);
 
   return (
     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -312,20 +308,19 @@ export function ItemRow({
         )}
       >
         {operable ? (
-          <ItemControl item={item} onChange={onChange} />
+          <div className={cn(runs.length > 0 && 'flex flex-wrap items-center gap-2 sm:justify-end')}>
+            <ItemControl item={item} onChange={onChange} />
+            {runs.map((operation) => (
+              <RunButton key={operation.id} item={item} operation={operation} onChange={onChange} />
+            ))}
+          </div>
         ) : runs.length > 0 ? (
           <div className="flex flex-wrap items-center gap-2 sm:justify-end">
             {item.display ? (
               <span className="text-sm text-slate-500 dark:text-slate-400">{item.display}</span>
             ) : null}
             {runs.map((operation) => (
-              <Button
-                key={operation.id}
-                variant="secondary"
-                onClick={() => onChange(item, true, operation.id)}
-              >
-                {operation.label}
-              </Button>
+              <RunButton key={operation.id} item={item} operation={operation} onChange={onChange} />
             ))}
           </div>
         ) : valueShownInDetail ? null : (
@@ -335,6 +330,23 @@ export function ItemRow({
         )}
       </div>
     </div>
+  );
+}
+
+/** One verb, as one button, under the word the contract gave it. */
+function RunButton({
+  item,
+  operation,
+  onChange,
+}: {
+  item: ManagedItem;
+  operation: ManagedOperation;
+  onChange: ResourceEditorProps['onChange'];
+}) {
+  return (
+    <Button variant="secondary" onClick={() => onChange(item, true, operation.id)}>
+      {operation.label}
+    </Button>
   );
 }
 

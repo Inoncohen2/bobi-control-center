@@ -4,6 +4,48 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.9.0
+
+The run buttons from 3.8.0, finished — and the screens where they were still
+missing because the decision was being made in the wrong place.
+
+### A vacuum had no controls at all
+
+The devices screen puts on/off on the card, so its settings section below
+filtered out every toggle to avoid saying the same thing twice. A vacuum is a
+toggle. It is also the one device that publishes pause, return-to-base and
+locate — none of which a switch can express, and all three of which that filter
+dropped. There was nowhere in the application to pause the vacuum.
+
+"A toggle" and "a toggle its card fully covers" are not the same set, and the
+screen had no way to tell them apart: a switch stands for `enable`, `disable`,
+`set`, `power`, `start` and `stop` at once, and which one it picked depends on
+whether the thing is currently on. That is bridge vocabulary, and it does not
+belong on a screen.
+
+So each item now carries `run_operations` — the verbs it has that the control
+for its kind does not already send — worked out by the backend beside
+`primary_operation`, which answers the neighbouring question. A screen renders
+them as buttons and applies its own judgement about which it will put one tap
+away; `delete` takes no payload and still does not get one.
+
+### The automations screen promised something it did not do
+
+Its own introduction says you can enable, disable, **run now** and rename from
+there. The switch covered the first two; "run now" went nowhere. Every
+automation row now carries "הרצת אוטומציה עכשיו" beside its switch — and it
+came out of the same change, rather than being added to that one screen.
+
+The helpers counter gained its increment, decrement and reset the same way.
+
+### Smaller
+
+- A script's and an automation's last run were timestamps
+  (`2026-08-26 06:45`); they now say how long ago.
+- `MockManagementBridge` has a vacuum. The house has one, and it is the busiest
+  row the live vocabulary can produce — so it was the row nobody had ever
+  looked at.
+
 ## 3.8.0
 
 The rest of the screens, read the same way — the twenty routes, photographed at

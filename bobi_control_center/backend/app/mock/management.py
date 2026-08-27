@@ -454,6 +454,21 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "capabilities": ["on_off", "temperature", "fan_mode", "swing_mode"],
                 "constraints": {"min": 16, "max": 30, "step": 1, "unit": "°"},
             },
+            # A vacuum, because this house has one and because it is the
+            # busiest row the live vocabulary can produce: a switch for its
+            # power and five verbs that take no payload at all. A double
+            # without one meant the row that carries the most controls was the
+            # one nobody had ever looked at.
+            {
+                "id": "vacuum",
+                "label": "שואב",
+                "kind": "toggle",
+                "value": False,
+                "controllable": True,
+                "operations": ["power", "start", "pause", "stop", "return_to_base", "locate"],
+                "device_class": "vacuum",
+                "capabilities": ["on_off", "start", "pause", "stop", "return_home"],
+            },
             {
                 "id": "cam_lia",
                 "label": "מצלמת ליה",

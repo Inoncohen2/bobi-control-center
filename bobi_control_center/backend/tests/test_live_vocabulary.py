@@ -655,3 +655,54 @@ async def test_the_contract_says_which_verbs_take_no_payload() -> None:
 def test_a_verb_nobody_classified_is_assumed_to_need_a_value() -> None:
     """Fail closed: an unclassified verb gets no one-tap button."""
     assert ManagedOperation(id="frobnicate", label="פ").valueless is False
+
+
+# --- what the control for a kind does not already send -----------------------
+async def test_a_vacuum_keeps_the_verbs_its_switch_cannot_express() -> None:
+    """The busiest row the live vocabulary produces.
+
+    A vacuum publishes a switch and five verbs that take no payload. Four of
+    those — power, start, stop, and whichever of them the switch picked — are
+    the switch. Pause, return-to-base and locate are not, and they are the ones
+    a screen has to offer or lose.
+    """
+    snapshot = await service().resource_snapshot("devices")
+    vacuum = next(item for item in snapshot.items if item.id == "vacuum")
+
+    assert vacuum.kind == "toggle"
+    assert vacuum.primary_operation == "power"
+    assert vacuum.run_operations == ["pause", "return_to_base", "locate"]
+
+
+async def test_a_switch_leaves_no_button_that_would_repeat_it() -> None:
+    """Both halves of a switch, not just the half it happens to be showing.
+
+    `primary_operation` picks `disable` for an enabled automation and `enable`
+    for a disabled one. Excluding only what it picked would leave the other
+    half beside it as a button: a switch that is on, and an "enable" button.
+    """
+    snapshot = await service().resource_snapshot("automations")
+    enabled = next(item for item in snapshot.items if item.value is True)
+    disabled = next(item for item in snapshot.items if item.value is False)
+
+    assert enabled.primary_operation == "disable"
+    assert enabled.run_operations == ["trigger"]
+    assert disabled.primary_operation == "enable"
+    assert disabled.run_operations == ["trigger"]
+
+
+async def test_a_reading_keeps_every_verb_because_nothing_else_sends_one() -> None:
+    scenes = await service().resource_snapshot("scenes")
+    scene = scenes.items[0]
+
+    assert scene.kind == "readonly"
+    assert scene.run_operations == ["activate"]
+
+
+async def test_an_item_the_bridge_locked_gets_no_run_verbs() -> None:
+    """Fail closed here too: `controllable: false` empties the list."""
+    cameras = await service().resource_snapshot("devices")
+    camera = next(item for item in cameras.items if item.id == "cam_lia")
+
+    assert camera.controllable is False
+    assert camera.run_operations == []

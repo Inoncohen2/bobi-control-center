@@ -588,6 +588,7 @@ export function makeManagedItem(overrides: Partial<ManagedItem> = {}): ManagedIt
     controllable: true,
     operations: ['set'],
     primary_operation: 'set',
+    run_operations: [],
     options: [],
     constraints: null,
     unavailable_reason: null,

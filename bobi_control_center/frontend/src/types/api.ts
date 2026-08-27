@@ -623,6 +623,14 @@ export interface ManagedItem {
    * there is nothing to operate.
    */
   primary_operation: string | null;
+  /**
+   * The verbs on this item that are a whole request on their own and that the
+   * control for its `kind` does not already send — a scene's `activate`, an
+   * automation's `trigger`, a vacuum's `pause`. Worked out by the backend,
+   * which is the side that knows a switch stands for `enable`, `disable`,
+   * `set`, `power`, `start` and `stop` at once.
+   */
+  run_operations: string[];
   options: ManagedOption[];
   constraints: ManagedConstraints | null;
   unavailable_reason: string | null;

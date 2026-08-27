@@ -31,7 +31,13 @@ from app.models.manage import (
     ResourceSnapshot,
 )
 from app.services import normalize
-from app.services.resources import DEVICE_SWITCH_OPERATIONS, humanise, mask_phone
+from app.services.resources import (
+    DEVICE_SWITCH_OPERATIONS,
+    TOGGLE_VERBS,
+    VALUELESS_OPERATIONS,
+    humanise,
+    mask_phone,
+)
 
 #: `domain.object_id` — a Home Assistant entity id. Matched on the value as
 #: well as the key, because a bridge could hand one over under any name.
@@ -325,6 +331,41 @@ def primary_operation(kind: str, value: Any, operations: list[str]) -> str | Non
     return operations[0]
 
 
+def run_operations(kind: str, operations: list[str], primary: str | None) -> list[str]:
+    """The verbs left over once the control for `kind` has had its own.
+
+    A screen draws one control per item, and that control sends one verb. Every
+    other verb the bridge named on the item is unreachable unless something
+    offers it — which is how the scenes screen came to have no way of
+    activating a scene, and how a vacuum's pause, return-to-base and locate
+    went nowhere at all.
+
+    What is "left over" depends on the control:
+
+    * a `readonly` row has no control, so nothing is taken and every verb that
+      is a whole request stays on offer;
+    * a `toggle` is a switch, and a switch stands for the whole of
+      `TOGGLE_VERBS` at once — not just the one `primary_operation` picked,
+      which changes with the item's value;
+    * everything else — a field, a chip list, an action button — sends exactly
+      `primary_operation`.
+
+    Verbs that need a payload never appear here whatever the kind: `rename` is
+    not a button, because a button has no name to give it.
+    """
+    if kind == "readonly":
+        taken: set[str] = set()
+    elif kind == "toggle":
+        taken = set(TOGGLE_VERBS)
+    else:
+        taken = {primary} if primary else set()
+    return [
+        operation
+        for operation in operations
+        if operation in VALUELESS_OPERATIONS and operation not in taken
+    ]
+
+
 def _item(payload: dict[str, Any], *, default_group: str | None = None) -> ManagedItem | None:
     identifier = normalize._text(normalize._first(payload, "id", "key"))
     if identifier is None:
@@ -342,6 +383,7 @@ def _item(payload: dict[str, Any], *, default_group: str | None = None) -> Manag
     # said it is, and an item with nothing to do to it cannot be operated.
     controllable = bool(normalize._bool(payload.get("controllable"))) and bool(operations)
 
+    primary = primary_operation(kind, value, operations) if controllable else None
     constraints = _constraints(payload)
     item = ManagedItem(
         id=identifier,
@@ -353,7 +395,8 @@ def _item(payload: dict[str, Any], *, default_group: str | None = None) -> Manag
         risk=normalize._text(payload.get("risk")) or ("low" if controllable else "read_only"),
         controllable=controllable,
         operations=operations,
-        primary_operation=primary_operation(kind, value, operations) if controllable else None,
+        primary_operation=primary,
+        run_operations=run_operations(kind, operations, primary) if controllable else [],
         options=options,
         constraints=constraints,
         unavailable_reason=normalize._text(

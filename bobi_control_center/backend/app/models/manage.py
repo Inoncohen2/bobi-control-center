@@ -454,6 +454,22 @@ class ManagedItem(CanonicalModel):
     #: So it is decided once, here, rather than guessed by every component that
     #: draws a control. `None` means there is nothing to operate.
     primary_operation: str | None = None
+    #: The verbs on this item that are a whole request on their own, and that
+    #: no control drawn for `kind` already sends.
+    #:
+    #: `primary_operation` answers "what does the editor send"; this answers
+    #: "what is left over". They are different questions and the second one was
+    #: not being asked: a scene arrived with `activate` named on it and no value
+    #: to edit, so nothing was drawn at all, and an automation's switch covered
+    #: `enable`/`disable` while "run it now" quietly went nowhere.
+    #:
+    #: Decided here for the same reason as `primary_operation` — the rule needs
+    #: to know that a toggle's switch stands for `enable`, `disable`, `set`,
+    #: `power`, `start` and `stop` at once, and that is this module's knowledge,
+    #: not a screen's. A screen renders these as buttons, labelled from the
+    #: contract, and applies its own judgement about which it is willing to put
+    #: one tap away — `delete` takes no payload and still does not get one.
+    run_operations: list[str] = Field(default_factory=list)
     options: list[ManagedOption] = Field(default_factory=list)
     constraints: ManagedConstraints | None = None
     #: Hebrew — why this item cannot be operated right now.

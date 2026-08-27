@@ -463,8 +463,15 @@ export function DevicesPage() {
             // On/off lives on the card now. What is left here is everything a
             // switch cannot express — a target temperature, a fan mode, a
             // brightness — so the section stopped being the same list twice.
+            //
+            // "A toggle is fully covered by its card" is not the same as "a
+            // toggle": a vacuum publishes a switch *and* pause, return-to-base
+            // and locate, and dropping every toggle dropped all four. The
+            // backend already says which verbs a switch does not stand for, so
+            // a row is a duplicate only when that list is empty.
             filter={(item) =>
-              String(item.detail.device_class ?? '') !== CAMERA_CLASS && item.kind !== 'toggle'
+              String(item.detail.device_class ?? '') !== CAMERA_CLASS &&
+              (item.kind !== 'toggle' || item.run_operations.length > 0)
             }
             renderDetail={(item) => <ManagedDeviceDetail item={item} />}
             emptyLabel="אין כאן הגדרות נוספות."

@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { ManagedResourcePage } from '@/features/manage/ManagedResourcePage';
 import { ResourceEditor } from '@/features/manage/ResourceEditor';
+import { timeAgo } from '@/utils/format';
 import type { ManagedItem } from '@/types/api';
 
 const MODE_LABELS: Record<string, string> = {
@@ -31,9 +32,7 @@ function AutomationDetail({ item }: { item: ManagedItem }) {
       {mode ? <Badge tone="neutral">{MODE_LABELS[mode] ?? mode}</Badge> : null}
       {typeof area === 'string' && area ? <Badge tone="info">{area}</Badge> : null}
       <Badge tone="muted">
-        {typeof last === 'string' && last
-          ? `רצה לאחרונה: ${last.replace('T', ' ').slice(0, 16)}`
-          : 'עדיין לא רצה'}
+        {typeof last === 'string' && last ? `רצה ${timeAgo(last)}` : 'עדיין לא רצה'}
       </Badge>
     </div>
   );
