@@ -3,7 +3,6 @@ import { Lock, PlugZap } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { ReadOnlyNotice } from '@/components/ui/ReadOnly';
 import { QueryBoundary } from '@/components/state/QueryBoundary';
 import { useTheme, type ThemeChoice } from '@/hooks/useTheme';
 import { useAudit, useConnection, useManagementContract, useStatus } from '@/hooks/queries';
@@ -55,10 +54,6 @@ export function SettingsPage() {
     <>
       <PageHeader title="הגדרות" description="איך היישום מחובר ומה מצבו." />
 
-      <ReadOnlyNotice className="mb-4">
-        שינוי הגדרות של בובי יהיה זמין בשלב הבא. ניהול משימות ותכונות נפתח כשהוא
-        מופעל ב-Home Assistant.
-      </ReadOnlyNotice>
 
       <div className="space-y-4">
         <QueryBoundary

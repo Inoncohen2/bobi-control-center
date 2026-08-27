@@ -4,7 +4,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { AdvancedDisclosure, TechnicalDetails } from '@/components/ui/Advanced';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { DisabledAction, ReadOnlyNotice } from '@/components/ui/ReadOnly';
+import { DisabledAction } from '@/components/ui/ReadOnly';
 import { EmptyState, QueryBoundary } from '@/components/state/QueryBoundary';
 import { useRules } from '@/hooks/queries';
 import type { BridgeRule } from '@/types/api';
@@ -90,10 +90,6 @@ export function RulesPage() {
         title="כללים חכמים"
         description="הכללים הקנוניים של בובי — לא אוטומציות גולמיות של Home Assistant."
       />
-
-      <ReadOnlyNotice className="mb-4">
-        הכללים מוצגים לקריאה בלבד. יצירה, עריכה ומחיקה יהיו זמינות בשלב הבא.
-      </ReadOnlyNotice>
 
       <QueryBoundary
         isLoading={query.isLoading}

@@ -72,12 +72,15 @@ describe('DashboardPage', () => {
     expect(screen.getByText('עיבוד תמונות')).toBeInTheDocument();
   });
 
-  it('offers no way to change a feature toggle', async () => {
+  it('summarises the feature toggles and says where they are changed', async () => {
     vi.stubGlobal('fetch', mockApi(ALL_ROUTES));
     renderWithProviders(<DashboardPage />);
 
     await screen.findByText('שעון שבת');
-    expect(screen.getByText('עריכה תהיה זמינה בשלב הבא')).toBeInTheDocument();
+    // The dashboard reports; it does not operate. It used to say editing was
+    // coming in a later phase, which sent people away from a control that
+    // already existed on the settings screen.
+    expect(screen.getByText('להפעלה או כיבוי: מסך ההגדרות')).toBeInTheDocument();
     expect(screen.queryByRole('switch')).not.toBeInTheDocument();
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
   });
@@ -304,9 +307,9 @@ describe('CapabilitiesPage', () => {
     renderWithProviders(<CapabilitiesPage />);
 
     expect(await screen.findByText('מתגים ראשיים')).toBeInTheDocument();
-    // Not a switch: nothing on this page is interactive in Phase 2.
+    // Not a switch: this catalogue lists, it does not operate.
     expect(screen.queryByRole('switch')).not.toBeInTheDocument();
-    expect(screen.getAllByText('עריכה תהיה זמינה בשלב הבא').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('לעריכה: קטע "שליטה" בעמוד הזה').length).toBeGreaterThan(0);
   });
 });
 
@@ -326,7 +329,7 @@ describe('RulesPage', () => {
     renderWithProviders(<RulesPage />);
 
     await screen.findByText('אור מטבח בערב');
-    const editButtons = screen.getAllByTitle('עריכה תהיה זמינה בשלב הבא');
+    const editButtons = screen.getAllByTitle('לעריכה: קטע "שליטה" בעמוד הזה');
     expect(editButtons.length).toBeGreaterThan(0);
     editButtons.forEach((button) => expect(button).toBeDisabled());
   });
@@ -404,11 +407,7 @@ describe('ShabbatPage', () => {
     renderWithProviders(<ShabbatPage />);
 
     await screen.findByText('18:52');
-    expect(
-      screen.getByText(/מסך שעון השבת מציג את ההגדרות הקיימות/),
-    ).toBeInTheDocument();
-
-    const edit = screen.getByTitle('עריכה תהיה זמינה בשלב הבא');
+    const edit = screen.getByTitle('לעריכה: קטע "שליטה" בעמוד הזה');
     expect(edit).toBeDisabled();
 
     for (const button of screen.getAllByRole('button')) {

@@ -8,7 +8,6 @@ import { Chip } from '@/components/ui/Field';
 import { AdvancedDisclosure, TechnicalDetails } from '@/components/ui/Advanced';
 import { Modal } from '@/components/ui/Modal';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { ReadOnlyNotice } from '@/components/ui/ReadOnly';
 import { EmptyState, QueryBoundary } from '@/components/state/QueryBoundary';
 import { useDevices } from '@/hooks/queries';
 import {
@@ -181,9 +180,18 @@ export function DevicesPage() {
     <>
       <PageHeader title="מכשירים" description="הקטלוג של בובי, מסודר לפי חדרים." />
 
-      <ReadOnlyNotice className="mb-4">
-        שליטה במכשירים מהממשק תהיה זמינה בשלב הבא. כרגע זו תצוגה בלבד.
-      </ReadOnlyNotice>
+      <ManagedSection resource="devices" title="שליטה">
+        {({ snapshot, request, writesEnabled }) => (
+          <ResourceEditor
+            snapshot={snapshot}
+            onChange={request}
+            writesEnabled={writesEnabled}
+            filter={(item) => String(item.detail.device_class ?? '') !== CAMERA_CLASS}
+            renderDetail={(item) => <ManagedDeviceDetail item={item} />}
+          />
+        )}
+      </ManagedSection>
+
 
       <div className="mb-4 space-y-3">
         {/* Scope is a bridge parameter, so changing it refetches. */}
@@ -350,18 +358,6 @@ export function DevicesPage() {
           )
         }
       </QueryBoundary>
-
-      <ManagedSection resource="devices" title="שליטה">
-        {({ snapshot, request, writesEnabled }) => (
-          <ResourceEditor
-            snapshot={snapshot}
-            onChange={request}
-            writesEnabled={writesEnabled}
-            filter={(item) => String(item.detail.device_class ?? '') !== CAMERA_CLASS}
-            renderDetail={(item) => <ManagedDeviceDetail item={item} />}
-          />
-        )}
-      </ManagedSection>
 
       {openDevice ? <DeviceDetail device={openDevice} onClose={() => setOpenId(null)} /> : null}
     </>

@@ -4,6 +4,38 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.5.1
+
+Five screens were telling people not to look for controls that were already
+there.
+
+The devices screen carried a banner reading *"שליטה במכשירים מהממשק תהיה זמינה
+בשלב הבא. כרגע זו תצוגה בלבד"* — written in Phase 2, true then — while a live
+`ManagedSection`, wired to the contract and to `bobi_cc_device_commit`, sat at
+the very bottom of the same page, below the whole nineteen-card catalogue. A
+person opened the page, read the first thing on it, and stopped. So did I:
+every claim I made about devices being controllable was true of the API and
+false of the screen.
+
+Rules, the Shabbat clock, users and settings had the same banner over the same
+working section. The dashboard's feature card said editing was coming in a
+later phase; those toggles have been writable since 2.2.0.
+
+- **The banners are gone.** The managed section states its own status from the
+  contract — *"קריאה בלבד"* when a family has no commit bridge, *"ניהול עדיין
+  לא הופעל"* when the master switch is off — and a sentence hard-coded beside
+  it can only contradict it. That is the failure this architecture exists to
+  prevent, and it had been sitting in the five oldest screens the whole time.
+- **On the devices screen the controls come first**, above the catalogue.
+- **An inert catalogue row now says where the working control is** rather than
+  promising a phase that has arrived.
+- Two architecture tests hold the line: no screen with a `ManagedSection` may
+  carry a screen-wide read-only banner, and the shared label must point at a
+  control rather than at a future.
+
+One "next stage" survives, on the Shabbat drafts card, because it is still
+true: nothing bridges draft management.
+
 ## 3.5.0
 
 The five bridges that were missing — and the two that turned out to be

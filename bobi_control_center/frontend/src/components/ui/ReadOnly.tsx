@@ -1,9 +1,15 @@
 /**
- * Phase 2 read-only affordances.
+ * Read-only affordances for the Phase 2 catalogue rows.
  *
- * Every control that will eventually write is rendered through one of these, so
- * the reason it is inert is stated on screen rather than left for the user to
+ * Every control that does not write is rendered through one of these, so the
+ * reason it is inert is stated on screen rather than left for the user to
  * discover by clicking.
+ *
+ * The wording used to promise a later phase. That phase arrived: these screens
+ * now carry a live "שליטה" section driven by the management contract, and a row
+ * saying editing comes later while a working control sits on the same page is
+ * worse than no label at all — it is the screen telling a person not to bother
+ * scrolling. The label points at the real control instead.
  */
 
 import type { ReactNode } from 'react';
@@ -11,12 +17,12 @@ import { Eye, Lock } from 'lucide-react';
 
 import { cn } from '@/utils/cn';
 
-/** The standard Phase 2 wording for a control that is not wired up yet. */
-export const NEXT_PHASE_LABEL = 'עריכה תהיה זמינה בשלב הבא';
+/** Where the working control actually is, for a catalogue row that has none. */
+export const NEXT_PHASE_LABEL = 'לעריכה: קטע "שליטה" בעמוד הזה';
 
 /** A banner explaining that a whole screen is view-only. */
 export function ReadOnlyNotice({
-  children = 'המסך הזה מציג נתונים בלבד. עריכה תהיה זמינה בשלב הבא.',
+  children = 'הרשימה הזו מציגה נתונים. השינויים נעשים בקטע "שליטה" בעמוד.',
   className,
 }: {
   children?: ReactNode;
@@ -86,7 +92,7 @@ export function DisabledAction({
   );
 }
 
-/** Read-only rendering of a master toggle. Never interactive in Phase 2. */
+/** Read-only rendering of a master toggle in a catalogue row. */
 export function ReadOnlyToggle({
   on,
   label,

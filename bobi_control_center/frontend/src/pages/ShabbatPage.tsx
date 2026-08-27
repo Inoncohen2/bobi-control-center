@@ -4,7 +4,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Card, SectionTitle } from '@/components/ui/Card';
 import { AdvancedDisclosure, TechnicalDetails } from '@/components/ui/Advanced';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { DisabledAction, ReadOnlyNotice } from '@/components/ui/ReadOnly';
+import { DisabledAction } from '@/components/ui/ReadOnly';
 import { EmptyState, QueryBoundary } from '@/components/state/QueryBoundary';
 import { useShabbat } from '@/hooks/queries';
 import type { ShabbatProfile } from '@/types/api';
@@ -88,10 +88,6 @@ export function ShabbatPage() {
         title="שעון שבת"
         description="זמני השבת והפרופילים שבובי מפעיל סביבם."
       />
-
-      <ReadOnlyNotice className="mb-4">
-        מסך שעון השבת מציג את ההגדרות הקיימות. שמירת שינויים תהיה זמינה בשלב הבא.
-      </ReadOnlyNotice>
 
       <QueryBoundary
         isLoading={query.isLoading}

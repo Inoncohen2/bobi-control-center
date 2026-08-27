@@ -181,8 +181,11 @@ function FeaturesCard({ features }: { features: FeatureFlag[] }) {
           </li>
         ))}
       </ul>
+      {/* The dashboard summarises; the toggles themselves live on the settings
+          screen, and have since 2.2.0. Saying "coming in the next stage" here
+          told people not to go looking for a control that was already there. */}
       <p className="mt-2.5 text-xs text-slate-400 dark:text-slate-500">
-        עריכה תהיה זמינה בשלב הבא
+        להפעלה או כיבוי: מסך ההגדרות
       </p>
     </Card>
   );

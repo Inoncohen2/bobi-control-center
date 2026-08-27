@@ -511,10 +511,33 @@ def test_writes_disabled_is_shown_as_a_disabled_feature() -> None:
     assert "ErrorState" not in notice
 
 
-def test_frontend_marks_unfinished_writes() -> None:
-    """Every write control carries the Phase 2 wording."""
+def test_an_inert_control_says_where_the_working_one_is() -> None:
+    """A row that does not write must point at the control that does.
+
+    The wording used to promise a later phase, and that phase arrived: these
+    screens carry a live "שליטה" section driven by the contract. A row saying
+    editing comes later while a working control sits on the same page is worse
+    than no label — it tells a person not to bother scrolling, which is exactly
+    how a fully wired devices screen came to look like a catalogue.
+    """
     read_only = (FRONTEND_SRC / "components" / "ui" / "ReadOnly.tsx").read_text("utf-8")
-    assert "עריכה תהיה זמינה בשלב הבא" in read_only
+    assert "שליטה" in read_only
+    assert "בשלב הבא" not in read_only
+
+
+def test_no_screen_promises_a_later_phase_for_a_family_that_can_be_written() -> None:
+    """A hard-coded sentence that contradicts the contract is the one thing this
+    architecture exists to avoid: the bridge says what is possible, and a page
+    that asserts otherwise is wrong the day the bridge ships. Five screens said
+    "coming in the next stage" while carrying a working managed section
+    underneath, and a person reading the top of the page believed them."""
+    for name in ("DevicesPage", "RulesPage", "ShabbatPage", "UsersPage", "SettingsPage"):
+        page = (FRONTEND_SRC / "pages" / f"{name}.tsx").read_text("utf-8")
+        assert "ManagedSection" in page, name
+        # A banner over the whole screen is the claim that cannot be true here.
+        # One row of it still may be — the Shabbat drafts have no bridge and say
+        # so — so this is about the screen-wide notice, not the word.
+        assert "ReadOnlyNotice" not in page, name
 
 
 def test_test_center_has_no_execute_control() -> None:

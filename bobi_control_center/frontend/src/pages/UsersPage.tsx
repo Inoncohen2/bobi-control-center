@@ -3,7 +3,7 @@ import { Check, MessageCircle, Users, X } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { Card, SectionTitle } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { NextPhaseBadge, ReadOnlyNotice } from '@/components/ui/ReadOnly';
+import { NextPhaseBadge } from '@/components/ui/ReadOnly';
 import { EmptyState, QueryBoundary } from '@/components/state/QueryBoundary';
 import { useUsers } from '@/hooks/queries';
 import type { BridgeUser } from '@/types/api';
@@ -106,10 +106,6 @@ export function UsersPage() {
   return (
     <>
       <PageHeader title="משתמשים" description="מי בבית, ומה כל אחד רשאי לעשות עם בובי." />
-
-      <ReadOnlyNotice className="mb-4">
-        פרופילים והרשאות מוצגים לקריאה בלבד. שינוי הרשאות יהיה זמין בשלב הבא.
-      </ReadOnlyNotice>
 
       <QueryBoundary
         isLoading={query.isLoading}
