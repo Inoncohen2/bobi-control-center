@@ -108,7 +108,7 @@ describe('with no Home Assistant write bridge', () => {
               label: 'תכונות',
               available: true,
               detail: null,
-              operations: [{ id: 'set', label: 'הפעלה או כיבוי', destructive: false }],
+              operations: [{ id: 'set', label: 'הפעלה או כיבוי', destructive: false, valueless: false }],
               targets: [
                 { id: 'morning_auto', label: 'סיכום בוקר אוטומטי', risk: 'low', enabled: null },
               ],

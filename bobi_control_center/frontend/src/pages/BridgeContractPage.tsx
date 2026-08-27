@@ -15,6 +15,7 @@ import { CheckCircle2, CircleDashed, Copy } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 
 import { api } from '@/api/client';
+import { AdvancedDisclosure } from '@/components/ui/Advanced';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, SectionTitle } from '@/components/ui/Card';
@@ -245,42 +246,53 @@ function ServiceCard({
         </div>
       ) : null}
 
-      {service.inputs.length > 0 ? (
-        <div className="mt-4">
-          <p className="mb-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">קלט</p>
-          <FieldTable fields={service.inputs} />
-        </div>
-      ) : null}
+      {/*
+        The specification, folded away.
 
-      {service.outputs ? (
-        <div className="mt-4">
-          <p className="mb-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">פלט</p>
-          <pre
-            dir="ltr"
-            className="overflow-x-auto rounded-xl bg-slate-50 p-3 text-xs text-slate-700 dark:bg-slate-900/60 dark:text-slate-200"
-          >
-            {service.outputs}
-          </pre>
-        </div>
-      ) : null}
+        Thirty-three services printed in full made this page forty thousand
+        pixels tall — some fifty screens on a phone — which is not a reference
+        anyone reads, it is a document you scroll past. The header above stays
+        visible so the list can be scanned for the service you want; its
+        contract opens when you ask for it.
+      */}
+      <AdvancedDisclosure title="החוזה המלא">
+        {service.inputs.length > 0 ? (
+          <div>
+            <p className="mb-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">קלט</p>
+            <FieldTable fields={service.inputs} />
+          </div>
+        ) : null}
 
-      {service.validation.length > 0 ? (
-        <div className="mt-4">
-          <p className="mb-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">ולידציה</p>
-          <ul className="space-y-1 text-sm text-slate-600 dark:text-slate-300">
-            {service.validation.map((rule) => (
-              <li key={rule}>• {rule}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
+        {service.outputs ? (
+          <div className="mt-4">
+            <p className="mb-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">פלט</p>
+            <pre
+              dir="ltr"
+              className="overflow-x-auto rounded-xl bg-slate-50 p-3 text-xs text-slate-700 dark:bg-slate-900/60 dark:text-slate-200"
+            >
+              {service.outputs}
+            </pre>
+          </div>
+        ) : null}
 
-      {service.verification ? (
-        <div className="mt-4">
-          <p className="mb-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">אימות</p>
-          <p className="text-sm text-slate-600 dark:text-slate-300">{service.verification}</p>
-        </div>
-      ) : null}
+        {service.validation.length > 0 ? (
+          <div className="mt-4">
+            <p className="mb-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">ולידציה</p>
+            <ul className="space-y-1 text-sm text-slate-600 dark:text-slate-300">
+              {service.validation.map((rule) => (
+                <li key={rule}>• {rule}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        {service.verification ? (
+          <div className="mt-4">
+            <p className="mb-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">אימות</p>
+            <p className="text-sm text-slate-600 dark:text-slate-300">{service.verification}</p>
+          </div>
+        ) : null}
+      </AdvancedDisclosure>
     </Card>
   );
 }

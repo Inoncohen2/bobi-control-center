@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { ManagedResourcePage } from '@/features/manage/ManagedResourcePage';
 import { ResourceEditor } from '@/features/manage/ResourceEditor';
+import { DEVICE_CLASS_LABELS } from '@/utils/format';
 import type { ManagedItem } from '@/types/api';
 
 /** Hebrew for the capability tokens the bridge publishes. */
@@ -51,7 +52,9 @@ export function DeviceDetail({ item }: { item: ManagedItem }) {
 
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-      {deviceClass ? <Badge tone="info">{deviceClass}</Badge> : null}
+      {deviceClass ? (
+        <Badge tone="info">{DEVICE_CLASS_LABELS[deviceClass] ?? deviceClass}</Badge>
+      ) : null}
       {list.map((capability) => (
         <Badge key={capability} tone="neutral">
           {CAPABILITY_LABELS[capability] ?? capability}

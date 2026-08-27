@@ -116,6 +116,132 @@ describe('an item the bridge did not mark controllable', () => {
     expect(screen.queryByRole('switch')).not.toBeInTheDocument();
   });
 
+  // `readonly` is what the backend returns when it could not work out how an
+  // item is edited — an unrecognised kind becomes a reading rather than being
+  // passed through, so that nobody is offered a field the bridge never said it
+  // would accept. The screen used to fall through to a plain text box for it,
+  // which handed back exactly the thing that kind exists to prevent: a
+  // calendar event arrived `readonly` with `edit` advertised on it, and the
+  // row drew a box you could type anything into and a button that sent it.
+  it('renders a readonly kind as a reading, whatever the bridge advertised on it', async () => {
+    stub(
+      routes({
+        '/api/bobi/manage/settings/snapshot': makeResourceSnapshot({
+          items: [
+            makeManagedItem({
+              kind: 'readonly',
+              value: '2026-09-02T18:00:00',
+              display: '2026-09-02T18:00:00',
+              controllable: true,
+              operations: ['edit', 'delete'],
+              primary_operation: 'edit',
+            }),
+          ],
+        }),
+      }),
+    );
+    renderWithProviders(<SettingsManagePage />);
+
+    expect(await screen.findByText('סיכום בוקר אוטומטי')).toBeInTheDocument();
+    expect(screen.getByText('2026-09-02T18:00:00')).toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'בדוק שינוי' })).not.toBeInTheDocument();
+  });
+
+  // The other half of the same fix. A scene is a reading — there is no value
+  // to edit — but `activate` is a complete request on its own, and the scenes
+  // screen exists to activate scenes. So a row with no editor offers the verbs
+  // the contract marked as taking no payload, under the contract's own Hebrew
+  // label. Which verbs those are is never decided here.
+  it('offers a run button for a verb the contract said takes no payload', async () => {
+    stub(
+      routes({
+        '/api/bobi/manage/contract': makeManagementWith('settings', { writes_enabled: true }, [
+          { id: 'activate', label: 'הפעלת סצנה', destructive: false, valueless: true },
+          { id: 'rename', label: 'שינוי שם', destructive: false, valueless: false },
+          { id: 'delete', label: 'מחיקה', destructive: true, valueless: true },
+        ]),
+        '/api/bobi/manage/settings/snapshot': makeResourceSnapshot({
+          items: [
+            makeManagedItem({
+              kind: 'readonly',
+              value: 'ready',
+              display: 'מוכן',
+              controllable: true,
+              operations: ['activate', 'rename', 'delete'],
+              primary_operation: 'activate',
+            }),
+          ],
+        }),
+      }),
+    );
+    renderWithProviders(<SettingsManagePage />);
+
+    expect(await screen.findByRole('button', { name: 'הפעלת סצנה' })).toBeInTheDocument();
+    // A rename needs a name, so it is not a button…
+    expect(screen.queryByRole('button', { name: 'שינוי שם' })).not.toBeInTheDocument();
+    // …and deleting takes no payload but is still not one tap away.
+    expect(screen.queryByRole('button', { name: 'מחיקה' })).not.toBeInTheDocument();
+    // The state stays visible beside it.
+    expect(screen.getByText('מוכן')).toBeInTheDocument();
+  });
+
+  it('asks rather than acts when a run button is pressed', async () => {
+    const fetchMock = stub({
+      ...routes({
+        '/api/bobi/manage/contract': makeManagementWith('settings', { writes_enabled: true }, [
+          { id: 'activate', label: 'הפעלת סצנה', destructive: false, valueless: true },
+        ]),
+        '/api/bobi/manage/settings/snapshot': makeResourceSnapshot({
+          items: [
+            makeManagedItem({
+              kind: 'readonly',
+              value: 'ready',
+              display: 'מוכן',
+              controllable: true,
+              operations: ['activate'],
+              primary_operation: 'activate',
+            }),
+          ],
+        }),
+      }),
+    });
+    renderWithProviders(<SettingsManagePage />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'הפעלת סצנה' }));
+
+    await waitFor(() =>
+      expect(paths(fetchMock).some((path) => path.includes('/settings/preview'))).toBe(true),
+    );
+    expect(paths(fetchMock).some((path) => path.includes('/commit'))).toBe(false);
+  });
+
+  it('offers no run button while the master write switch is off', async () => {
+    stub(
+      routes({
+        '/api/bobi/manage/contract': makeManagementWith('settings', { writes_enabled: false }, [
+          { id: 'activate', label: 'הפעלת סצנה', destructive: false, valueless: true },
+        ]),
+        '/api/bobi/manage/settings/snapshot': makeResourceSnapshot({
+          items: [
+            makeManagedItem({
+              kind: 'readonly',
+              value: 'ready',
+              display: 'מוכן',
+              controllable: true,
+              operations: ['activate'],
+              primary_operation: 'activate',
+            }),
+          ],
+        }),
+      }),
+    );
+    renderWithProviders(<SettingsManagePage />);
+
+    await screen.findByText('סיכום בוקר אוטומטי');
+    expect(screen.queryByRole('button', { name: 'הפעלת סצנה' })).not.toBeInTheDocument();
+  });
+
   it('shows the reason the bridge gave for it being unavailable', async () => {
     stub(
       routes({
@@ -402,7 +528,7 @@ describe('the calendar', () => {
     // What the *API* serves, which is not quite what Home Assistant sent: the
     // backend translates the bridge's `add` into this application's `create`
     // before a screen ever sees it.
-    operations = [{ id: 'create', label: 'הוספת אירוע', destructive: false }],
+    operations = [{ id: 'create', label: 'הוספת אירוע', destructive: false, valueless: false }],
     targets = WRITABLE,
   ) => ({
     ...BASE,
@@ -501,7 +627,7 @@ describe('a device card', () => {
     ...BASE,
     '/api/bobi/devices': makeDevices(),
     '/api/bobi/manage/contract': makeManagementWith('devices', { writes_enabled: writes }, [
-      { id: 'power', label: 'הדלקה או כיבוי', destructive: false },
+      { id: 'power', label: 'הדלקה או כיבוי', destructive: false, valueless: false },
     ]),
     '/api/bobi/manage/devices/snapshot': makeResourceSnapshot({
       resource: 'devices',

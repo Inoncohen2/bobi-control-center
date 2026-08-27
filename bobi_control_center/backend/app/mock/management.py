@@ -32,7 +32,7 @@ from app.models.manage import (
     TaskSnapshot,
 )
 from app.services.resource_normalize import normalize_resource, unavailable
-from app.services.resources import SPECS
+from app.services.resources import SPECS, VALUELESS_OPERATIONS
 
 _OPEN = "needs_action"
 _COMPLETED = "completed"
@@ -384,14 +384,25 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
     },
     "calendar": {
         "available": True,
+        # Which calendars an event may be created in. The family's `create`
+        # is aimed at one of these, not at an event.
+        "targets": [
+            {"id": "user_1", "label": "ינון"},
+            {"id": "user_2", "label": "הודיה"},
+        ],
         "items": [
             {
                 "id": "evt_1",
                 "label": "פגישת הורים",
                 "kind": "readonly",
                 "value": "2026-09-02T18:00:00",
-                "controllable": True,
-                "operations": ["edit", "move", "delete"],
+                # An existing event carries no verb, and this double says so
+                # because the live bridge does. Home Assistant publishes no
+                # service that edits, moves or deletes a calendar event — that
+                # path is websocket-only — so advertising the three here made
+                # this double describe a system nobody could build.
+                "controllable": False,
+                "operations": [],
                 "user_id": "user_1",
                 "start": "2026-09-02T18:00:00",
                 "end": "2026-09-02T19:00:00",
@@ -661,9 +672,11 @@ class MockManagementBridge(ManagementBridge):
                     operations=[
                         ManagedOperation(id="add", label="הוספת משימה"),
                         ManagedOperation(id="edit", label="שינוי תוכן"),
-                        ManagedOperation(id="complete", label="סימון כבוצעה"),
-                        ManagedOperation(id="reopen", label="החזרה לפעילה"),
-                        ManagedOperation(id="delete", label="מחיקה", destructive=True),
+                        ManagedOperation(id="complete", label="סימון כבוצעה", valueless=True),
+                        ManagedOperation(id="reopen", label="החזרה לפעילה", valueless=True),
+                        ManagedOperation(
+                            id="delete", label="מחיקה", destructive=True, valueless=True
+                        ),
                     ],
                     targets=[
                         ManagedTarget(id=user_id, label=name)
@@ -700,8 +713,18 @@ class MockManagementBridge(ManagementBridge):
                                 id=operation,
                                 label=SPECS[resource].titles.get(operation, operation),
                                 destructive=operation in SPECS[resource].destructive,
+                                valueless=operation in VALUELESS_OPERATIONS,
                             )
                             for operation in SPECS[resource].operations
+                        ],
+                        # What a `create` may be aimed at — the live contract
+                        # publishes these for the families that have them, and
+                        # a screen with no targets offers no "add" form. The
+                        # calendar screen was blank here for exactly that
+                        # reason while the live bridge published two.
+                        targets=[
+                            ManagedTarget(id=target["id"], label=target.get("label"))
+                            for target in self.resources[resource].get("targets", [])
                         ],
                     )
                     for resource in self.resources

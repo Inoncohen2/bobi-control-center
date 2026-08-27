@@ -77,13 +77,16 @@ export function useManagedFamily(resource: ManagedResource): ManagedFamily {
  *
  * Fail closed on every count: the bridge has to have marked it controllable,
  * named an operation on it, and — unless it is an `action`, which holds no
- * value — reported a current value to bind a preview to.
+ * value — reported a current value to bind a preview to. A `readonly` kind is
+ * the backend saying it could not tell how the item is edited, so it gets no
+ * control here either, whatever else the bridge advertised on it.
  */
 export function operableWith(
   item: ManagedItem | undefined,
   writesEnabled: boolean,
 ): string | null {
   if (!item || !writesEnabled) return null;
+  if (item.kind === 'readonly') return null;
   if (!item.controllable || item.operations.length === 0) return null;
   if (item.kind !== 'action' && (item.value === null || item.value === undefined)) return null;
   return item.primary_operation ?? item.operations[0] ?? null;

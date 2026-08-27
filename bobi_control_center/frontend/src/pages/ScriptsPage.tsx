@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { ManagedResourcePage } from '@/features/manage/ManagedResourcePage';
 import { ResourceEditor } from '@/features/manage/ResourceEditor';
+import { timeAgo } from '@/utils/format';
 import type { ManagedItem } from '@/types/api';
 
 function ScriptDetail({ item }: { item: ManagedItem }) {
@@ -19,12 +20,16 @@ function ScriptDetail({ item }: { item: ManagedItem }) {
 
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+      {/* "רץ לאחרונה: 2026-08-25 23:10" was a timestamp, not an answer to the
+          question anyone asks about a script, which is whether it ran recently. */}
       <Badge tone="muted">
-        {typeof last === 'string' && last
-          ? `רץ לאחרונה: ${last.replace('T', ' ').slice(0, 16)}`
-          : 'עדיין לא רץ'}
+        {typeof last === 'string' && last ? `רץ ${timeAgo(last)}` : 'עדיין לא רץ'}
       </Badge>
-      {fields.length > 0 ? <Badge tone="info">{fields.length} פרמטרים</Badge> : null}
+      {fields.length > 0 ? (
+        <Badge tone="info">
+          {fields.length === 1 ? 'פרמטר אחד' : `${fields.length} פרמטרים`}
+        </Badge>
+      ) : null}
     </div>
   );
 }

@@ -29,13 +29,33 @@ const USER_LABELS: Record<string, string> = {
   user_2: 'משתמש 2',
 };
 
-function when(value: unknown): string | null {
-  return typeof value === 'string' && value ? value.replace('T', ' ').slice(0, 16) : null;
+const DAY = new Intl.DateTimeFormat('he-IL', { weekday: 'short', day: 'numeric', month: 'short' });
+
+/** The date as the household says it — "יום ד׳, 2 בספט׳", not `2026-09-02`. */
+function day(value: unknown): string | null {
+  if (typeof value !== 'string' || !value) return null;
+  const at = new Date(value);
+  return Number.isNaN(at.getTime()) ? null : DAY.format(at);
+}
+
+/**
+ * The hours, held left to right.
+ *
+ * "18:00 – 19:00" is entirely digits and neutrals, so inside a right-to-left
+ * line it resolves right to left and an evening meeting is displayed as ending
+ * before it starts. The isolate marks say "this run has its own direction" and
+ * cost nothing anywhere else.
+ */
+function hours(start: unknown, end: unknown): string | null {
+  const from = typeof start === 'string' ? start.slice(11, 16) : '';
+  if (!from) return null;
+  const to = typeof end === 'string' ? end.slice(11, 16) : '';
+  return `⁦${to ? `${from}–${to}` : from}⁩`;
 }
 
 function EventDetail({ item }: { item: ManagedItem }) {
-  const start = when(item.detail.start);
-  const end = when(item.detail.end);
+  const when = day(item.detail.start);
+  const span = hours(item.detail.start, item.detail.end);
   const owner = String(item.detail.user_id ?? '');
   const location = item.detail.location;
   const recurring = item.detail.recurring === true;
@@ -43,9 +63,8 @@ function EventDetail({ item }: { item: ManagedItem }) {
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
       {owner ? <Badge tone="info">{USER_LABELS[owner] ?? owner}</Badge> : null}
-      {start ? (
-        <Badge tone="neutral">{end ? `${start} – ${end.slice(-5)}` : start}</Badge>
-      ) : null}
+      {when ? <Badge tone="neutral">{when}</Badge> : null}
+      {span ? <Badge tone="neutral">{span}</Badge> : null}
       {typeof location === 'string' && location ? (
         <Badge tone="neutral">{location}</Badge>
       ) : null}
@@ -162,7 +181,7 @@ export function CalendarPage() {
     >
       {({ snapshot, request, requestNew, writesEnabled, targets, operations }) => (
         <div className="space-y-4">
-          {writesEnabled && operations.includes('create') && targets.length > 0 ? (
+          {writesEnabled && operations.some((operation) => operation.id === 'create') && targets.length > 0 ? (
             <NewEventForm targets={targets} onCreate={(payload) => requestNew('create', payload)} />
           ) : null}
           <ResourceEditor
@@ -170,6 +189,7 @@ export function CalendarPage() {
             onChange={request}
             writesEnabled={writesEnabled}
             renderDetail={(item) => <EventDetail item={item} />}
+            valueShownInDetail
             emptyLabel="אין אירועים קרובים."
           />
         </div>

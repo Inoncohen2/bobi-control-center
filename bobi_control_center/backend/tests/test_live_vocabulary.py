@@ -28,7 +28,12 @@ import pytest
 
 from app.errors import ValidationError
 from app.mock.management import PRIVATE_CANARY, MockManagementBridge
-from app.models.manage import CommitRequest, ObservedState, PreviewRequest
+from app.models.manage import (
+    CommitRequest,
+    ManagedOperation,
+    ObservedState,
+    PreviewRequest,
+)
 from app.services.manage import ManagementService
 from app.services.resources import DEVICE_OPERATIONS, SPECS
 from app.services.roles import Actor, Role
@@ -620,3 +625,33 @@ async def test_a_forbidden_system_action_is_still_refused() -> None:
 
     for action in ("restart", "core_restart", "supervisor_update", "backup_restore", "shell"):
         assert is_forbidden_system_action(action), action
+
+
+# --- which verbs a screen may put on a button -------------------------------
+async def test_the_contract_says_which_verbs_take_no_payload() -> None:
+    """A screen cannot tell `activate` from `rename` by looking at them.
+
+    Both arrive as an id and a Hebrew label, and only this side knows that one
+    of them is a complete request on its own. Publishing the arity is what lets
+    the scenes screen draw an "הפעלת סצנה" button without knowing what a scene
+    is — and what stopped it drawing a "שינוי שם" button that would send a
+    rename with no name in it.
+    """
+    status = await MockManagementBridge(writes_enabled=True).status()
+    verbs = {
+        resource.id: {operation.id: operation.valueless for operation in resource.operations}
+        for resource in status.resources
+    }
+
+    assert verbs["scenes"] == {"activate": True, "rename": False}
+    assert verbs["scripts"] == {"run": True, "rename": False}
+    assert verbs["automations"]["trigger"] is True
+    assert verbs["automations"]["rename"] is False
+    assert verbs["helpers"]["start"] is True
+    assert verbs["helpers"]["set"] is False
+    assert verbs["rules"]["edit"] is False
+
+
+def test_a_verb_nobody_classified_is_assumed_to_need_a_value() -> None:
+    """Fail closed: an unclassified verb gets no one-tap button."""
+    assert ManagedOperation(id="frobnicate", label="פ").valueless is False

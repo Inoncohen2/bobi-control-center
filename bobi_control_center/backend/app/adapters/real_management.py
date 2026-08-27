@@ -38,6 +38,7 @@ from app.services.resources import (
     RESOURCE_READ_SERVICES,
     RESOURCE_WRITE_SERVICES,
     SPECS,
+    VALUELESS_OPERATIONS,
     canonical_operation,
 )
 
@@ -471,6 +472,7 @@ def _task_resource(
                 id=name,
                 label=_TASK_OPERATION_LABELS.get(name, name),
                 destructive=name == "delete",
+                valueless=name in VALUELESS_OPERATIONS,
             )
             for name in operations
         ],
@@ -528,6 +530,7 @@ def _generic_resource(
                 id=operation,
                 label=spec.titles.get(operation, operation),
                 destructive=operation in spec.destructive,
+                valueless=operation in VALUELESS_OPERATIONS,
             )
             for operation in operations
         ],

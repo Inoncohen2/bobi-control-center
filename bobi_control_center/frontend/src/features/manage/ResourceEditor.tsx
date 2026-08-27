@@ -29,8 +29,14 @@ import { Card, CardHeader } from '@/components/ui/Card';
 import { Chip, SelectField, TextField } from '@/components/ui/Field';
 import { Switch } from '@/components/ui/Switch';
 import { allows, useRole } from '@/features/auth/useRole';
+import { useManagementContract } from '@/hooks/queries';
 import { cn } from '@/utils/cn';
-import type { ManagedGroup, ManagedItem, ResourceSnapshot } from '@/types/api';
+import type {
+  ManagedGroup,
+  ManagedItem,
+  ManagedOperation,
+  ResourceSnapshot,
+} from '@/types/api';
 import type { Role } from '@/features/auth/useRole';
 
 /** Hebrew for the risk words, for the badge beside a sensitive row. */
@@ -57,6 +63,15 @@ export interface ResourceEditorProps {
   /** Rendered under each row — a family's own extra detail. */
   renderDetail?: (item: ManagedItem) => React.ReactNode;
   /**
+   * The detail above already says what the value is, so do not print it twice.
+   *
+   * For the calendar, where an event's value is its start time and the detail
+   * renders that as "יום ד׳, 2 בספט׳" beside its hours. Printing the reading as
+   * well put `2026-09-02T18:00:00` under a line that had just said the same
+   * thing in Hebrew.
+   */
+  valueShownInDetail?: boolean;
+  /**
    * Never draw a control, whatever the bridge says about the items.
    *
    * For the camera screen. Switching a camera on from a web page is the one
@@ -74,9 +89,23 @@ export function ResourceEditor({
   writesEnabled,
   filter,
   renderDetail,
+  valueShownInDetail = false,
   readOnly = false,
   emptyLabel = 'אין כאן פריטים לניהול.',
 }: ResourceEditorProps) {
+  // Read here rather than passed in by each screen.
+  //
+  // What this needs from the contract is the one thing an item cannot say
+  // about itself: which of the verbs named on it are a complete request on
+  // their own, and what to call them in Hebrew. Eighteen screens render this
+  // component, and a prop that eighteen call sites have to remember is a prop
+  // seventeen of them will eventually be right about. The query is the same one
+  // the page above already made, so this costs a cache read.
+  const contract = useManagementContract();
+  const operations =
+    (contract.data?.resources ?? []).find((entry) => entry.id === snapshot.resource)
+      ?.operations ?? [];
+
   const groups = snapshot.groups
     .map((group) => ({ ...group, items: filter ? group.items.filter(filter) : group.items }))
     .filter((group) => group.items.length > 0);
@@ -97,7 +126,9 @@ export function ResourceEditor({
           group={group}
           onChange={onChange}
           writesEnabled={writesEnabled && !readOnly}
+          operations={operations}
           renderDetail={renderDetail}
+          valueShownInDetail={valueShownInDetail}
         />
       ))}
     </div>
@@ -108,12 +139,16 @@ function ResourceGroup({
   group,
   onChange,
   writesEnabled,
+  operations,
   renderDetail,
+  valueShownInDetail,
 }: {
   group: ManagedGroup;
   onChange: ResourceEditorProps['onChange'];
   writesEnabled: boolean;
+  operations?: ManagedOperation[];
   renderDetail?: ResourceEditorProps['renderDetail'];
+  valueShownInDetail?: boolean;
 }) {
   return (
     <Card>
@@ -125,7 +160,9 @@ function ResourceGroup({
               item={item}
               onChange={onChange}
               writesEnabled={writesEnabled}
+              operations={operations}
               renderDetail={renderDetail}
+              valueShownInDetail={valueShownInDetail}
             />
           </li>
         ))}
@@ -147,6 +184,13 @@ function isOperable(item: ManagedItem, writesEnabled: boolean, role: Role | unde
     writesEnabled &&
     item.controllable &&
     item.operations.length > 0 &&
+    // `readonly` is the backend saying it could not work out how this item is
+    // edited, and it is deliberate: an unrecognised kind becomes a reading
+    // rather than being passed through. Falling through to a text field undid
+    // that — a calendar event came back `readonly` with `edit` advertised on
+    // it, and the screen drew a box you could type anything into and a button
+    // that sent it as the event. Refusing here is what the kind already meant.
+    item.kind !== 'readonly' &&
     // A missing value means the bridge could not read the item, and writing
     // something it cannot read is writing against a preview bound to nothing.
     // An `action` is the exception, and the only one: a self-check has no
@@ -157,24 +201,66 @@ function isOperable(item: ManagedItem, writesEnabled: boolean, role: Role | unde
   );
 }
 
+/**
+ * The verbs this row can offer as a single button.
+ *
+ * Only for a row that has no editor: an item the bridge described well enough
+ * to edit already has the control it needs, and adding "start", "pause",
+ * "stop", "return to base" and "locate" beside a vacuum's switch would be five
+ * more things to read on a phone rather than one more thing you can do.
+ *
+ * Every condition fails closed, and the arity comes from the contract rather
+ * than from a list of verbs kept here — this screen has never known what any
+ * of them mean and must not start now.
+ */
+function runnable(
+  item: ManagedItem,
+  operations: ManagedOperation[],
+  writesEnabled: boolean,
+  role: Role | undefined,
+): ManagedOperation[] {
+  if (!writesEnabled || !item.controllable || !allows(role, item.risk)) return [];
+  return operations.filter(
+    (operation) =>
+      operation.valueless &&
+      // Taking no payload is a fact; putting it one tap away is a judgement,
+      // and this is where it is made. Deleting a thing is not a button on the
+      // thing's own row.
+      !operation.destructive &&
+      item.operations.includes(operation.id),
+  );
+}
+
 export function ItemRow({
   item,
   onChange,
   writesEnabled,
+  operations = [],
   renderDetail,
+  valueShownInDetail = false,
 }: {
   item: ManagedItem;
   onChange: ResourceEditorProps['onChange'];
   writesEnabled: boolean;
+  operations?: ManagedOperation[];
   renderDetail?: ResourceEditorProps['renderDetail'];
+  valueShownInDetail?: boolean;
 }) {
   const { role } = useRole();
   const operable = isOperable(item, writesEnabled, role);
   const riskLabel = RISK_LABELS[item.risk];
+  // A reading is not a locked control, and neither the padlock nor the
+  // permission sentence belongs on one: nobody's role would unlock it and no
+  // bridge is withholding it — this application simply has no editor for the
+  // kind. Saying otherwise sends someone looking for permission they already
+  // have.
+  const editable = item.kind !== 'readonly';
   // Told apart on purpose: "the bridge will not let anyone do this" and "you
   // may not do this" are different sentences, and only one of them is about
   // the person reading it.
-  const blockedByRole = writesEnabled && item.controllable && !allows(role, item.risk);
+  const blockedByRole = writesEnabled && editable && item.controllable && !allows(role, item.risk);
+  // A scene, a script, a timer: nothing to edit, but something to run.
+  const runs = operable ? [] : runnable(item, operations, writesEnabled, role);
 
   return (
     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -186,14 +272,14 @@ export function ItemRow({
           {riskLabel ? (
             <Badge tone={RISK_TONES[item.risk] ?? 'warning'}>{riskLabel}</Badge>
           ) : null}
-          {!operable && item.controllable ? (
+          {!operable && runs.length === 0 && editable && item.controllable ? (
             <Lock aria-hidden className="h-3.5 w-3.5 text-slate-400" />
           ) : null}
         </div>
         {item.description ? (
           <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{item.description}</p>
         ) : null}
-        {!operable && item.unavailable_reason ? (
+        {!operable && editable && item.unavailable_reason ? (
           <p className="mt-0.5 text-xs text-amber-700 dark:text-amber-400">
             {item.unavailable_reason}
           </p>
@@ -206,10 +292,43 @@ export function ItemRow({
         {renderDetail?.(item)}
       </div>
 
-      <div className="w-full shrink-0 sm:w-56">
+      {/*
+        A switch is 52 pixels wide and was being given a full-width row of its
+        own on a phone, so every notification took two lines: its name, then a
+        switch alone under it. Only the controls that need the room get it.
+
+        Run buttons are the opposite case and must not be `shrink-0`: three of
+        them — start, pause and cancel a timer — asked for more width than the
+        phone had, could not shrink, and pushed the whole page 33 pixels wide.
+        Given the full row they wrap inside the card instead.
+      */}
+      <div
+        className={cn(
+          runs.length > 0
+            ? 'w-full min-w-0 sm:w-auto'
+            : item.kind === 'toggle' || item.kind === 'action'
+              ? 'w-auto shrink-0'
+              : 'w-full shrink-0 sm:w-56',
+        )}
+      >
         {operable ? (
           <ItemControl item={item} onChange={onChange} />
-        ) : (
+        ) : runs.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+            {item.display ? (
+              <span className="text-sm text-slate-500 dark:text-slate-400">{item.display}</span>
+            ) : null}
+            {runs.map((operation) => (
+              <Button
+                key={operation.id}
+                variant="secondary"
+                onClick={() => onChange(item, true, operation.id)}
+              >
+                {operation.label}
+              </Button>
+            ))}
+          </div>
+        ) : valueShownInDetail ? null : (
           <p className="text-sm text-slate-600 sm:text-end dark:text-slate-300">
             {item.display ?? '—'}
           </p>
@@ -387,7 +506,12 @@ function describeLimits(limits: ManagedItem['constraints']): string | undefined 
   const parts: string[] = [];
   if (limits.minimum !== null && limits.maximum !== null) {
     const unit = (limits.unit ?? '').trim();
-    parts.push(`${limits.minimum}–${limits.maximum}${unit ? ` ${unit}` : ''}`);
+    // Said in words rather than as "0–99". Two numbers either side of a dash
+    // are all neutral-or-LTR characters inside a right-to-left paragraph, so
+    // the line resolves right-to-left and a range of nought to ninety-nine is
+    // displayed as "99-0". Hebrew between the numbers fixes the order because
+    // it fixes the reason for the order.
+    parts.push(`מ־${limits.minimum} עד ${limits.maximum}${unit ? ` ${unit}` : ''}`);
   }
   if (limits.step) parts.push(`בקפיצות של ${limits.step}`);
   if (limits.max_length) parts.push(`עד ${limits.max_length} תווים`);

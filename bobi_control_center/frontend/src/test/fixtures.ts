@@ -457,11 +457,11 @@ export function makeManagementOn(
         available: true,
         detail: null,
         operations: [
-          { id: 'add', label: 'הוספת משימה', destructive: false },
-          { id: 'edit', label: 'שינוי תוכן', destructive: false },
-          { id: 'complete', label: 'סימון כבוצעה', destructive: false },
-          { id: 'reopen', label: 'החזרה לפעילה', destructive: false },
-          { id: 'delete', label: 'מחיקה', destructive: true },
+          { id: 'add', label: 'הוספת משימה', destructive: false, valueless: false },
+          { id: 'edit', label: 'שינוי תוכן', destructive: false, valueless: false },
+          { id: 'complete', label: 'סימון כבוצעה', destructive: false, valueless: true },
+          { id: 'reopen', label: 'החזרה לפעילה', destructive: false, valueless: true },
+          { id: 'delete', label: 'מחיקה', destructive: true, valueless: true },
         ],
         targets: [
           { id: 'user_1', label: 'ינון', risk: null, enabled: null },
@@ -473,7 +473,7 @@ export function makeManagementOn(
         label: 'תכונות',
         available: true,
         detail: null,
-        operations: [{ id: 'set', label: 'הפעלה או כיבוי', destructive: false }],
+        operations: [{ id: 'set', label: 'הפעלה או כיבוי', destructive: false, valueless: false }],
         targets: [
           { id: 'morning_auto', label: 'סיכום בוקר אוטומטי', risk: 'low', enabled: false },
           { id: 'home_status_auto', label: 'מצב הבית האוטומטי', risk: 'low', enabled: true },
@@ -616,8 +616,8 @@ export function makeResourceSnapshot(
 export function makeManagementWith(
   resource: string,
   overrides: Partial<ManagementStatus> = {},
-  operations: Array<{ id: string; label: string; destructive: boolean }> = [
-    { id: 'set', label: 'שינוי', destructive: false },
+  operations: ManagementStatus['resources'][number]['operations'] = [
+    { id: 'set', label: 'שינוי', destructive: false, valueless: false },
   ],
   targets: ManagementStatus['resources'][number]['targets'] = [],
 ): ManagementStatus {

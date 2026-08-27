@@ -4,6 +4,79 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.8.0
+
+The rest of the screens, read the same way — the twenty routes, photographed at
+iPhone size, checked for horizontal bleed, and read as Hebrew rather than
+scanned as layout.
+
+### A read-only kind was drawing an editable field
+
+The backend answers `readonly` when it cannot work out how an item is edited.
+It is a deliberate refusal: rendering an unknown kind as a text field would let
+someone type a value the bridge never said it would accept.
+
+The screen ignored it. `readonly` fell through to the same text box every other
+kind ends at, so a calendar event — which arrives `readonly`, because Home
+Assistant publishes no service that edits one — was drawn as a box holding
+`2026-09-02T18:00:00` and a button that would have sent whatever you typed as
+the event. The same box appeared on the scenes, scripts and system screens.
+
+A `readonly` item is now a reading, everywhere, whatever else was advertised on
+it, and there is a test that fails if it stops being one.
+
+### …and hiding the controls that should have been there
+
+The other half of the same bug. A scene is a reading — there is no value to
+edit — but `activate` is a complete request on its own, and the scenes screen
+exists to activate scenes. It offered no way to do it. Nor did the scripts
+screen, nor the timer on the helpers screen, nor "undo the last action" on the
+system screen.
+
+The contract now publishes, per operation, whether it takes a payload. A row
+with no editor offers a button for each verb that needs nothing else, under the
+contract's own Hebrew label — so the screen still knows nothing about scenes,
+scripts or timers. Verbs that need a value (`rename`, `set`) get no button, and
+neither does `delete`: taking no payload is a fact, and putting it one tap away
+is a judgement, made separately.
+
+### Words that were not Hebrew
+
+Home Assistant's vocabulary was reaching the screen untranslated, and nothing in
+the app knew those strings were words rather than data.
+
+- A scene read `ready`, a timer `idle`, the undo row `available`, a camera
+  `streaming`. Values the bridge sends without a display of its own are now
+  said in Hebrew, with anything unrecognised still passed through.
+- The faults screen put `device` and `sensor` on a chip beside each fault.
+- A device's class was printed as `camera`, `light`, `switch`.
+- A calendar event read `2026-09-02 18:00 – 19:00`; it now reads
+  "יום ד׳, 2 בספט׳" and "18:00–19:00", the hours held left-to-right so that an
+  evening meeting stops appearing to end before it starts.
+- A script's last run was a timestamp; it now says how long ago.
+- A counter's limits read "99-0" for the same right-to-left reason. Now
+  "מ־0 עד 99".
+
+### Layout
+
+- Every switch was making its row eight pixels wider than the card it sat in.
+  Nothing overflowed visibly — the hit area is invisible — but each card was
+  quietly able to scroll sideways. The hit area now grows only vertically,
+  which is the only direction that was ever short.
+- Three timer buttons on one row pushed the helpers screen 33 pixels wider than
+  the phone. Run buttons wrap inside the card now.
+- The bridge specification screen was 40,665 pixels long. Its full service
+  contracts are behind a disclosure; the page is a quarter of that.
+
+### The test double
+
+`MockManagementBridge` claimed a calendar event could be edited, moved and
+deleted. Home Assistant offers no service for any of the three — the live
+bridge advertises nothing on an event — so the double was describing a system
+nobody could build, and every test that used it was testing the wrong thing. It
+now says what the live bridge says, and publishes the calendars an event may be
+created in, which is the write that does exist.
+
 ## 3.7.0
 
 A pass over every screen with the screens open — fifteen of them, photographed

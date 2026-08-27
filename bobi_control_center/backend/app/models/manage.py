@@ -268,6 +268,10 @@ class ManagedOperation(CanonicalModel):
     id: str
     label: str
     destructive: bool = False
+    #: This verb takes no payload — running it is the whole request, so a screen
+    #: may offer it as a single button. One that needs a value may not. Defaults
+    #: to false so a verb nobody has classified is treated as needing one.
+    valueless: bool = False
 
 
 class ManagedTarget(CanonicalModel):

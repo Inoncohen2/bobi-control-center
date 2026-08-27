@@ -100,6 +100,33 @@ export const SCOPE_LABELS: Record<string, string> = {
   scent: 'ריח',
 };
 
+/**
+ * Home Assistant's device classes, in Hebrew.
+ *
+ * The class is Home Assistant's own word for what a thing is, and it was being
+ * printed on a chip beside the device's name: `camera` under "מצלמת ליה",
+ * `light` under "אור מטבח". A class this table does not know is shown as it
+ * came — an unfamiliar word still says something, and an empty chip does not.
+ */
+export const DEVICE_CLASS_LABELS: Record<string, string> = {
+  light: 'תאורה',
+  switch: 'שקע',
+  outlet: 'שקע',
+  camera: 'מצלמה',
+  climate: 'מיזוג',
+  fan: 'מאוורר',
+  vacuum: 'שואב',
+  lock: 'מנעול',
+  cover: 'תריס',
+  sensor: 'חיישן',
+  binary_sensor: 'חיישן',
+  media_player: 'נגן',
+  humidifier: 'מאדה',
+  water_heater: 'דוד',
+  speaker: 'רמקול',
+  scent: 'מפיץ ריח',
+};
+
 export const RISK_LABELS: Record<string, string> = {
   low: 'סיכון נמוך',
   medium: 'סיכון בינוני',

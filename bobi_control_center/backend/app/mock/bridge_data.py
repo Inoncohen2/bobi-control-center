@@ -242,7 +242,7 @@ def capabilities_payload() -> dict[str, Any]:
                           "local_after_parse": False, "risk": "low", "label": "התראות יזומות",
                           "example": "תודיע לי כשהכביסה נגמרת", "group": "תקשורת"},
         "ai_fallback": {"handler": "ai_handler", "local": False, "local_after_parse": True,
-                        "risk": "medium", "label": "AI fallback",
+                        "risk": "medium", "label": "בינה מלאכותית חופשית",
                         "example": "שאלה חופשית שבובי לא מזהה", "group": "בינה מלאכותית"},
         "vision": {"handler": "vision_handler", "local": False, "local_after_parse": False,
                    "risk": "high", "label": "עיבוד תמונות", "example": "מה רואים בתמונה הזו",
@@ -251,7 +251,7 @@ def capabilities_payload() -> dict[str, Any]:
     toggles = {
         "master_notifications": {"label": "התראות יזומות", "state": "on",
                                  "entity_id": "input_boolean.demo_notifications"},
-        "master_ai": {"label": "AI fallback", "state": "on",
+        "master_ai": {"label": "בינה מלאכותית חופשית", "state": "on",
                       "entity_id": "input_boolean.demo_ai"},
         "master_vision": {"label": "עיבוד תמונות", "state": "off",
                           "entity_id": "input_boolean.demo_vision"},

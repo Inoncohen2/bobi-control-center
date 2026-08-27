@@ -494,6 +494,13 @@ export interface ManagedOperation {
   id: string;
   label: string;
   destructive: boolean;
+  /**
+   * This verb takes no payload — running it is the whole request, so it can be
+   * offered as a single button. `activate` a scene, `run` a script, `trigger`
+   * an automation. A verb that needs a value (`set`, `rename`, `edit`) is
+   * false, and so is one the backend has not classified.
+   */
+  valueless: boolean;
 }
 
 /**

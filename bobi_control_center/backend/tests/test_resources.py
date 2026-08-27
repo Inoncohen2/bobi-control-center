@@ -427,11 +427,21 @@ async def test_a_calendar_event_carries_a_user_id_and_no_entity_id() -> None:
     assert "calendar." not in snapshot.model_dump_json()
 
 
-async def test_deleting_an_event_is_destructive() -> None:
+async def test_an_existing_event_carries_no_verb_at_all() -> None:
+    """Home Assistant publishes no service that changes a calendar event.
+
+    Creating one is a service call; editing, moving and deleting are websocket
+    operations a bridge script cannot reach. So the bridge advertises nothing
+    on an event, and asking anyway is refused before a preview exists rather
+    than previewed into a dialog nothing could carry out.
+    """
+    snapshot = await service().resource_snapshot("calendar")
+    assert snapshot.items[0].operations == []
+
     response = await preview(service(), "calendar", "delete", resource_id="evt_1")
 
-    assert response.destructive is True
-    assert response.confirm_word == "מחק"
+    assert response.would_execute is False
+    assert codes(response) == ["not_controllable"]
 
 
 # --- system -----------------------------------------------------------------

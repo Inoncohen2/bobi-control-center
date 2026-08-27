@@ -887,3 +887,57 @@ def test_every_normalizer_survives_an_empty_payload(normalizer) -> None:
 def test_every_normalizer_survives_a_junk_collection(normalizer) -> None:
     payload = dict.fromkeys(("entries", "devices", "registry", "users", "rules", "tasks", "issues", "checks", "profiles"), "not a collection")
     assert normalizer(payload) is not None
+
+
+# --- health, said in words -----------------------------------------------
+def test_a_boolean_health_flag_is_reported_as_a_sentence() -> None:
+    """`healthy: true` used to reach the dashboard as "הגשר דיווח: True".
+
+    A Python literal, in English, as the headline explanation of whether the
+    house is fine. The state it resolves to is right; only the sentence was
+    the bridge's internals leaking through.
+    """
+    from app.services.normalize import normalize_status
+
+    for value in (True, "true", "True", 1, "yes"):
+        status = normalize_status({"healthy": value})
+        assert status.health.ok is True, value
+        assert "True" not in (status.health.reason or ""), value
+        assert "true" not in (status.health.reason or "").lower(), value
+        assert status.health.reason == "הגשר דיווח שהכול תקין", value
+
+
+def test_an_unhealthy_boolean_says_so_too() -> None:
+    from app.services.normalize import normalize_status
+
+    status = normalize_status({"healthy": False})
+    assert status.health.ok is False
+    assert status.health.reason == "הגשר דיווח על תקלה"
+
+
+def test_a_real_word_from_the_bridge_still_comes_through() -> None:
+    """`degraded` carries something a yes/no does not, so it is not swallowed."""
+    from app.services.normalize import normalize_status
+
+    status = normalize_status({"healthy": "degraded"})
+    assert status.health.status == "degraded"
+    assert "degraded" in (status.health.reason or "")
+
+
+def test_an_issue_component_is_said_in_hebrew() -> None:
+    """The faults screen puts the component on a chip beside the headline.
+
+    The bridge names it in Home Assistant's vocabulary, so "סוללה חלשה בשלט
+    הסלון" arrived with `sensor` printed next to it — an English word on a
+    Hebrew screen, naming something the household never called that.
+    """
+    payload = {
+        "issues": [
+            {"id": "a", "title": "מצלמת הכניסה אינה זמינה", "component": "device"},
+            {"id": "b", "title": "סוללה חלשה בשלט הסלון", "component": "sensor"},
+            {"id": "c", "title": "משהו אחר", "component": "zigbee_coordinator"},
+        ]
+    }
+    issues = normalize.normalize_diagnostics(payload).issues
+
+    assert [issue.component for issue in issues] == ["מכשיר", "חיישן", "zigbee_coordinator"]

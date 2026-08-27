@@ -26,6 +26,7 @@ import { useManagedChange } from './useManagedChange';
 import { keys, useManagementContract, useResourceSnapshot } from '@/hooks/queries';
 import type {
   ManagedItem,
+  ManagedOperation,
   ManagedResource,
   ManagedTarget,
   ResourceSnapshot,
@@ -44,7 +45,7 @@ export interface ManagedRenderProps {
    * something reads these rather than hard-coding a list — the household that
    * gains a calendar or loses one needs no change here.
    */
-  operations: string[];
+  operations: ManagedOperation[];
   targets: ManagedTarget[];
 }
 
@@ -147,7 +148,7 @@ export function ManagedResourcePage({
                   request,
                   requestNew,
                   writesEnabled,
-                  operations: (declared?.operations ?? []).map((entry) => entry.id),
+                  operations: declared?.operations ?? [],
                   targets: declared?.targets ?? [],
                 })}
               </>

@@ -141,6 +141,45 @@ SCRIPT_OPERATIONS = ("run", "rename")
 SCENE_OPERATIONS = ("activate", "rename")
 SYSTEM_OPERATIONS = ("run",)
 
+#: Verbs that carry no payload — the thing they name *is* the whole request.
+#:
+#: "Activate the film-night scene" and "run the goodnight script" say everything
+#: there is to say; "rename it" and "set it to 22" do not, and a screen that
+#: offered those as a single button would be sending a change nobody described.
+#:
+#: The distinction is published in the contract because only this side knows it,
+#: and without it a screen has to guess. It guessed badly: a scene arrived as a
+#: reading with `activate` named on it, and the scenes screen — a screen whose
+#: entire purpose is activating scenes — offered no way to activate one. Naming
+#: the arity here lets a screen draw a button for the verbs that need nothing
+#: else, and keep its hands off the ones that do, without knowing what any of
+#: them mean.
+#:
+#: `delete` belongs here — it takes no payload — and it is still not something a
+#: screen should put a one-tap button on. That is a separate judgement, made
+#: where the button is drawn, from the fact recorded here.
+VALUELESS_OPERATIONS = frozenset(
+    {
+        "run",
+        "activate",
+        "trigger",
+        "start",
+        "pause",
+        "stop",
+        "cancel",
+        "reset",
+        "return_to_base",
+        "locate",
+        "increment",
+        "decrement",
+        "enable",
+        "disable",
+        "complete",
+        "reopen",
+        "delete",
+    }
+)
+
 #: Risk words, weakest first. The UI escalates its confirmation with the rank,
 #: and `read_only` never gets a write control at all.
 RISK_ORDER = ("read_only", "low", "medium", "high", "destructive")
@@ -461,6 +500,47 @@ def needs_confirm_word(risk: str | None, destructive: bool) -> bool:
 
 
 # --- values, rendered -------------------------------------------------------
+#: Home Assistant's own state words, in Hebrew.
+#:
+#: A bridge that publishes no `display` for an item leaves this side to render
+#: the value, and for anything that is not a number, a boolean or a published
+#: option that meant printing Home Assistant's word as it came: a scene read
+#: `ready`, a timer read `idle`, the undo row read `available`. Three English
+#: words in a Hebrew right-to-left panel, and nothing in the app knew they were
+#: words rather than data.
+#:
+#: These are the universal ones — the vocabulary Home Assistant uses for every
+#: integration rather than any single one's. A word that is not here still falls
+#: through to itself, which is the same honest failure as before: a value this
+#: table does not know is shown rather than hidden.
+_STATE_WORDS: dict[str, str] = {
+    "on": "פעיל",
+    "off": "כבוי",
+    "idle": "ממתין",
+    "active": "פעיל",
+    "paused": "מושהה",
+    "running": "רץ",
+    "ready": "מוכן",
+    "available": "זמין",
+    "unavailable": "לא זמין",
+    "unknown": "לא ידוע",
+    "open": "פתוח",
+    "closed": "סגור",
+    "opening": "נפתח",
+    "closing": "נסגר",
+    "locked": "נעול",
+    "unlocked": "פתוח",
+    "home": "בבית",
+    "not_home": "לא בבית",
+    "streaming": "משדרת",
+    "recording": "מקליטה",
+    "cleaning": "מנקה",
+    "docked": "בעמדה",
+    "returning": "חוזר לעמדה",
+    "error": "תקלה",
+}
+
+
 def humanise(value: Any, item: ManagedItem | None = None) -> str:
     """One canonical value as a person reads it.
 
@@ -483,7 +563,8 @@ def humanise(value: Any, item: ManagedItem | None = None) -> str:
         return _number(value)
     if isinstance(value, list):
         return "، ".join(str(part) for part in value) if value else "ריק"
-    return str(value)
+    text = str(value)
+    return _STATE_WORDS.get(text.strip().lower(), text)
 
 
 def _number(value: float) -> str:

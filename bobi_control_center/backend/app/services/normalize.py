@@ -255,6 +255,69 @@ def normalize_status(payload: Payload) -> BridgeStatus:
 
 
 #: Status words that answer "is Bobi healthy?", mapped to a canonical state.
+#: Values that say yes or no and nothing more. A bridge reporting
+#: `healthy: true` is not telling the household anything a sentence cannot.
+_BOOLISH = frozenset({"true", "false", "1", "0", "yes", "no", "on", "off"})
+
+
+def _health_reason(stated: Any, state: str) -> str:
+    """Why the house is in this state, in Hebrew.
+
+    This used to be `f"הגשר דיווח: {stated}"`, which put a Python literal —
+    `True`, in English — on the dashboard as the headline explanation of the
+    home's health. A boolean carries nothing a sentence does not, so it is
+    said as a sentence; a real word from the bridge (`degraded`, `offline`) is
+    still passed through, because that one does carry something.
+    """
+    word = str(stated).strip()
+    if isinstance(stated, bool) or word.lower() in _BOOLISH:
+        if state == "healthy":
+            return "הגשר דיווח שהכול תקין"
+        return "הגשר דיווח על תקלה" if state == "unhealthy" else "הגשר לא דיווח על מצב ברור"
+    return f"הגשר דיווח: {word}"
+
+
+#: What part of the house an issue is about, in Hebrew.
+#:
+#: The bridge names the component in its own words — `device`, `sensor`,
+#: `whatsapp` — and the faults screen prints it on a chip beside the headline.
+#: Two English words on a Hebrew screen, and both of them are Home Assistant's
+#: vocabulary rather than anything the household said. A component this table
+#: does not know is shown as it came: an unfamiliar word is still information,
+#: and hiding it would leave the chip empty for no gain.
+_COMPONENT_WORDS = {
+    "device": "מכשיר",
+    "devices": "מכשירים",
+    "sensor": "חיישן",
+    "sensors": "חיישנים",
+    "battery": "סוללה",
+    "camera": "מצלמה",
+    "cameras": "מצלמות",
+    "network": "רשת",
+    "config": "תצורה",
+    "configuration": "תצורה",
+    "automation": "אוטומציה",
+    "automations": "אוטומציות",
+    "script": "סקריפט",
+    "scripts": "סקריפטים",
+    "scene": "סצנה",
+    "scenes": "סצנות",
+    "calendar": "יומן",
+    "system": "מערכת",
+    "bridge": "גשר",
+    "integration": "אינטגרציה",
+    "storage": "אחסון",
+    "update": "עדכון",
+    "updates": "עדכונים",
+}
+
+
+def _component_word(stated: str | None) -> str | None:
+    if stated is None:
+        return None
+    return _COMPONENT_WORDS.get(stated.strip().lower(), stated)
+
+
 _HEALTH_WORDS = {
     "healthy": "healthy", "ok": "healthy", "true": "healthy", "up": "healthy",
     "working": "healthy", "online": "healthy", "running": "healthy",
@@ -310,7 +373,7 @@ def _health(
             return BridgeHealth(
                 status=state,
                 ok=True if state == "healthy" else False if state == "unhealthy" else None,
-                reason=f"הגשר דיווח: {stated}",
+                reason=_health_reason(stated, state),
             )
 
     # 2. Derived from the components, counting only explicit failures.
@@ -1455,7 +1518,7 @@ def _issue(item: Payload, index: int) -> BridgeIssue | None:
         severity=severity,
         title=title,
         message=message if message != title else None,
-        component=_text(item.get("component")),
+        component=_component_word(_text(item.get("component"))),
         code=_text(item.get("code")),
         entity_ids=entity_ids,
         suggested_action=_text(_first(item, "suggested_action", "action")),
