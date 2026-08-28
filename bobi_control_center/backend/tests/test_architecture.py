@@ -849,3 +849,35 @@ def test_every_fixed_name_shell_file_is_revalidated() -> None:
         "these shell files are pre-cached under a fixed name but not revalidated, "
         f"so a corrected copy can never reach an installed phone: {missing}"
     )
+
+
+def test_every_declared_arch_is_actually_published() -> None:
+    """The manifest's `image:` removes the Supervisor's local-build fallback.
+
+    Once `image:` exists the Supervisor only ever *pulls*. So an architecture
+    the manifest promises but the publish workflow never builds is not a slow
+    update — it is an app that cannot be installed on that platform at all, and
+    the failure appears on someone's Raspberry Pi rather than in CI.
+
+    This asserts the two lists agree. The workflow's own `verify` job then
+    checks the images are anonymously pullable, which is the part only the
+    registry can answer.
+    """
+    manifest = yaml.safe_load((APP_ROOT / "config.yaml").read_text("utf-8"))
+    workflow_path = REPO_ROOT / ".github" / "workflows" / "publish-image.yml"
+    if not workflow_path.is_file():
+        pytest.skip("publish workflow not present in this checkout")
+
+    image = manifest.get("image", "")
+    assert "{arch}" in image, (
+        "config.yaml's image: must carry the {arch} placeholder the Supervisor "
+        f"substitutes; got {image!r}"
+    )
+
+    published = set(re.findall(r"arch:\s*(\w+)", workflow_path.read_text("utf-8")))
+    missing = [arch for arch in manifest["arch"] if arch not in published]
+
+    assert not missing, (
+        "config.yaml promises these architectures but the publish workflow "
+        f"builds no image for them, so installing there would fail: {missing}"
+    )

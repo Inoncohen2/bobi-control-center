@@ -5,15 +5,31 @@
 # plus Preview -> confirmation -> Commit -> HA validation -> verification.
 
 name: Bobi Control Center
-version: "3.16.1"
+version: "3.17.0"
 slug: bobi_control_center
 description: מרכז הניהול של בובי — מכשירים, יכולות, שעון שבת, כללים חכמים ומרכז בדיקות
 url: https://github.com/Inoncohen2/bobi-control-center
 
+# `armv7` was dropped in 3.17.0: the Supervisor warns the value is deprecated,
+# and emulating that platform in CI cost more build time than a platform nobody
+# here runs. Home Assistant OS on a Pi 4 is `aarch64`.
 arch:
   - aarch64
   - amd64
-  - armv7
+
+# --- Where the image comes from --------------------------------------------
+# Naming an image is what stops the Supervisor building this app locally. It
+# had been building it on every single release — two minutes of `docker buildx`
+# on a Raspberry Pi 4, during which the Supervisor answers nothing, and which
+# failed outright on 3.9.0. With this, an update is a pull.
+#
+# The Supervisor substitutes `{arch}` from the list above and appends the
+# manifest `version` as the tag, so this must match what
+# `.github/workflows/publish-image.yml` pushes, exactly. There is no
+# local-build fallback once this key exists: a version whose image was never
+# published cannot be installed at all. That workflow's `verify` job asserts
+# the two agree, anonymously, before a release is considered done.
+image: ghcr.io/inoncohen2/{arch}-addon-bobi_control_center
 
 # --- Ingress ---------------------------------------------------------------
 # The UI is reached only through Home Assistant's authenticated proxy. No
