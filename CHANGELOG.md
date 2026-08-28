@@ -4,6 +4,36 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.12.1
+
+The installed app went back to being a page with Safari's chrome around it.
+
+That is the look iOS gives a navigation it considers **outside the app's
+scope**, and the scope came from the manifest 3.10.0 added — before it, there
+was no manifest at all and iOS used the legacy `apple-mobile-web-app-capable`
+meta tag, which has no scope to be outside of.
+
+The manifest declared `start_url` and `scope` as `"./"`. Chromium resolves that
+against the manifest's own URL and gets the right answer; iOS has long handled
+relative values here poorly, and a scope it cannot resolve is a scope nothing
+is inside.
+
+Both are now **omitted**, which is not a workaround but the more correct answer:
+the specification then derives `start_url` from the document that linked the
+manifest and `scope` from that. Verified to resolve correctly both at the root
+of a domain and under a stand-in Ingress prefix — the two places this app is
+served from, and the whole reason the values were relative to begin with. An
+absolute `"/"` would have been wrong under Ingress; there is now nothing left
+to resolve, so there is nothing left to resolve differently.
+
+`id` went with them. It is optional, it exists to give an installed app an
+identity across manifest changes, and an identity that does not match the one
+an icon was installed with is a second way to be told this is not that app.
+
+**An already-installed icon keeps the manifest it was installed with**, so this
+fix reaches a phone only after the old icon is removed and the site added to
+the home screen again.
+
 ## 3.12.0
 
 Each Shabbat profile is its own card, and you work it rather than read it.

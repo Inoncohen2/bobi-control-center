@@ -4,11 +4,7 @@
   "description": "מרכז הניהול של בובי — שליטה בבית מהטלפון.",
   "lang": "he",
   "dir": "rtl",
-  "start_url": "./",
-  "scope": "./",
-  "id": "bobi-control-center",
   "display": "standalone",
-  "orientation": "portrait",
   "background_color": "#f8fafc",
   "theme_color": "#4f46e5",
   "icons": [

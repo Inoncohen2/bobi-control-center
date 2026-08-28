@@ -767,3 +767,40 @@ def test_the_audit_trail_redacts_before_it_writes() -> None:
     assert "redact(entry.model_dump())" in source
     # And nothing writes a raw entry anywhere in the module.
     assert "json.dumps(entry" not in source
+
+
+def test_the_manifest_states_no_start_url_or_scope() -> None:
+    """Both are derived, and deriving them is the point.
+
+    Adding a manifest turned the installed app on the phone from a standalone
+    app back into a page with Safari's chrome around it — the look iOS gives a
+    navigation it considers *outside the app's scope*. The manifest declared
+    `start_url` and `scope` as `"./"`, which Chromium resolves against the
+    manifest's own URL and iOS is long known to handle poorly.
+
+    Omitting both is not a workaround, it is the more correct answer: the
+    specification then derives `start_url` from the document that linked the
+    manifest and `scope` from that, which is right at the root of a domain
+    *and* under the generated Home Assistant Ingress prefix — the two places
+    this app is served from, and the reason the paths were relative to begin
+    with. There is nothing left to resolve, so there is nothing left to resolve
+    differently.
+
+    An absolute `"/"` would have been wrong under Ingress, and that is exactly
+    the mistake this guards against.
+    """
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    manifest = json.loads(
+        (root / "frontend" / "public" / "manifest.webmanifest").read_text(encoding="utf-8")
+    )
+
+    assert "start_url" not in manifest
+    assert "scope" not in manifest
+    # `display` is what makes it an app at all, so that one must stay.
+    assert manifest["display"] == "standalone"
+    # Icon paths stay relative: they are resolved against the manifest URL,
+    # which is the same directory the icons are served from either way.
+    assert all(icon["src"].startswith("./") for icon in manifest["icons"])
