@@ -184,9 +184,49 @@ it hands a client, and `live_state.entity_map` reads it from the raw payload
 travels any further. There is a test asserting it does not appear in a rendered
 snapshot.
 
-Until that field is published, `entity_map` returns `{}`, the overlay does
-nothing, and device reads behave exactly as they did before the split. That is
-the intended fail-soft path, not a broken state.
+The bridge publishes it as of 3.13.1, so the overlay is live. Before that
+`entity_map` returned `{}` and device reads behaved exactly as they did before
+the split — the intended fail-soft path, not a broken state, and still what
+happens if the field ever stops arriving.
+
+## The Shabbat profile device list
+
+`script.bobi_cc_shabbat` offers fifteen device tokens, and that is the whole
+list on purpose. Widening it is not one change but three that must agree:
+
+| Script | What it holds |
+| --- | --- |
+| `bobi_cc_shabbat` | the `labels` map — which devices are *offered* |
+| `bobi_cc_shabbat_commit` | `allowed_tokens` — which may be *written* |
+| `shabbat_apply_profile` | a branch per token — which are actually *switched* |
+
+A token added only to the first is selectable, savable, and does nothing at the
+hour it matters. That is worse than not offering it.
+
+It was reviewed against the whole install in August 2026 and left at fifteen.
+What remains unlisted is not an oversight: infrastructure (`switch.hacs_*`),
+child locks, the switch-side duplicates of three lights already covered through
+their `light.*` entities, the camera's own feature switches, and the vacuum,
+which is deliberately fenced off — a profile that turns things *on* must never
+be able to start it.
+
+## The air conditioner settings in a profile (3.14)
+
+Each air conditioner in an on-profile publishes a target temperature plus
+`hvac_mode`, `fan_mode` and `swing_mode`, stored in `input_select` helpers named
+`shabbat_{pre,morning}_ac_{salon,parents,girls}_{hvac,fan,swing}_mode`.
+
+Two rules keep this honest:
+
+* the accepted options are read from the helper itself
+  (`state_attr(ac_helper, 'options')`), so the bridge that reads and the bridge
+  that writes cannot come to disagree about what is legal;
+* each helper's first option is what the executor previously hard-coded —
+  `cool`, `auto`, `off` — so an unedited profile behaves as it always did.
+
+The item ids are `profile.<phase>.<device>.<setting>`. The device a setting
+belongs to is the **first** segment after the phase, which is what lets a
+device with several settings keep them together on one screen.
 
 ## Data the app deliberately does not touch
 
