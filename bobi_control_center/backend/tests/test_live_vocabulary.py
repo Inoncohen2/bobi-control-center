@@ -706,3 +706,20 @@ async def test_an_item_the_bridge_locked_gets_no_run_verbs() -> None:
 
     assert camera.controllable is False
     assert camera.run_operations == []
+
+
+async def test_a_status_reading_is_never_guessed_into_a_switch() -> None:
+    """The live system snapshot publishes `kind: "status"` for its health rows.
+
+    `status` is not a kind this application has, so it fell through to being
+    inferred from the value — and `bobi_health: true` inferred as a *toggle*.
+    Every one of those rows is `controllable: false` today, so nothing was
+    drawn; but a health readout guessed to be a switch is one `controllable`
+    away from a control that reports the house's health and pretends to set it.
+    """
+    from app.services.resource_normalize import canonical_kind
+
+    assert canonical_kind("status", True, []) == "readonly"
+    assert canonical_kind("status", "WORKING", []) == "readonly"
+    # And the guess is still made where the bridge genuinely said nothing.
+    assert canonical_kind(None, True, []) == "toggle"

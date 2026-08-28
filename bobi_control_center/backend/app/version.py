@@ -9,4 +9,4 @@ lets the adapters report it on `/api/bobi/connection` without importing the app.
 from __future__ import annotations
 
 APP_NAME = "bobi-control-center"
-APP_VERSION = "3.9.0"
+APP_VERSION = "3.9.1"

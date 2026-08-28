@@ -247,6 +247,16 @@ _KIND_SYNONYMS = {
     "members": "list",
     "timestamp": "datetime",
     "date_time": "datetime",
+    # A reading, said in the bridge's word for one. The live system snapshot
+    # publishes `kind: "status"` for its six health rows, and `status` is not a
+    # kind this application has — so it fell through to being *inferred* from
+    # the value, and `bobi_health: true` inferred as a toggle. Every one of
+    # those rows is `controllable: false`, so nothing was drawn and nothing
+    # broke; but "a health readout guessed to be a switch" is one `controllable`
+    # away from a switch that reports the house's health and pretends to set it.
+    "status": "readonly",
+    "reading": "readonly",
+    "info": "readonly",
 }
 
 

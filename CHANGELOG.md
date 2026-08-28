@@ -4,6 +4,69 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.9.1
+
+Home Assistant became reachable again, so the parts of this that had only ever
+been reasoned about got run.
+
+### The first writes against real hardware
+
+`script.bobi_cc_device_commit` had never been called. It has now, on the
+laundry socket, through the same call the application makes:
+
+- a **stale expected value** was refused — `executed: false`,
+  `reason: stale_preview`, and the socket did not move;
+- the correct expected value **executed and verified** —
+  `before: false, after: true`, confirmed against the entity's own state;
+- the same call in reverse put it back — `before: true, after: false`;
+- asking for the state it was already in returned `already_in_state` with
+  `executed: false`.
+
+`script.bobi_cc_automation_commit` was probed the same way without changing
+anything: `confirmed: false` and a stale `expected_state` were both refused.
+The house was left exactly as it was found.
+
+### The HA-automations screen could not load at all
+
+`script.bobi_cc_automations_snapshot` answered **500 to every call**. It built
+its response with `state_attr(..., 'last_triggered')`, which returns a
+`datetime` object, and a datetime inside a response variable cannot be
+serialised to JSON. The same class of fault as the `HVACMode` enum earlier in
+this release: a native Python object surviving into a template result.
+
+It is now coerced with `.isoformat()`, once, in a loop rather than eleven
+times.
+
+### …and would still have been read-only if it had
+
+The same script published `enabled: true` and no `controllable` key, where
+every sibling snapshot publishes `kind`, `value` and `controllable`. The
+application fails closed on exactly that: no `value` means the bridge could not
+read the item, and no `controllable` means no. Every automation would have
+rendered as an unreadable, unoperable row.
+
+It now publishes the shape its siblings do — and the live payload, fed through
+this application's own normalizer, comes back `kind=toggle`,
+`primary_operation=disable`, `run_operations=['trigger']`: a switch and the
+"run now" button, from real data.
+
+### A status reading was being guessed into a switch
+
+The live system snapshot publishes `kind: "status"` for its six health rows.
+`status` is not a kind this application has, so it fell through to being
+inferred from the value — and `bobi_health: true` inferred as a **toggle**.
+Every one of those rows is `controllable: false`, so nothing was drawn and
+nothing broke; but a health readout guessed to be a switch is one flag away
+from a control that reports the house's health and pretends to set it.
+`status`, `reading` and `info` now say what they mean.
+
+### What the live contract still says
+
+`automations` and `helpers` are published with **no operations** and the note
+"גשר הכתיבה קיים אך טרם אומת מול Home Assistant". That is not a bug and it has
+not been changed: both screens stay read-only until their commit bridges have
+been verified the way the device bridge just was.
+
 ## 3.9.0
 
 The run buttons from 3.8.0, finished — and the screens where they were still
