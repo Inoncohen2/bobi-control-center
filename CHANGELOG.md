@@ -4,6 +4,32 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.13.1
+
+The split read path from 3.11.0 is switched on.
+
+### The bridge now names the entity behind each device
+
+`script.bobi_cc_devices` publishes `entity_id` on every managed item. That was
+the one line the 3.11.0 split was waiting for: the application cannot map a
+canonical id to an entity by itself — that mapping is the household's and lives
+in Home Assistant — so until the bridge said it, `entity_map` returned `{}`, the
+overlay did nothing, and a switch position was only ever as fresh as the
+60-second catalogue cache. Switch positions now come from `/api/states` on every
+read, as designed.
+
+No entity id reaches the browser. `entity_map` reads it from the raw payload
+before the normalizer strips it, and the canonical model still has nowhere to
+put one.
+
+### The double had drifted from the bridge
+
+Only one item in `app/mock/management.py` carried an `entity_id`, so almost
+every test of the overlay ran against a payload no real bridge sends any more.
+Each device item in the double now carries one, and a test asserts it stays
+that way — the double mirroring the live bridge is where most of the serious
+bugs in this project have been found.
+
 ## 3.13.0
 
 The device catalogue acts on a tap, and a device's name opens everything it can

@@ -518,6 +518,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "operations": ["power"],
                 "device_class": "climate",
                 "capabilities": ["on_off", "temperature", "hvac_mode", "fan_mode"],
+                "entity_id": "climate.ac_salon",
             },
             {
                 "id": "ac_salon_temperature",
@@ -528,6 +529,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "operations": ["temperature"],
                 "device_class": "climate",
                 "constraints": {"min": 16, "max": 30, "step": 0.5, "unit": "°C"},
+                "entity_id": "climate.ac_salon",
             },
             {
                 "id": "ac_salon_hvac_mode",
@@ -538,6 +540,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "operations": ["hvac_mode"],
                 "device_class": "climate",
                 "options": ["off", "auto", "cool", "dry", "heat", "fan_only"],
+                "entity_id": "climate.ac_salon",
             },
             {
                 "id": "ac_salon_fan_mode",
@@ -548,6 +551,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "operations": ["fan_mode"],
                 "device_class": "climate",
                 "options": ["silent", "low", "medium", "high", "auto"],
+                "entity_id": "climate.ac_salon",
             },
             # The live vocabulary, with no `set` to fall back on. This house
             # names one verb per capability — `power`, `temperature`,
@@ -565,6 +569,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "device_class": "climate",
                 "capabilities": ["on_off", "temperature", "fan_mode", "swing_mode"],
                 "constraints": {"min": 16, "max": 30, "step": 1, "unit": "°"},
+                "entity_id": "climate.ac_parents",
             },
             # A vacuum, because this house has one and because it is the
             # busiest row the live vocabulary can produce: a switch for its
@@ -580,6 +585,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "operations": ["power", "start", "pause", "stop", "return_to_base", "locate"],
                 "device_class": "vacuum",
                 "capabilities": ["on_off", "start", "pause", "stop", "return_home"],
+                "entity_id": "vacuum.robot",
             },
             {
                 "id": "cam_lia",
@@ -590,6 +596,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "operations": [],
                 "device_class": "camera",
                 "unavailable_reason": "המצלמה אינה ניתנת לשליטה מכאן",
+                "entity_id": "camera.lia_local",
             },
         ],
     },
