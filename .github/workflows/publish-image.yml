@@ -42,20 +42,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Read the manifest version
+      - name: Read the image name and version from the manifest
         id: manifest
         run: |
           set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
           version=$(sed -n 's/^version:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' bobi_control_center/config.yaml)
-          [ -n "${version}" ] || { echo "::error::config.yaml has no readable version"; exit 1; }
+          template=$(sed -n 's/^image:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' bobi_control_center/config.yaml)
+          [ -n "${version}" ] || fail "config.yaml has no readable version"
+          [ -n "${template}" ] || fail "config.yaml has no image: key"
+
+          # The name is taken from the manifest rather than rebuilt from
+          # `github.repository_owner`, which is `Inoncohen2` — capitalised, and
+          # therefore not a legal Docker repository name. Deriving it here means
+          # what is pushed and what the Supervisor pulls cannot disagree,
+          # instead of being two strings someone has to keep identical.
+          image="${template/\{arch\}/${{ matrix.arch }}}"
+          case "${image}" in *[A-Z]*) fail "image name must be lowercase: ${image}";; esac
+
           echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "Manifest version: ${version}"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+          echo "Publishing ${image}:${version}"
 
       - name: Is this version already published?
         id: exists
         run: |
           set -uo pipefail
-          image="ghcr.io/${{ github.repository_owner }}/${{ matrix.arch }}-addon-bobi_control_center"
+          image="${{ steps.manifest.outputs.image }}"
           tag="${{ steps.manifest.outputs.version }}"
           # A published tag is never rebuilt: the Supervisor pulls by version,
           # so replacing the contents of a tag it may already have pulled would
@@ -89,7 +103,7 @@ jobs:
           push: true
           provenance: false
           tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ matrix.arch }}-addon-bobi_control_center:${{ steps.manifest.outputs.version }}
+            ${{ steps.manifest.outputs.image }}:${{ steps.manifest.outputs.version }}
           labels: |
             io.hass.version=${{ steps.manifest.outputs.version }}
             io.hass.arch=${{ matrix.arch }}
