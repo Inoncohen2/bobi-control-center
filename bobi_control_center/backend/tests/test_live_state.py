@@ -300,3 +300,60 @@ def test_the_double_publishes_an_entity_id_on_every_device_item() -> None:
     assert entity_map(DEFAULT_RESOURCE_PAYLOADS["devices"]) == {
         item["id"]: item["entity_id"] for item in items
     }
+
+
+async def test_a_light_switch_keeps_the_catalogue_it_did_not_change() -> None:
+    """A toggle must not force the slowest read this app performs.
+
+    The catalogue is cached because rendering `bobi_cc_devices` is expensive,
+    and `overlay` re-reads every switch position from `/api/states` regardless
+    of that cache. So after a power commit the cached catalogue is still true —
+    yet it used to be dropped anyway, which meant the very next read, the one
+    the person who pressed the switch is waiting on, had to re-render the whole
+    template before the switch would move.
+    """
+    adapter = _Adapter(catalogue(), states())
+    bridge = RealManagementBridge(adapter)  # type: ignore[arg-type]
+    await bridge.resource_snapshot("devices")
+    assert adapter.payload_calls == 1
+
+    await bridge.apply(
+        resource_type="devices",
+        operation="power",
+        resource_id="salon",
+        payload={"value": True},
+        observed=ObservedState(resource_id="salon", label=None, values={}),
+        request_id="req-12345678",
+        preview_token="pt_" + "x" * 32,
+    )
+    adapter.payload_calls = 1  # the commit call itself is not a catalogue read
+
+    await bridge.resource_snapshot("devices")
+    # Still served from cache: no second render of the catalogue template.
+    assert adapter.payload_calls == 1
+
+
+async def test_a_value_the_catalogue_carries_still_throws_it_away() -> None:
+    """The saving must not extend to anything `/api/states` does not report.
+
+    A target temperature lives in the catalogue, not in the switch position, so
+    keeping the cache after changing one would show the old number for up to a
+    minute and make the write look as though it had never landed.
+    """
+    adapter = _Adapter(catalogue(), states())
+    bridge = RealManagementBridge(adapter)  # type: ignore[arg-type]
+    await bridge.resource_snapshot("devices")
+
+    await bridge.apply(
+        resource_type="devices",
+        operation="temperature",
+        resource_id="ac_salon",
+        payload={"value": 21},
+        observed=ObservedState(resource_id="ac_salon", label=None, values={}),
+        request_id="req-12345678",
+        preview_token="pt_" + "x" * 32,
+    )
+    adapter.payload_calls = 1
+
+    await bridge.resource_snapshot("devices")
+    assert adapter.payload_calls == 2

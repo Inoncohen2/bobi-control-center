@@ -99,6 +99,18 @@ class RealManagementBridge(ManagementBridge):
         #: resource → (fetched_at, payload). The expensive half, kept.
         self._catalogue: dict[str, tuple[float, dict[str, Any]]] = {}
 
+    #: Operations whose entire visible effect is a switch position.
+    #:
+    #: These are the ones `live_state.overlay` re-reads from `/api/states` on
+    #: every request, so the cached catalogue is still true after one and does
+    #: not need throwing away. Anything not named here — a temperature, a mode,
+    #: a brightness — is a catalogue value and does.
+    LIVE_ONLY_OPERATIONS = frozenset({"power", "toggle", "turn_on", "turn_off"})
+
+    def _is_live_only(self, resource: str, operation: str) -> bool:
+        """Did this commit change only something `/api/states` already reports?"""
+        return resource in self.LIVE_STATE_FAMILIES and operation in self.LIVE_ONLY_OPERATIONS
+
     async def _catalogue_payload(self, resource: str, service: str) -> dict[str, Any]:
         """The bridge's own answer, reused for a short while.
 
@@ -256,12 +268,20 @@ class RealManagementBridge(ManagementBridge):
         """Map one validated operation onto one declared commit bridge."""
         if not preview_token:
             raise _missing_token(resource_type, operation)
-        # A commit is the one moment a cached catalogue is certainly wrong.
-        # Switch positions are refreshed from Home Assistant every read and so
-        # survive this, but a target temperature is a catalogue value: changing
-        # one and being shown the old number for the next minute would make the
-        # write look as though it had not landed.
-        self._catalogue.pop(resource_type, None)
+        # A commit is usually the one moment a cached catalogue is certainly
+        # wrong: a target temperature is a catalogue value, and being shown the
+        # old number for the next minute would make the write look as though it
+        # had not landed.
+        #
+        # A switch position is not. `live_state.overlay` refreshes it from
+        # `/api/states` on every single read, cache or no cache — which this
+        # comment has said since the split and the code then ignored, dropping
+        # the catalogue for a light switch too. The cost of that lands on the
+        # person who pressed it: the next read could not use the 60-second
+        # cache, so it re-rendered the whole `bobi_cc_devices` template, the
+        # slowest thing this app does, before the switch would move on screen.
+        if not self._is_live_only(resource_type, operation):
+            self._catalogue.pop(resource_type, None)
         if resource_type == "tasks":
             return await self._apply_task(
                 operation, resource_id, payload, observed, request_id, preview_token

@@ -20,7 +20,7 @@
  *    in the field rather than in a dialog.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Lock } from 'lucide-react';
 
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
@@ -355,6 +355,53 @@ function RunButton({
 }
 
 /**
+ * A switch that moves when pressed and settles on what the bridge says.
+ *
+ * The optimistic value lives here rather than in the change hook because it is
+ * per item: two switches pressed in quick succession must each show their own
+ * request, not share one.
+ */
+function OptimisticSwitch({
+  item,
+  operation,
+  onChange,
+}: {
+  item: ManagedItem;
+  operation: string | undefined;
+  onChange: ResourceEditorProps['onChange'];
+}) {
+  // What was asked for, and what the bridge said at the moment it was asked.
+  // Keying the reset on the item's *identity* looked simpler and was wrong: it
+  // changes on every re-render, and pressing the switch re-renders the page, so
+  // the optimism was cancelled in the same tick it began.
+  const [pending, setPending] = useState<{ want: boolean; was: unknown } | null>(null);
+
+  // The bridge has answered with something new, so it owns the switch again.
+  if (pending && item.value !== pending.was) setPending(null);
+
+  // A refused write comes back with the value unchanged, and would otherwise
+  // leave the switch showing a request that is never going to happen. The
+  // dialog says what went wrong; this makes sure the switch stops implying
+  // otherwise even if nobody reads it.
+  useEffect(() => {
+    if (!pending) return;
+    const timer = setTimeout(() => setPending(null), 6000);
+    return () => clearTimeout(timer);
+  }, [pending]);
+
+  return (
+    <Switch
+      on={pending ? pending.want : item.value === true}
+      label={item.label}
+      onChange={(next) => {
+        setPending({ want: next, was: item.value });
+        onChange(item, next, operation);
+      }}
+    />
+  );
+}
+
+/**
  * The control for one item, chosen by its kind.
  *
  * A toggle asks immediately — there is one thing it can mean. Everything else
@@ -396,7 +443,6 @@ function ItemControl({
   }
 
   if (item.kind === 'toggle') {
-    const on = item.value === true;
     // `enable`/`disable` when the bridge named them, `set` or `power`
     // otherwise. Which one that is comes from the backend, on the item, so the
     // rule lives in one place and is tested there — this used to be worked out
@@ -406,9 +452,20 @@ function ItemControl({
     // The same switch the device cards use. It was a button reading "כבה" or
     // "הפעל", which states the *action* rather than the state, so a row of them
     // read as a column of instructions instead of a panel you can scan.
+    //
+    // It moves the moment it is pressed. Before, it waited for a preview, a
+    // commit and a fresh snapshot — three round trips, the last of them the
+    // slowest read this app performs — so from a phone the switch sat still
+    // for a second or more and the press felt lost.
+    //
+    // This is not a claim that the change landed. `pending` is cleared the
+    // instant a new snapshot arrives, whatever it says, so the switch settles
+    // onto the bridge's own answer and springs back if the house refused. What
+    // is shown while waiting is the request, not a saved state — and a commit
+    // that fails or cannot be verified still opens the dialog to say so.
     return (
       <div className="flex sm:justify-end">
-        <Switch on={on} label={item.label} onChange={(next) => onChange(item, next, operation)} />
+        <OptimisticSwitch item={item} operation={operation} onChange={onChange} />
       </div>
     );
   }
