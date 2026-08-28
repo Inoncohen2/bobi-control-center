@@ -979,3 +979,53 @@ def test_the_week_and_the_hebrew_date_reach_the_screen() -> None:
     # An empty holiday is no holiday, not an empty label on the card.
     assert shabbat.holiday is None
     assert shabbat.candle_lighting_at == "2026-08-28T18:51:00+03:00"
+
+
+def test_a_draft_handle_is_never_shown_as_a_persons_name() -> None:
+    """The live bridge sends `{"user_1_active": true}` — the key is the flag.
+
+    Read naively it put "קיימת טיוטה שמורה של user_1_active" on the screen: an
+    internal handle offered to the household as the name of one of them.
+    """
+    shabbat = normalize.normalize_shabbat(
+        {"drafts": {"user_1_active": True, "user_2_active": False}}
+    )
+
+    assert shabbat.draft_owners == []
+    # …and the screen still knows to mention it.
+    assert shabbat.has_draft is True
+
+
+def test_a_real_name_is_still_shown() -> None:
+    shabbat = normalize.normalize_shabbat({"drafts": {"ינון": True}})
+
+    assert shabbat.draft_owners == ["ינון"]
+    assert shabbat.has_draft is True
+
+
+def test_no_draft_is_no_draft() -> None:
+    assert normalize.normalize_shabbat({"drafts": {"user_1_active": False}}).has_draft is False
+
+
+def test_a_multi_select_is_a_list_not_a_dropdown() -> None:
+    """What the live Shabbat bridge calls a profile's device list.
+
+    `multi_select` was not a kind this side knew, so it fell through to being
+    inferred — and inference asked "are there options?" before "is the value a
+    list?", so choosing what turns off before Shabbat became a dropdown holding
+    exactly one device.
+    """
+    from app.services.resource_normalize import normalize_resource
+
+    payload = {"available": True, "groups": [{"id": "pre_off", "items": [
+        {"id": "profile.pre_off.devices", "label": "מכשירים לכיבוי", "kind": "multi_select",
+         "value": ["dining", "salon"], "controllable": True, "operations": ["set"],
+         "options": [{"value": "dining", "label": "פינת אוכל"},
+                     {"value": "salon", "label": "אור סלון"},
+                     {"value": "kitchen", "label": "מטבח"}]},
+    ]}]}
+    item = normalize_resource("shabbat", payload).items[0]
+
+    assert item.kind == "list"
+    assert item.value == ["dining", "salon"]
+    assert [option.value for option in item.options] == ["dining", "salon", "kitchen"]

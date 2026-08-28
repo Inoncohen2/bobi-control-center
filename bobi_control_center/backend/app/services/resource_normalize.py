@@ -250,6 +250,15 @@ _KIND_SYNONYMS = {
     "str": "text",
     "multi": "list",
     "members": "list",
+    # What the live Shabbat bridge calls a profile's device list. Without this
+    # it fell through to being *inferred*, and inference saw options and said
+    # "choice" — so picking what turns off before Shabbat was a dropdown that
+    # could hold exactly one device.
+    "multi_select": "list",
+    "multiselect": "list",
+    "multi_choice": "list",
+    "checkbox": "list",
+    "tags": "list",
     "timestamp": "datetime",
     "date_time": "datetime",
     # A reading, said in the bridge's word for one. The live system snapshot
@@ -286,14 +295,20 @@ def canonical_kind(kind: str | None, value: Any, options: list[ManagedOption]) -
 #: conservative: anything unrecognised is read-only rather than guessed into an
 #: editor that would send the wrong type.
 def _infer_kind(value: Any, options: list[ManagedOption]) -> str:
-    if options:
-        return "choice"
-    if isinstance(value, bool):
-        return "toggle"
-    if isinstance(value, int | float):
-        return "number"
+    # The value's shape is checked before the presence of options, and the
+    # order matters: a value that is a *list* cannot be a single choice
+    # however many options accompany it. Asking "are there options?" first
+    # turned every multi-select whose kind this module did not recognise into
+    # a dropdown holding one item — which is what happened to the Shabbat
+    # profiles, where the options are exactly what makes it a multi-select.
     if isinstance(value, list):
         return "list"
+    if isinstance(value, bool):
+        return "toggle"
+    if options:
+        return "choice"
+    if isinstance(value, int | float):
+        return "number"
     return "readonly"
 
 

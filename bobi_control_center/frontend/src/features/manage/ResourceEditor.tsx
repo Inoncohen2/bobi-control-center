@@ -410,7 +410,11 @@ function ItemControl({
   }
 
   if (item.kind === 'list') {
-    const allowed = item.constraints?.allowed ?? [];
+    // `constraints.allowed` is the documented home for a list's choices, and
+    // `options` is where a bridge naturally puts them — the live Shabbat
+    // bridge does. Reading only the first left every profile's device picker
+    // with nothing to pick from.
+    const allowed = item.constraints?.allowed?.length ? item.constraints.allowed : item.options;
     // Without a published list there is nothing safe to offer: the bridge has
     // not said what may go in, so this stays a reading.
     if (allowed.length === 0) {

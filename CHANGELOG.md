@@ -4,6 +4,38 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.11.1
+
+Three faults visible in a photograph of the running app.
+
+### You could only choose one device per Shabbat profile
+
+The picker was a dropdown. It was meant to be a row of chips, and the reason it
+was not goes two layers down: the live bridge calls a profile's device list
+`multi_select`, which is not a kind this side knew, so the kind was *inferred*
+— and inference asked "are there options?" before "is the value a list?". A
+list of two devices with fifteen options became a single choice.
+
+Both halves are fixed: `multi_select` is a known synonym for `list`, and a
+value that is a list is now recognised as one **before** options are
+considered, because a list can never be a single choice however many options
+accompany it.
+
+A list also reads its choices from `options` now, not only from
+`constraints.allowed`. The documented home is `allowed`; the live bridge uses
+`options`, so reading only the first left every picker with nothing to pick.
+
+### "קיימת טיוטה שמורה של user_1_active"
+
+The bridge sends `{"user_1_active": true}` — the key is the flag's name, not a
+person's. It went into the middle of a Hebrew sentence as the name of a member
+of the household.
+
+A handle is now dropped rather than tidied into a guess. Whether *anyone* has a
+draft is a separate question from *who*, and it had to become one: hiding the
+handle also emptied the owner list, and an empty list read as "no drafts" — so
+the first fix silently stopped the screen mentioning the draft at all.
+
 ## 3.11.0
 
 The read path is split in two, by how often each half changes.

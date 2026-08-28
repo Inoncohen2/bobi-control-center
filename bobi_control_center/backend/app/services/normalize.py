@@ -1254,7 +1254,11 @@ def normalize_shabbat(payload: Payload) -> BridgeShabbat:
         pre_shabbat_offset_minutes=pre_offset,
         profiles=profiles,
         ac_temperatures=_collect_ac_temperatures(payload, upcoming, profiles_raw, labels),
-        has_draft=bool(draft_owners) or bool(_bool(payload.get("has_draft"))),
+        has_draft=(
+            bool(draft_owners)
+            or _any_draft(drafts)
+            or bool(_bool(payload.get("has_draft")))
+        ),
         draft_owners=draft_owners,
         writes_enabled=False,
         extra=_leftover(payload, _SHABBAT_MAPPED),
@@ -1387,16 +1391,50 @@ def _ac_pairs(raw: Any) -> list[tuple[str | None, Any]]:
     return []
 
 
+#: An internal handle for a household member, as opposed to their name.
+_MEMBER_ID = re.compile(r"^user[_-]?\d+$", re.IGNORECASE)
+
+
 def _draft_owners(drafts: Any) -> list[str]:
-    """Who currently has an unsaved Shabbat draft."""
+    """Who currently has an unsaved Shabbat draft — by name, or not at all.
+
+    The live bridge sends `{"user_1_active": true}`, so the key *is* the flag's
+    name rather than a person's. Read naively it put "קיימת טיוטה שמורה של
+    user_1_active" on the screen: an internal handle, in the middle of a Hebrew
+    sentence, offered to the household as the name of one of them.
+
+    A handle is dropped rather than tidied into a guess. The caller still knows
+    a draft exists — `has_draft` does not depend on this list — so the screen
+    says so without naming anybody it cannot name.
+    """
     owners: list[str] = []
     for item in _as_items(drafts, id_key="user"):
         # A draft entry may be a flag per user, or an object describing it.
         has_draft = _bool(_first(item, "has_draft", "value", "active"))
         owner = _text(_first(item, "user", "name", "owner", "id"))
-        if owner and has_draft is not False:
-            owners.append(owner)
+        if not owner or has_draft is False:
+            continue
+        del has_draft
+        # "user_1_active" is the flag; "user_1" is the handle underneath it.
+        stem = re.sub(r"[_-](active|draft|has_draft)$", "", owner, flags=re.IGNORECASE)
+        if _MEMBER_ID.match(stem):
+            continue
+        owners.append(stem)
     return owners
+
+
+def _any_draft(drafts: Any) -> bool:
+    """Whether *anyone* has an unsaved draft, named or not.
+
+    A separate question from who, and it has to be: dropping an unnameable
+    handle from `draft_owners` also emptied it, and an empty list read as "no
+    drafts" — so hiding the internal handle silently stopped the screen
+    mentioning the draft at all.
+    """
+    for item in _as_items(drafts, id_key="user"):
+        if _bool(_first(item, "has_draft", "value", "active")) is True:
+            return True
+    return False
 
 
 # --- rules ------------------------------------------------------------------
