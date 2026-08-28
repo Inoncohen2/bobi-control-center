@@ -228,6 +228,44 @@ The item ids are `profile.<phase>.<device>.<setting>`. The device a setting
 belongs to is the **first** segment after the phase, which is what lets a
 device with several settings keep them together on one screen.
 
+## The two added Shabbat clocks (3.16)
+
+Beyond the four fixed profiles there are two more clocks, `extra_off` and
+`extra_on`. Home Assistant needs storage to exist before it can be written, so
+these are fixed slots rather than unlimited creation — a clock is "added" by
+switching it on, not by conjuring storage.
+
+| Piece | Where |
+| --- | --- |
+| Device list | `input_text.shabbat_extra_{off,on}_profile` |
+| Hour | `input_datetime.shabbat_extra_{off,on}_time` |
+| On/off switch | `input_boolean.shabbat_extra_{off,on}_enabled` |
+| Trigger | `automation.sh_vn_shbt_sh_vn_nvsp_{kybvy,hdlqh}` |
+| Execution | `script.shabbat_apply_profile`, phases `extra_off` / `extra_on` |
+
+Each automation fires at its `input_datetime` and requires three conditions:
+the Shabbat clock master switch, that clock's own enabled switch, and
+`binary_sensor.jewish_calendar_issur_melacha_in_effect`. The last is why they
+are gated on Shabbat being *in effect* rather than on a weekday — it covers Yom
+Tov, and a clock left with an hour in it stays quiet mid-week.
+
+An air conditioner in `extra_on` is only switched on. These clocks have no
+temperature, mode, fan or swing settings of their own, so the unit keeps
+whatever it was set to.
+
+### An empty helper reads as `unknown`
+
+A freshly created `input_text` has the state `unknown`, not `""`. The profile
+token parse used to be `reject('eq','')`, which let `unknown` through as a
+phantom device token. All three Shabbat scripts now use:
+
+```jinja
+.split(',')|map('trim')|reject('in',['','unknown','unavailable'])|list
+```
+
+This matters beyond the new clocks: any of the original four would do the same
+if its helper ever lost its value.
+
 ## The camera picture (3.15)
 
 `GET /api/bobi/cameras/{canonical_id}/snapshot` returns image bytes. It is the

@@ -285,6 +285,27 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                         "controllable": True,
                         "operations": ["set"],
                     },
+                    # The two added clocks keep their switch and their hour
+                    # with the other times, and the profile card claims both so
+                    # neither is shown twice.
+                    {
+                        "id": "extra_off_enabled",
+                        "label": "שעון כיבוי נוסף",
+                        "kind": "boolean",
+                        "value": False,
+                        "risk": "medium",
+                        "controllable": True,
+                        "operations": ["set"],
+                    },
+                    {
+                        "id": "extra_off_time",
+                        "label": "שעת הכיבוי הנוסף",
+                        "kind": "time",
+                        "value": "00:00",
+                        "risk": "medium",
+                        "controllable": True,
+                        "operations": ["set"],
+                    },
                 ],
             },
             {
@@ -390,6 +411,35 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                         "operations": ["set"],
                         "constraints": {"minimum": 16, "maximum": 30, "step": 0.5,
                                          "unit": "°C"},
+                    },
+                ],
+            },
+            # A clock the household added. It carries only a device list —
+            # its switch and its hour live with the other times, and the card
+            # claims them. An added on-clock deliberately has no air
+            # conditioner settings of its own: the bridge only turns the unit
+            # on and leaves whatever it was set to.
+            {
+                "id": "extra_off",
+                "label": "שעון נוסף — כיבוי",
+                "items": [
+                    {
+                        "id": "profile.extra_off.devices",
+                        "label": "מכשירים לכיבוי",
+                        "kind": "multi_select",
+                        "value": [],
+                        "risk": "medium",
+                        "controllable": True,
+                        "operations": ["set"],
+                        "options": [
+                            {"value": "dining", "label": "פינת אוכל"},
+                            {"value": "salon", "label": "אור סלון"},
+                            {"value": "kitchen", "label": "מטבח"},
+                            {"value": "led_salon", "label": "לד סלון"},
+                            {"value": "boiler", "label": "דוד"},
+                            {"value": "ac_salon", "label": "מזגן סלון"},
+                            {"value": "ac_parents", "label": "מזגן הורים"},
+                        ],
                     },
                 ],
             },

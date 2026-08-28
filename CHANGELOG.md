@@ -4,6 +4,43 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.16.0
+
+Two more Shabbat clocks — one that turns things off, one that turns them on.
+
+### They are clocks, not settings
+
+Each carries its own switch, its own hour and its own device list. Both arrive
+switched off, empty and at 00:00, so nothing happens until somebody sets one.
+The switch and the hour appear on the clock's own card rather than in the list
+of times, because two controls for one setting is how the same value gets
+changed twice by someone who thought they were looking at two.
+
+They run while **איסור מלאכה is in effect** rather than on a named weekday, so
+they hold on Yom Tov as well as Shabbat, and a clock left with an hour in it
+does nothing mid-week.
+
+An added on-clock has no air conditioner settings of its own: a unit in its
+list is switched on and keeps whatever it was already set to. The four original
+profiles are unchanged.
+
+### An empty helper is not a device called "unknown"
+
+Found while testing this: a freshly created `input_text` sits at `unknown`, not
+`""`. The token parse only rejected empty strings, so a new clock's device list
+read as `['unknown']` — one phantom device, which is why the first commit
+against it answered `stale_preview`. All three scripts now reject `unknown` and
+`unavailable` alongside the empty string, which also hardens the four original
+profiles against a helper that ever loses its value.
+
+### Verified against the live install
+
+The hour, the switch and the device list each previewed, committed and read
+back; a device token outside the whitelist was refused on the new clocks
+exactly as on the old ones. Every value used in testing was then set back, so
+both clocks are off, empty and at 00:00 — nothing fires this Shabbat that would
+not have fired before.
+
 ## 3.15.0
 
 The cameras screen shows the cameras.
