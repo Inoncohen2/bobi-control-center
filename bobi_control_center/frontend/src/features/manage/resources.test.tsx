@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { SettingsManagePage } from '@/pages/SettingsManagePage';
@@ -426,6 +426,72 @@ describe('the cameras screen', () => {
     // resolve before the snapshot had loaded.
     expect(await screen.findByText('מצלמת ליה')).toBeInTheDocument();
     expect(screen.getByText(/מצלמה כבויה נשארת כבויה/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /הפעל|כבה/ })).not.toBeInTheDocument();
+  });
+
+  it('shows the picture through this app, naming no entity and carrying no token', async () => {
+    stub({
+      ...BASE,
+      '/api/bobi/manage/contract': makeManagementWith('devices', { writes_enabled: true }),
+      '/api/bobi/manage/devices/snapshot': makeResourceSnapshot({
+        resource: 'devices',
+        items: [
+          makeManagedItem({
+            id: 'cam_lia',
+            label: 'מצלמת ליה',
+            kind: 'readonly',
+            value: 'streaming',
+            display: 'משדרת',
+            controllable: false,
+            operations: [],
+            detail: { device_class: 'camera' },
+          }),
+        ],
+      }),
+    });
+    renderWithProviders(<CamerasPage />);
+
+    const frame = await screen.findByRole('img', { name: /תמונה חיה/ });
+    const src = frame.getAttribute('src') ?? '';
+
+    // The canonical id, and only that. An entity id or a token in this URL
+    // would mean the browser had been handed one.
+    expect(src).toContain('/api/bobi/cameras/cam_lia/snapshot');
+    expect(src).not.toContain('camera.');
+    expect(src).not.toContain('token');
+  });
+
+  it('says a camera is unreachable rather than showing a broken picture', async () => {
+    stub({
+      ...BASE,
+      '/api/bobi/manage/contract': makeManagementWith('devices', { writes_enabled: true }),
+      '/api/bobi/manage/devices/snapshot': makeResourceSnapshot({
+        resource: 'devices',
+        items: [
+          makeManagedItem({
+            id: 'cam_lia',
+            label: 'מצלמת ליה',
+            kind: 'readonly',
+            value: 'unavailable',
+            display: 'לא זמינה',
+            controllable: false,
+            operations: [],
+            detail: { device_class: 'camera' },
+          }),
+        ],
+      }),
+    });
+    renderWithProviders(<CamerasPage />);
+
+    // The live camera answers 500 because it is unplugged, which in a browser
+    // is an image that fails to load. That has to read as a fact about the
+    // camera, not as a bug in the app.
+    const frame = await screen.findByRole('img', { name: /תמונה חיה/ });
+    fireEvent.error(frame);
+
+    expect(await screen.findByText('המצלמה אינה זמינה כרגע')).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: /תמונה חיה/ })).not.toBeInTheDocument();
+    // Still nothing to press that reaches the camera.
     expect(screen.queryByRole('button', { name: /הפעל|כבה/ })).not.toBeInTheDocument();
   });
 

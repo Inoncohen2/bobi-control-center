@@ -4,6 +4,45 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.15.0
+
+The cameras screen shows the cameras.
+
+### The picture comes through the backend, not from Home Assistant
+
+The browser asks this application for `cameras/<canonical id>/snapshot` and gets
+bytes. It never learns the entity id behind a camera, and it never receives a
+credential — which matters more here than anywhere else in the app, because the
+`entity_picture` URL Home Assistant publishes carries the camera's own access
+token, and that token is a working key to the stream for as long as it lives.
+It is not read, and it does not leave the server. The frame is fetched with the
+Supervisor token in a header, server-side.
+
+Resolving a canonical id to an entity is a whitelist with two locks: the
+mapping comes from the bridge's own camera catalogue, so only a camera the
+household published can be named at all; and the resolved entity must be in the
+`camera` domain, so a canonical id pointing at a switch cannot turn this into a
+general image proxy. `laundry` is a real id in the catalogue and is refused.
+Both failures answer the same plain 404, so guessing teaches nothing.
+
+### A camera that is not there says so
+
+`camera.lia_local` answers HTTP 500 on the live install, because the camera is
+unplugged. That is the path this release could actually verify end to end, and
+it is the one that had to be right: the screen says *המצלמה אינה זמינה כרגע*
+rather than showing a broken image icon, which would read as a bug in the app.
+
+### Nothing here can switch a camera on
+
+The cameras screen still passes `readOnly`, and `CameraView` takes no change
+handler at all — there is no control to disable, because none is rendered. The
+adapter method is a read that takes a canonical id, so there is no parameter
+through which a caller could ask it to act, and the architecture test that pins
+the abstract adapter surface now names it explicitly as one.
+
+The frame loads on entry and reloads only when a person asks. Polling a camera
+would have made this the busiest thing in the house on a screen left open.
+
 ## 3.14.0
 
 A Shabbat profile now sets how each air conditioner runs, not only how warm.

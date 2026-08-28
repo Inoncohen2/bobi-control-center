@@ -42,9 +42,10 @@ from app.models.bridge import (
     BridgeStatus,
     BridgeTasks,
     BridgeUsers,
+    CameraFrame,
     ConnectionInfo,
 )
-from app.services import normalize
+from app.services import camera, normalize
 from app.version import APP_VERSION
 
 logger = logging.getLogger("bobi.ha")
@@ -329,6 +330,57 @@ class RealHomeAssistantAdapter(HomeAssistantAdapter):
             DEVICES, {"scope": scope, "include_unavailable": include_unavailable}
         )
         return normalize.normalize_devices(payload, scope, include_unavailable)
+
+    async def camera_frame(self, camera_id: str) -> CameraFrame:
+        """Fetch one still picture, server-side, and hand back the bytes.
+
+        Three things happen in order, and the order is the point: the bridge's
+        own camera catalogue is read, the canonical id is resolved against it
+        (`services/camera.resolve`, which also refuses anything that is not a
+        camera), and only then is Home Assistant asked for an image. A caller
+        cannot reach step three with an id the household did not publish.
+
+        `/camera_proxy` is the second read in this adapter that is not a
+        `bobi_cc_*` script, for the same reason as `fetch_states`: there is no
+        bridge service that returns an image, and a Jinja template could not
+        carry one if there were. It is authorised with the Supervisor token in
+        a header, so the camera's own `access_token` — a working credential for
+        the stream, published on the entity — is never read and never travels.
+
+        A camera that is off, unplugged or unreachable answers 500 here. That
+        becomes a structured error with a Hebrew message, which is the honest
+        result; nothing tries to switch it on.
+        """
+        payload = await self._payload(DEVICES, {"scope": "cameras", "include_unavailable": True})
+        entity = camera.resolve(payload, camera_id)
+
+        url = f"{self._base_url}/camera_proxy/{entity}"
+        try:
+            response = await self._get_client().get(url, headers=self._headers())
+        except httpx.TimeoutException as exc:
+            raise UpstreamError(
+                "המצלמה לא הגיבה בזמן", details={"read": "camera_proxy"}
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise UpstreamError(
+                "לא הצלחתי להתחבר ל-Home Assistant", details={"read": "camera_proxy"}
+            ) from exc
+
+        if not response.is_success:
+            # Deliberately not `_raise_for_status`: that one names a service,
+            # and this is not a service call. The status is what distinguishes
+            # "Home Assistant is fine but the camera is not" from the rest, and
+            # the camera's own reason never reaches the browser.
+            raise UpstreamError(
+                "המצלמה אינה זמינה כרגע",
+                code="camera_unavailable",
+                details={"status": response.status_code},
+            )
+
+        return CameraFrame(
+            image=response.content,
+            content_type=response.headers.get("content-type", "image/jpeg"),
+        )
 
     async def get_capabilities(self) -> BridgeCapabilities:
         return normalize.normalize_capabilities(await self._payload(CAPABILITIES))

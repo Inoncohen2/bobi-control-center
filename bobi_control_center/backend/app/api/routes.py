@@ -6,7 +6,7 @@ exposes no write path at all, and the adapter interface has none to expose.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Path, Query, Response
 from pydantic import BaseModel, Field
 
 from app.api.deps import AdapterDep
@@ -97,3 +97,42 @@ async def probe(payload: ProbeRequest, adapter: AdapterDep) -> BridgeProbe:
     Nothing is executed. `would_execute` is False in every response.
     """
     return await adapter.probe(payload.text)
+
+
+@router.get(
+    "/cameras/{camera_id}/snapshot",
+    summary="תמונה מהמצלמה",
+    response_class=Response,
+    responses={200: {"content": {"image/jpeg": {}}, "description": "תמונה מהמצלמה"}},
+)
+async def get_camera_snapshot(
+    adapter: AdapterDep,
+    camera_id: str = Path(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9_]+$",
+        description="The camera's canonical id — never a Home Assistant entity id.",
+    ),
+) -> Response:
+    """One still picture, fetched by this application and passed through.
+
+    The browser names a canonical id and receives bytes. It never learns the
+    entity id behind the camera, and it never receives a credential: the
+    `entity_picture` URL Home Assistant publishes carries the camera's own
+    access token, and that token is not read here and does not leave the
+    server.
+
+    `no-store` matters more than the bandwidth it costs. A camera frame is a
+    picture of the inside of a house, and a shared cache or a browser's
+    back-button cache is not where it should be able to reappear.
+
+    The pattern on `camera_id` is a second lock behind the catalogue whitelist:
+    it admits only the shape a canonical id has, so a path traversal or an
+    entity id with a dot in it is rejected before any lookup happens.
+    """
+    frame = await adapter.camera_frame(camera_id)
+    return Response(
+        content=frame.image,
+        media_type=frame.content_type,
+        headers={"Cache-Control": "no-store, private", "X-Content-Type-Options": "nosniff"},
+    )

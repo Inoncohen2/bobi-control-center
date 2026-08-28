@@ -228,6 +228,39 @@ The item ids are `profile.<phase>.<device>.<setting>`. The device a setting
 belongs to is the **first** segment after the phase, which is what lets a
 device with several settings keep them together on one screen.
 
+## The camera picture (3.15)
+
+`GET /api/bobi/cameras/{canonical_id}/snapshot` returns image bytes. It is the
+second read that does not go through a `bobi_cc_*` script — there is no bridge
+service that returns an image, and a Jinja template could not carry one.
+
+| Step | Where |
+| --- | --- |
+| Read the camera catalogue | `script.bobi_cc_devices` with `scope=cameras` |
+| Resolve canonical id → entity | `app/services/camera.resolve` |
+| Fetch the frame | `GET /camera_proxy/<entity>` with the Supervisor token |
+
+Three rules hold it in place:
+
+* **the request names a canonical id**, never an entity id — the route's path
+  pattern admits only `[a-z0-9_]+`, so an entity id (which has a dot) is
+  rejected before any lookup, and there is no parameter that accepts one;
+* **the resolved entity must be in the `camera` domain** — `laundry` is a real
+  canonical id in the catalogue and is refused, which is what stops this being
+  a general image proxy for whatever else the bridge published;
+* **the camera's own `access_token` is never read.** Home Assistant publishes
+  one on the entity as `entity_picture`, and it is a working credential for the
+  stream. The frame is authorised with the Supervisor token in a header
+  instead, and only bytes reach the browser.
+
+Both failure modes — unknown id, and an id that is not a camera — answer the
+same 404 with the same message. The response is `no-store, private` and
+`nosniff`; a camera frame is a picture of the inside of a house and does not
+belong in a cache.
+
+Reading a camera never starts one. `camera.lia_local` answers 500 while the
+camera is unplugged, and that becomes *המצלמה אינה זמינה כרגע*.
+
 ## Data the app deliberately does not touch
 
 | Not touched | Why |
