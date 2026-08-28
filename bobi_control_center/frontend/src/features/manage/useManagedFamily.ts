@@ -34,6 +34,14 @@ export interface ManagedFamily {
   writesEnabled: boolean;
   /** Ask the backend to describe a change. Never writes. */
   request: (item: ManagedItem, value: unknown, operation?: string) => void;
+  /**
+   * Ask, and apply at once when the backend asks for no confirmation.
+   *
+   * For a switch on a catalogue: flipping a light is not a decision anybody
+   * wants read back to them first. Whether a change may skip the dialog is the
+   * preview's own answer, so a destructive one still stops and asks.
+   */
+  applyNow: (item: ManagedItem, value: unknown, operation?: string) => void;
   change: ReturnType<typeof useManagedChange>;
 }
 
@@ -52,13 +60,23 @@ export function useManagedFamily(resource: ManagedResource): ManagedFamily {
 
   const hasWriteBridge = (declared?.operations.length ?? 0) > 0;
 
-  const request = (item: ManagedItem, value: unknown, operation?: string) => {
-    // The operation comes from what the bridge advertised for this item. An
-    // item with none is not operable and never gets a control; this is the
-    // second lock on the same door.
+  // The operation comes from what the bridge advertised for this item. An
+  // item with none is not operable and never gets a control; this is the
+  // second lock on the same door.
+  const describe = (item: ManagedItem, value: unknown, operation?: string) => {
     const chosen = operation ?? item.primary_operation ?? item.operations[0];
-    if (!chosen) return;
-    void change.start({ operation: chosen, resource_id: item.id, payload: { value } });
+    if (!chosen) return null;
+    return { operation: chosen, resource_id: item.id, payload: { value } };
+  };
+
+  const request = (item: ManagedItem, value: unknown, operation?: string) => {
+    const asked = describe(item, value, operation);
+    if (asked) void change.start(asked);
+  };
+
+  const applyNow = (item: ManagedItem, value: unknown, operation?: string) => {
+    const asked = describe(item, value, operation);
+    if (asked) void change.startAndApply(asked);
   };
 
   return {
@@ -68,6 +86,7 @@ export function useManagedFamily(resource: ManagedResource): ManagedFamily {
     hasWriteBridge,
     writesEnabled: (contract.data?.writes_enabled ?? false) && hasWriteBridge,
     request,
+    applyNow,
     change,
   };
 }

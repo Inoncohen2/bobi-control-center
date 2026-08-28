@@ -4,6 +4,51 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.13.0
+
+The device catalogue acts on a tap, and a device's name opens everything it can
+do.
+
+### A switch applies at once
+
+Flipping a light is not a decision anybody wants read back to them first. A
+switch on the catalogue now previews **and** commits in one gesture, with no
+dialog in the way.
+
+Nothing was relaxed to do it. The preview still happens, so the preview token,
+the expected state and every published limit are still checked; the commit
+still goes through the bridge, so the Home Assistant master switch and the
+read-after-write verification still hold. What was removed is a question, not a
+guard — and *which* changes may skip the question is not a new judgement made
+in the screen: it is the preview's own answer. A change the backend called
+destructive, or for which it asked for a typed word, still stops and asks.
+There is a test that fails if that stops being true.
+
+It is quiet only when it works. A refusal, or a write that came back
+unverified, opens the dialog to say so — the one thing worse than a question is
+a change that did not happen and did not mention it.
+
+### Tapping a device's name opens its controls
+
+A device arrives from the bridge as several items: `ac_salon` carries the
+switch, and `ac_salon_temperature`, `ac_salon_hvac_mode`, `ac_salon_fan_mode`,
+`ac_salon_swing_mode` and `ac_salon_preset_mode` carry the rest of it. The
+catalogue showed only the first, so everything an air conditioner can actually
+do had nowhere to be operated from.
+
+The sheet now gathers them — target temperature, mode, fan, swing, preset; an
+LED's brightness and colour temperature; a vacuum's suction — found by the id
+pattern the bridge already uses, so a device that gains a capability gains its
+control with no change here. The rows drop the device's name from their labels,
+which the sheet's title already carries, and the capability chips are Hebrew.
+
+### The double, again
+
+`MockManagementBridge` published one number per air conditioner where the house
+publishes a switch plus an item per capability. The sheet had nothing to gather
+from it, so the feature could not be seen to work until the double told the
+truth.
+
 ## 3.12.1
 
 The installed app went back to being a page with Safari's chrome around it.

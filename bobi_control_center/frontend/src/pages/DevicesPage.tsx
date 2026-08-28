@@ -22,7 +22,12 @@ import { DEVICE_SCOPES, type BridgeDevice, type DeviceScope } from '@/types/api'
 import { SCOPE_LABELS, limitEntries, stateLabel, timeAgo } from '@/utils/format';
 import { ManagedSection } from '@/features/manage/ManagedSection';
 import { ResourceEditor } from '@/features/manage/ResourceEditor';
-import { CAMERA_CLASS, DeviceDetail as ManagedDeviceDetail } from '@/pages/DeviceControlPage';
+import {
+  CAMERA_CLASS,
+  CAPABILITY_LABELS,
+  DeviceDetail as ManagedDeviceDetail,
+} from '@/pages/DeviceControlPage';
+import { ItemRow } from '@/features/manage/ResourceEditor';
 import { ChangeDialog } from '@/features/manage/ChangeDialog';
 import { operableWith, useManagedFamily } from '@/features/manage/useManagedFamily';
 import { Switch } from '@/components/ui/Switch';
@@ -47,11 +52,71 @@ const TECHNICAL_FIELDS: Array<[string, string]> = [
   ['last_changed', 'שינוי אחרון'],
 ];
 
-function DeviceDetail({ device, onClose }: { device: BridgeDevice; onClose: () => void }) {
+/**
+ * The controls the bridge published for one device.
+ *
+ * A device arrives as several items: `ac_salon` carries its switch, and
+ * `ac_salon_temperature`, `ac_salon_hvac_mode`, `ac_salon_fan_mode`,
+ * `ac_salon_swing_mode` and `ac_salon_preset_mode` carry the rest of it. The
+ * catalogue screen shows only the first, so everything an air conditioner can
+ * actually do had nowhere to be operated from.
+ *
+ * They are found by the id the bridge already uses — `<device>_<capability>` —
+ * rather than by a list of capabilities kept here, so a device that gains one
+ * gains its control.
+ */
+function deviceControls(base: string | undefined, items: Iterable<ManagedItem>): ManagedItem[] {
+  if (!base) return [];
+  const prefix = `${base}_`;
+  return [...items].filter((item) => item.id !== base && item.id.startsWith(prefix));
+}
+
+/**
+ * The same item, without the device's name repeated in its label.
+ *
+ * The bridge labels a capability "מזגן סלון — עוצמת מאוורר" because it has to
+ * stand alone in a flat list. Inside a sheet already titled "מזגן סלון" that
+ * is the name twice on every row and the setting pushed off the end.
+ */
+function withoutDevicePrefix(item: ManagedItem, name: string): ManagedItem {
+  const prefix = `${name} — `;
+  return item.label.startsWith(prefix)
+    ? { ...item, label: item.label.slice(prefix.length) }
+    : item;
+}
+
+function DeviceDetail({
+  device,
+  controls,
+  writesEnabled,
+  onChange,
+  onClose,
+}: {
+  device: BridgeDevice;
+  controls: ManagedItem[];
+  writesEnabled: boolean;
+  onChange: (item: ManagedItem, value: unknown, operation?: string) => void;
+  onClose: () => void;
+}) {
   const limits = limitEntries(device.limits as unknown as Record<string, unknown> | null);
 
   return (
     <Modal open onClose={onClose} title={device.name}>
+      {controls.length > 0 ? (
+        <ul className="mb-4 divide-y divide-slate-200 dark:divide-slate-700">
+          {controls.map((item) => (
+            <li key={item.id} className="py-3 first:pt-0 last:pb-0">
+              {/* The same row the rest of the app renders, so what appears here
+                  is the contract's control and not this screen's idea of one. */}
+              <ItemRow
+                item={withoutDevicePrefix(item, device.name)}
+                onChange={onChange}
+                writesEnabled={writesEnabled}
+              />
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-900/40">
         <Badge tone={device.available ? 'ok' : 'error'} dot>
           {stateLabel(device.state)}
@@ -96,7 +161,7 @@ function DeviceDetail({ device, onClose }: { device: BridgeDevice; onClose: () =
             <dd className="flex flex-wrap gap-1.5">
               {device.capabilities.map((capability) => (
                 <Badge key={capability} tone="neutral">
-                  {capability}
+                  {CAPABILITY_LABELS[capability] ?? capability}
                 </Badge>
               ))}
             </dd>
@@ -443,7 +508,7 @@ export function DevicesPage() {
                         writesEnabled={managed.writesEnabled}
                         pending={busy}
                         onOpen={() => setOpenId(device.id)}
-                        onToggle={(item, next) => managed.request(item, next)}
+                        onToggle={(item, next) => managed.applyNow(item, next)}
                       />
                     ))}
                   </ul>
@@ -481,7 +546,18 @@ export function DevicesPage() {
 
       <ChangeDialog change={managed.change} />
 
-      {openDevice ? <DeviceDetail device={openDevice} onClose={() => setOpenId(null)} /> : null}
+      {openDevice ? (
+        <DeviceDetail
+          device={openDevice}
+          controls={deviceControls(
+            managedByName.get(openDevice.name)?.id,
+            managed.itemsById.values(),
+          )}
+          writesEnabled={managed.writesEnabled}
+          onChange={managed.request}
+          onClose={() => setOpenId(null)}
+        />
+      ) : null}
     </>
   );
 }

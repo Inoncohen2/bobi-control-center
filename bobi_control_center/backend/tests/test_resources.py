@@ -199,8 +199,8 @@ async def test_a_capability_the_bridge_did_not_advertise_is_refused() -> None:
         service(),
         "devices",
         "set",
-        resource_id="ac_salon",
-        payload={"value": 22, "capability": "colour"},
+        resource_id="kitchen",
+        payload={"value": True, "capability": "colour"},
     )
 
     assert codes(response) == ["unsupported_capability"]
@@ -211,8 +211,8 @@ async def test_an_advertised_capability_is_accepted() -> None:
         service(),
         "devices",
         "set",
-        resource_id="ac_salon",
-        payload={"value": 22, "capability": "temperature"},
+        resource_id="kitchen",
+        payload={"value": True, "capability": "brightness"},
     )
 
     assert response.valid is True
@@ -220,11 +220,15 @@ async def test_an_advertised_capability_is_accepted() -> None:
 
 @pytest.mark.parametrize(
     ("value", "code"),
-    [(10, "too_low"), (40, "too_high"), (22.5, "bad_step")],
+    [(10, "too_low"), (40, "too_high"), (22.25, "bad_step")],
 )
 async def test_published_limits_are_enforced(value, code) -> None:
     response = await preview(
-        service(), "devices", "set", resource_id="ac_salon", payload={"value": value}
+        service(),
+        "devices",
+        "temperature",
+        resource_id="ac_salon_temperature",
+        payload={"value": value},
     )
 
     assert codes(response) == [code]

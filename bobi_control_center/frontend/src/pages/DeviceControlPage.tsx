@@ -19,7 +19,7 @@ import { DEVICE_CLASS_LABELS } from '@/utils/format';
 import type { ManagedItem } from '@/types/api';
 
 /** Hebrew for the capability tokens the bridge publishes. */
-const CAPABILITY_LABELS: Record<string, string> = {
+export const CAPABILITY_LABELS: Record<string, string> = {
   on_off: 'הדלקה וכיבוי',
   brightness: 'עוצמה',
   color_temp: 'גוון אור',
@@ -36,6 +36,21 @@ const CAPABILITY_LABELS: Record<string, string> = {
   scent_slot: 'תא ריח',
   timer: 'טיימר',
   snapshot: 'תמונה',
+  // The catalogue names some capabilities after the service that performs
+  // them, where the managed snapshot names them after the capability itself.
+  turn_on: 'הדלקה',
+  turn_off: 'כיבוי',
+  set_temperature: 'טמפרטורה',
+  set_hvac_mode: 'מצב',
+  set_fan_mode: 'מאוורר',
+  status: 'מצב נוכחי',
+  power: 'הדלקה וכיבוי',
+  fan_speed: 'עוצמת שאיבה',
+  locate: 'איתור',
+  return_to_base: 'חזרה לעמדה',
+  night_vision: 'ראיית לילה',
+  recording: 'הקלטה',
+  motion_detection: 'זיהוי תנועה',
 };
 
 export const CAMERA_CLASS = 'camera';

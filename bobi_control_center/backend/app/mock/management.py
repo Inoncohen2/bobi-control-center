@@ -503,16 +503,51 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "entity_id": "light.kitchen",
                 "constraints": {"min": 1, "max": 100, "step": 1, "unit": "%"},
             },
+            # The live shape: a device's switch is one item and each capability
+            # is another, named `<device>_<capability>`. The double published a
+            # single number per air conditioner, so the sheet that gathers a
+            # device's controls had nothing to gather and every mode, fan speed
+            # and swing setting in the house was unreachable from the screen.
             {
                 "id": "ac_salon",
                 "label": "מזגן סלון",
+                "kind": "toggle",
+                "value": True,
+                "display": "cool",
+                "controllable": True,
+                "operations": ["power"],
+                "device_class": "climate",
+                "capabilities": ["on_off", "temperature", "hvac_mode", "fan_mode"],
+            },
+            {
+                "id": "ac_salon_temperature",
+                "label": "מזגן סלון — טמפרטורת יעד",
                 "kind": "number",
                 "value": 24,
                 "controllable": True,
-                "operations": ["set"],
+                "operations": ["temperature"],
                 "device_class": "climate",
-                "capabilities": ["on_off", "temperature", "hvac_mode"],
-                "constraints": {"min": 16, "max": 30, "step": 1, "unit": "°"},
+                "constraints": {"min": 16, "max": 30, "step": 0.5, "unit": "°C"},
+            },
+            {
+                "id": "ac_salon_hvac_mode",
+                "label": "מזגן סלון — מצב הפעלה",
+                "kind": "choice",
+                "value": "cool",
+                "controllable": True,
+                "operations": ["hvac_mode"],
+                "device_class": "climate",
+                "options": ["off", "auto", "cool", "dry", "heat", "fan_only"],
+            },
+            {
+                "id": "ac_salon_fan_mode",
+                "label": "מזגן סלון — עוצמת מאוורר",
+                "kind": "choice",
+                "value": "auto",
+                "controllable": True,
+                "operations": ["fan_mode"],
+                "device_class": "climate",
+                "options": ["silent", "low", "medium", "high", "auto"],
             },
             # The live vocabulary, with no `set` to fall back on. This house
             # names one verb per capability — `power`, `temperature`,

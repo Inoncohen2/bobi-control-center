@@ -1,14 +1,18 @@
 /**
- * A switch that asks before it acts.
+ * A switch that never guesses.
  *
- * It looks like a switch and it moves like one, but pressing it does not change
- * anything: it asks the backend to describe the change, and the dialog that
- * follows is what commits. So the knob stays where the bridge says it is until
- * a commit has been read back — the position on screen is Home Assistant's
- * answer, never an optimistic guess.
+ * Pressing it does not set the knob. It asks the backend, and the knob moves
+ * only once a commit has been read back — the position on screen is Home
+ * Assistant's answer, never an optimistic guess. That is why `pending` dims
+ * rather than flips: a switch that slid over and slid back would be the
+ * interface lying twice.
  *
- * That is why `pending` dims rather than flips. A switch that slid over and
- * slid back would be the interface lying twice.
+ * What a press *leads to* depends on the caller and on the backend's own
+ * judgement. On the device catalogue it previews and commits in one gesture,
+ * because turning a light on is not a decision anybody wants read back to them
+ * first; elsewhere it opens the confirmation dialog. Either way the preview
+ * happens, and either way a change the backend called destructive stops and
+ * asks. This component neither knows nor decides which — it reports a press.
  */
 
 import { cn } from '@/utils/cn';

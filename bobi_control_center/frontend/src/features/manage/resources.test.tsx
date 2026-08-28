@@ -23,6 +23,7 @@ import {
   makeManagementOff,
   makeManagementOn,
   makeManagementWith,
+  makeCommit,
   makePreview,
   makeResourceSnapshot,
   makeStatus,
@@ -626,7 +627,7 @@ describe('a device card', () => {
     primary_operation: 'power',
   });
 
-  const deviceRoutes = (item = KITCHEN, writes = true) => ({
+  const deviceRoutes = (item = KITCHEN, writes = true, overrides = {}) => ({
     ...BASE,
     '/api/bobi/devices': makeDevices(),
     '/api/bobi/manage/contract': makeManagementWith('devices', { writes_enabled: writes }, [
@@ -638,6 +639,8 @@ describe('a device card', () => {
       groups: [{ id: 'devices', label: 'מכשירים', description: null, items: [item] }],
     }),
     '/api/bobi/manage/devices/preview': makePreview(),
+    '/api/bobi/manage/devices/commit': makeCommit(),
+    ...overrides,
   });
 
   it('puts a switch on the card, matched to the catalogue row', async () => {
@@ -648,14 +651,19 @@ describe('a device card', () => {
     expect(toggle).toHaveAttribute('aria-checked', 'false');
   });
 
-  it('asks rather than acts', async () => {
+  // A switch on the catalogue applies at once now: flipping a light is not a
+  // decision anybody wants read back to them first. What must not change is
+  // that it still goes *through* a preview — the token, the expected state and
+  // every published limit are checked there — and that a change the backend
+  // wants confirmed still stops and asks.
+  it('applies at once, and still through a preview', async () => {
     const fetchMock = stub(deviceRoutes());
     renderWithProviders(<DevicesPage />);
 
     await userEvent.click(await screen.findByRole('switch', { name: 'אור מטבח' }));
 
     await waitFor(() =>
-      expect(paths(fetchMock).some((path) => path.endsWith('/devices/preview'))).toBe(true),
+      expect(paths(fetchMock).some((path) => path.endsWith('/devices/commit'))).toBe(true),
     );
     const call = fetchMock.mock.calls.find(([input]) =>
       String(input).endsWith('/devices/preview'),
@@ -666,7 +674,29 @@ describe('a device card', () => {
       resource_id: 'kitchen',
       payload: { value: true },
     });
-    // Nothing was committed by the press itself.
+    // The commit quotes the preview it was given, never the client's wish.
+    const committed = fetchMock.mock.calls.find(([input]) =>
+      String(input).endsWith('/devices/commit'),
+    );
+    expect(JSON.parse(String(committed?.[1]?.body)).preview_id).toBe('pv_test');
+    // …and no dialog was put in the way.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('still stops and asks when the backend calls the change destructive', async () => {
+    const fetchMock = stub(
+      deviceRoutes(KITCHEN, true, {
+        '/api/bobi/manage/devices/preview': makePreview({
+          destructive: true,
+          confirm_word: 'מחק',
+        }),
+      }),
+    );
+    renderWithProviders(<DevicesPage />);
+
+    await userEvent.click(await screen.findByRole('switch', { name: 'אור מטבח' }));
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
     expect(paths(fetchMock).some((path) => path.endsWith('/devices/commit'))).toBe(false);
   });
 
