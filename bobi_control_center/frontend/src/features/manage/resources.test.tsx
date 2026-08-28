@@ -782,6 +782,65 @@ describe('a device card', () => {
     releaseCommit?.();
   });
 
+  it('leaves every other switch alone while one is applying', async () => {
+    // `pending` pulses the switch and refuses further presses. It used to be
+    // handed the whole page's change state, so turning on one light made every
+    // switch on the screen blink and go unpressable at once.
+    const SALON = makeManagedItem({
+      id: 'salon',
+      label: 'מזגן סלון', // matches a second device in the catalogue fixture
+      kind: 'toggle',
+      value: false,
+      risk: 'medium',
+      controllable: true,
+      operations: ['power'],
+      primary_operation: 'power',
+    });
+    const both = {
+      ...deviceRoutes(),
+      '/api/bobi/manage/devices/snapshot': makeResourceSnapshot({
+        resource: 'devices',
+        items: [KITCHEN, SALON],
+        groups: [
+          {
+            id: 'devices',
+            label: 'מכשירים',
+            description: null,
+            items: [KITCHEN, SALON],
+          },
+        ],
+      }),
+    };
+
+    let releaseCommit: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      releaseCommit = resolve;
+    });
+    const inner = mockApi(both);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/devices/commit')) await held;
+      return inner(input, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderWithProviders(<DevicesPage />);
+
+    const kitchen = await screen.findByRole('switch', { name: 'אור מטבח' });
+    const salon = await screen.findByRole('switch', { name: 'מזגן סלון' });
+    await userEvent.click(kitchen);
+
+    await waitFor(() =>
+      expect(screen.getByRole('switch', { name: 'אור מטבח' })).toHaveAttribute(
+        'aria-checked',
+        'true',
+      ),
+    );
+
+    // The one that was not pressed has not moved and is still usable.
+    expect(salon).toHaveAttribute('aria-checked', 'false');
+    expect(salon).toBeEnabled();
+    releaseCommit?.();
+  });
+
   it('shows no dialog *while* the switch is still applying', async () => {
     // The assertion above only looks once the gesture has finished, so it held
     // even while the dialog was opening mid-flight and closing itself on
