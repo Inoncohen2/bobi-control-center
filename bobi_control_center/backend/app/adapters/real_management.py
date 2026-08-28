@@ -14,6 +14,7 @@ payload-bound confirmation gate before any commit service can be reached.
 from __future__ import annotations
 
 import logging
+from time import monotonic
 from typing import TYPE_CHECKING, Any
 
 from app.adapters.management import UNAVAILABLE_MESSAGE, ManagementBridge
@@ -32,6 +33,7 @@ from app.models.manage import (
     TaskSnapshot,
 )
 from app.services import normalize
+from app.services.live_state import entity_map, overlay
 from app.services.resource_normalize import normalize_resource, unavailable
 from app.services.resources import (
     RESOURCE_IDS,
@@ -79,8 +81,38 @@ _OPEN = "needs_action"
 class RealManagementBridge(ManagementBridge):
     """Talk to Bobi's closed management bridge surface, and nothing else."""
 
+    #: Families whose live state is read from Home Assistant rather than
+    #: rendered by their bridge script. Only `devices` qualifies: it is the one
+    #: family whose values change by the minute, and the one whose catalogue —
+    #: names, capabilities, limits — changes only when the household changes a
+    #: device. Every other family's snapshot *is* its state, so splitting them
+    #: would buy nothing and cost a second round trip.
+    LIVE_STATE_FAMILIES = frozenset({"devices"})
+
+    #: How long a catalogue may be reused. Short enough that renaming a device
+    #: in Home Assistant shows up while you are still looking at the screen,
+    #: long enough that a burst of refreshes renders the template once.
+    CATALOGUE_TTL_SECONDS = 60.0
+
     def __init__(self, adapter: RealHomeAssistantAdapter) -> None:
         self._adapter = adapter
+        #: resource → (fetched_at, payload). The expensive half, kept.
+        self._catalogue: dict[str, tuple[float, dict[str, Any]]] = {}
+
+    async def _catalogue_payload(self, resource: str, service: str) -> dict[str, Any]:
+        """The bridge's own answer, reused for a short while.
+
+        Caching is what makes the split a saving rather than an extra call: the
+        template renders once a minute instead of once a refresh, and the fresh
+        half comes from `/api/states`, which renders nothing at all.
+        """
+        cached = self._catalogue.get(resource)
+        now = monotonic()
+        if cached is not None and now - cached[0] < self.CATALOGUE_TTL_SECONDS:
+            return cached[1]
+        payload = await self._payload(service)
+        self._catalogue[resource] = (now, payload)
+        return payload
 
     async def _payload(self, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
         return await self._adapter._payload(service, data)
@@ -105,15 +137,50 @@ class RealManagementBridge(ManagementBridge):
         spec = SPECS.get(resource)
         if spec is None or spec.snapshot_service is None:
             return unavailable(resource, UNAVAILABLE_MESSAGE)
+        live = resource in self.LIVE_STATE_FAMILIES
         try:
-            payload = await self._payload(spec.snapshot_service)
+            payload = (
+                await self._catalogue_payload(resource, spec.snapshot_service)
+                if live
+                else await self._payload(spec.snapshot_service)
+            )
         except BobiError as exc:
             if exc.code == "bridge_service_missing":
                 return unavailable(
                     resource, f"{spec.label}: הגשר של בובי עדיין לא כולל את השירות הזה"
                 )
             raise
-        return normalize_resource(resource, payload)
+
+        snapshot = normalize_resource(resource, payload)
+        if live:
+            snapshot = await self._with_live_state(payload, snapshot)
+        return snapshot
+
+    async def _with_live_state(
+        self, payload: dict[str, Any], snapshot: ResourceSnapshot
+    ) -> ResourceSnapshot:
+        """Refresh the switch positions from Home Assistant's own state.
+
+        Every failure here is soft, and that is the point: a cached catalogue
+        with the bridge's own values is exactly what this screen showed before
+        the split, so an unreachable `/api/states` degrades to the old
+        behaviour rather than to an error. The one thing it must not do is
+        show a *stale* value as though it were fresh, and it cannot: an item it
+        could not refresh keeps the value the bridge rendered, and the bridge
+        rendered it at most `CATALOGUE_TTL_SECONDS` ago.
+        """
+        mapping = entity_map(payload)
+        if not mapping:
+            # The bridge does not publish entity ids on its items, so there is
+            # nothing to look a state up by. This is the pre-split bridge, and
+            # its own values stand.
+            return snapshot
+        try:
+            states = await self._adapter.fetch_states()
+        except BobiError:
+            logger.debug("live states unavailable; using the catalogue's own values")
+            return snapshot
+        return overlay(snapshot, mapping, states)
 
     async def observe(self, resource_type: str, resource_id: str | None) -> ObservedState | None:
         """Read the current state a preview binds to."""
@@ -189,6 +256,12 @@ class RealManagementBridge(ManagementBridge):
         """Map one validated operation onto one declared commit bridge."""
         if not preview_token:
             raise _missing_token(resource_type, operation)
+        # A commit is the one moment a cached catalogue is certainly wrong.
+        # Switch positions are refreshed from Home Assistant every read and so
+        # survive this, but a target temperature is a catalogue value: changing
+        # one and being shown the old number for the next minute would make the
+        # write look as though it had not landed.
+        self._catalogue.pop(resource_type, None)
         if resource_type == "tasks":
             return await self._apply_task(
                 operation, resource_id, payload, observed, request_id, preview_token

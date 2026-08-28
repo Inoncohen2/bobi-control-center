@@ -4,6 +4,64 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.11.0
+
+The read path is split in two, by how often each half changes.
+
+### What moved, and what did not
+
+* The **catalogue** — which devices exist, their canonical ids, their Hebrew
+  names, capabilities and limits — still comes from `script.bobi_cc_devices`,
+  and is now cached for a minute. Keeping it there is deliberate rather than
+  lazy: it is configuration the household edits *in Home Assistant*, and moving
+  it into this add-on would mean a new release every time a lamp is renamed.
+* The **live state** — what is on right now — comes from `/api/states`, which
+  renders no template and has no shape to get wrong.
+* **Writes did not move at all.** The kill switch, the preview token, the
+  expected-state check and the read-after-write all live in the commit bridges,
+  and all four were run against the house and verified in 3.9.1.
+
+The caching is what makes this a saving rather than an extra round trip: the
+template renders once a minute instead of once a refresh.
+
+### Why, concretely
+
+A bridge script renders the house through Jinja on every read. Three faults in
+this release came from exactly that: a `datetime` that cannot be serialised out
+of a template (which made one family answer **500 to every call**), a family
+publishing `enabled` where every sibling publishes `controllable`, and a
+`display` field holding a raw machine state. Jinja has no schema.
+`/api/states` has nothing to get wrong.
+
+### What it refuses to do
+
+Only **switch positions** are refreshed. Numbers and choices keep the value the
+bridge computed, because working those out would mean copying the whole
+capability model into this application — the thing the contract-driven design
+exists to avoid. Deciding whether a raw state means "on" still needs domain
+knowledge, so `ON_STATES` duplicates a small, explicit table of it; a domain
+absent from that table is never overlaid.
+
+Everything fails soft, and most of the tests are about that: no entity map, an
+unreachable `/api/states`, an entity Home Assistant never heard of, a domain
+nobody thought about, a state of `unavailable` — each keeps the bridge's own
+answer, which is exactly the screen that existed before this split. A commit
+drops the cached catalogue, because a target temperature changed and then shown
+stale for a minute would look like a write that never landed.
+
+`/api/states` returns every entity in the house, and the overlay keeps only the
+ones the bridge's catalogue already named. No Home Assistant entity id reaches
+a browser — there is a test that renders a snapshot and asserts the entity id
+is not in it.
+
+### Not yet in effect
+
+The overlay turns on when `bobi_cc_devices` publishes `entity_id` on each of
+its items, which is the one thing the app cannot look up for itself. Until that
+bridge change lands, `entity_map` is empty and the app behaves exactly as it
+did before — which is the fail-soft path, working. The backend half is complete
+and tested; it has **not** been exercised against the live house.
+
 ## 3.10.1
 
 A pass over every menu against the **live house** rather than the test double —

@@ -174,6 +174,58 @@ class RealHomeAssistantAdapter(HomeAssistantAdapter):
 
         return extract_service_response(payload)
 
+    async def fetch_states(self) -> dict[str, dict[str, Any]]:
+        """Every entity state Home Assistant currently holds, keyed by id.
+
+        The one read in this adapter that does not go through a `bobi_cc_*`
+        script, and it is deliberate. A bridge script renders the house's live
+        state through a Jinja template on every single read — which is both the
+        slowest part of a refresh and, on the evidence of this release, the
+        least reliable: `bobi_cc_automations_snapshot` answered 500 to every
+        call because a `datetime` cannot be serialised out of a template, and
+        two more families arrived in the wrong shape for want of a schema.
+        `/api/states` has no template and no shape to get wrong.
+
+        What it must *not* become is a way to see the whole house. This returns
+        raw Home Assistant, every entity of it, and the caller is responsible
+        for keeping only what the bridge's catalogue already named — see
+        `live_state.overlay`, which is the only caller and which drops anything
+        it was not given a canonical id for.
+
+        Failure is not fatal anywhere: a caller that cannot get fresh states
+        falls back to the ones the bridge rendered, which is exactly the
+        behaviour that existed before this method did.
+        """
+        url = f"{self._base_url}/states"
+        try:
+            response = await self._get_client().get(url, headers=self._headers())
+        except httpx.TimeoutException as exc:
+            raise UpstreamError(
+                "Home Assistant לא הגיב בזמן", details={"read": "states"}
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise UpstreamError(
+                "לא הצלחתי להתחבר ל-Home Assistant", details={"read": "states"}
+            ) from exc
+
+        self._raise_for_status(response, "states", "")
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise UpstreamError(
+                "התקבלה תשובה לא תקינה מ-Home Assistant", details={"read": "states"}
+            ) from exc
+
+        if not isinstance(payload, list):
+            return {}
+        return {
+            entity: item
+            for item in payload
+            if isinstance(item, dict) and (entity := item.get("entity_id"))
+            and isinstance(entity, str)
+        }
+
     @staticmethod
     def _raise_for_status(response: httpx.Response, domain: str, service: str) -> None:
         """Turn a Home Assistant error into a structured Bobi error.
