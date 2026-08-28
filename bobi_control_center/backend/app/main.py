@@ -6,6 +6,7 @@ and serving the compiled frontend so the app is one container behind Ingress.
 
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -194,6 +195,63 @@ def _mount_frontend(app: FastAPI) -> None:
         app.mount("/assets", StaticFiles(directory=assets), name="assets")
 
     index = STATIC_DIR / "index.html"
+
+    @app.get("/manifest.webmanifest", include_in_schema=False)
+    async def manifest(request: Request) -> JSONResponse:
+        """The installed-app manifest, with absolute URLs for *this* origin.
+
+        ## Why this is not a static file
+
+        iOS decides whether a home-screen icon opens as an app or as a page in
+        Safari's chrome by comparing the current URL against the manifest's
+        `scope`. Getting that comparison wrong is the whole bug, and it has now
+        been wrong twice for opposite reasons:
+
+        * before 3.12.1 the manifest said `"start_url": "./"` and
+          `"scope": "./"`. Chromium resolves those against the manifest's own
+          URL and gets the right answer; iOS has long handled relative values
+          here poorly, and a scope it cannot resolve is a scope nothing is
+          inside.
+        * 3.12.1 removed both, on the reasoning that the specification then
+          *derives* them from the document that linked the manifest. That is
+          what the specification says. It did not fix the phone, because the
+          derivation is exactly the part that is unreliable.
+
+        The one thing never tried is leaving nothing to derive: absolute URLs,
+        stated outright. They cannot be static, because this app is served from
+        two places — a public hostname at the root, and a Home Assistant Ingress
+        prefix that is generated per session and unknown at build time. So the
+        values are computed per request, from the request itself.
+
+        `X-Ingress-Path` is what Home Assistant's proxy sends, carrying the
+        prefix it stripped. Absent — the public hostname — the app is at the
+        root. The icons are made absolute for the same reason: nothing here is
+        left for a phone to work out.
+        """
+        source = STATIC_DIR / "manifest.webmanifest"
+        if not source.is_file():
+            raise StarletteHTTPException(status_code=404, detail="no manifest")
+
+        document = json.loads(source.read_text("utf-8"))
+        base = f"{request.headers.get('X-Ingress-Path', '').rstrip('/')}/"
+
+        document["start_url"] = base
+        document["scope"] = base
+        # A stable identity for the installed app, so a manifest change does not
+        # read to the phone as a different app than the icon was installed with.
+        document["id"] = base
+        for icon in document.get("icons", []):
+            src = str(icon.get("src", ""))
+            if src.startswith("./"):
+                icon["src"] = base + src[2:]
+
+        return JSONResponse(
+            document,
+            media_type="application/manifest+json",
+            # The prefix is per session under Ingress, so a shared cache must
+            # not hand one session's manifest to another.
+            headers={"Cache-Control": "no-store, private"},
+        )
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa(full_path: str) -> FileResponse:
