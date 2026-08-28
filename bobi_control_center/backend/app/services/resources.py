@@ -552,7 +552,48 @@ _STATE_WORDS: dict[str, str] = {
     "docked": "בעמדה",
     "returning": "חוזר לעמדה",
     "error": "תקלה",
+    # Climate. The live air conditioners publish `hvac_modes`, `fan_modes`,
+    # `swing_modes` and `preset_modes` as bare English lists, and a bare list
+    # becomes an option whose label is its own token — so all four dropdowns on
+    # every air conditioner read "cool", "fan_only", "silent", "boost".
+    "cool": "מקרר",
+    "heat": "מחמם",
+    "dry": "מייבש",
+    "fan_only": "אוורור",
+    "heat_cool": "חימום וקירור",
+    "auto": "אוטומטי",
+    "silent": "שקט",
+    "low": "נמוך",
+    "medium": "בינוני",
+    "high": "גבוה",
+    "full": "מלא",
+    "turbo": "טורבו",
+    "vertical": "אנכי",
+    "horizontal": "אופקי",
+    "both": "אנכי ואופקי",
+    "none": "ללא",
+    "comfort": "נוחות",
+    "eco": "חסכוני",
+    "boost": "מוגבר",
+    "sleep": "שינה",
+    "away": "מחוץ לבית",
 }
+
+
+def state_word(text: str) -> str:
+    """Home Assistant's word for a state, in Hebrew — or the text unchanged.
+
+    Separate from `humanise` because a bridge may publish its own `display`,
+    and the live one does: it sends the entity's raw state there. So every
+    device row on the busiest screen in the app read "off", "cool", "docked"
+    and "idle" — the bridge had filled in the field whose whole purpose is to
+    be the human reading, with the machine one.
+
+    Only the universal vocabulary is translated, and anything else is returned
+    as it came: a bridge that publishes a real Hebrew display must pass through
+    this untouched.
+    """
+    return _STATE_WORDS.get(text.strip().lower(), text)
 
 
 def humanise(value: Any, item: ManagedItem | None = None) -> str:
@@ -577,8 +618,7 @@ def humanise(value: Any, item: ManagedItem | None = None) -> str:
         return _number(value)
     if isinstance(value, list):
         return "، ".join(str(part) for part in value) if value else "ריק"
-    text = str(value)
-    return _STATE_WORDS.get(text.strip().lower(), text)
+    return state_word(str(value))
 
 
 def _number(value: float) -> str:

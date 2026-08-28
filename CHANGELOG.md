@@ -4,6 +4,50 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.10.1
+
+A pass over every menu against the **live house** rather than the test double —
+each family's real payload run through this application's own normalizer. Three
+things the double had been hiding.
+
+### Every device row read its state in English
+
+`display` is the field that holds the human reading, and the live
+`bobi_cc_devices` fills it with the entity's raw state. Taking it verbatim put
+"off", "cool", "docked", "idle" and "unavailable" on the rows of the busiest
+screen in the app. The Hebrew that already existed only applied when a bridge
+sent *no* display at all — which the double did, and the house does not.
+
+A published display now goes through the same vocabulary a value would. A
+bridge that sends real Hebrew still passes through untouched.
+
+### Every air conditioner had four English menus
+
+`hvac_modes`, `fan_modes`, `swing_modes` and `preset_modes` arrive from Home
+Assistant as bare string lists. A bare list has no label but its own token, so
+all three air conditioners offered "cool", "fan_only", "silent", "boost". The
+labels are Hebrew now; the values a commit carries are still Home Assistant's
+own tokens.
+
+### What the live sweep confirmed
+
+- **מכשירים** — 19 entities, 15 controllable. The vacuum publishes no `power`
+  at all: it resolves to a start/stop switch plus pause, return-to-base and
+  locate, which is exactly what 3.9.0 designed against a mock and this proves
+  against the real one.
+- **משימות** — four real tasks, writes enabled. `bobi_cc_tasks` reports
+  `writes_enabled: false`, but the app reads `bobi_cc_task_snapshot`, which
+  reports true. Checked rather than assumed.
+- **משתמשים** — real profiles, phones masked to `••••7600`, and the two
+  alert-default rows are `readonly`, so they render as readings.
+- **אוטומציות** — 11 real automations, each a switch plus "הרצת אוטומציה עכשיו".
+- **עזרים · סקריפטים · מערכת · שעון שבת** — real data, all Hebrew.
+- **כללים · סצנות · יומן** — genuinely empty in this house: no smart rules, no
+  scenes, no events in the next 30 days. Empty because the house is, not
+  because a screen failed.
+- The live contract parses to the right verbs per family, including the
+  `add`→`create` translation the calendar's "אירוע חדש" form depends on.
+
 ## 3.10.0
 
 An installable app, a Shabbat clock that says the hour, and the week's portion.

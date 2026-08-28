@@ -37,6 +37,7 @@ from app.services.resources import (
     VALUELESS_OPERATIONS,
     humanise,
     mask_phone,
+    state_word,
 )
 
 #: `domain.object_id` — a Home Assistant entity id. Matched on the value as
@@ -180,7 +181,11 @@ def _options(value: Any) -> list[ManagedOption]:
         options.append(
             ManagedOption(
                 value=token,
-                label=normalize._text(normalize._first(item, "label", "name")) or token,
+                # A bare list gives no label, so the token is the fallback — and
+                # the token is Home Assistant's English. Every air conditioner's
+                # mode, fan, swing and preset menu read that way.
+                label=normalize._text(normalize._first(item, "label", "name"))
+                or state_word(token),
                 detail=normalize._text(item.get("detail")),
             )
         )
@@ -414,7 +419,12 @@ def _item(payload: dict[str, Any], *, default_group: str | None = None) -> Manag
         ),
         detail=safe_detail(payload),
     )
-    item.display = normalize._text(payload.get("display")) or humanise(value, item)
+    # The bridge's own display wins — but it goes through the same Hebrew that
+    # a value would, because the live bridge fills this field with the entity's
+    # raw state. Taking it verbatim put "off", "cool" and "docked" on every
+    # device row: the field meant for the human reading, holding the machine's.
+    stated = normalize._text(payload.get("display"))
+    item.display = state_word(stated) if stated else humanise(value, item)
     return item
 
 

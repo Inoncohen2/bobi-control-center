@@ -461,7 +461,10 @@ def test_a_bare_list_of_choices_is_understood() -> None:
     assert [option.value for option in item.options] == [
         "off", "auto", "cool", "dry", "heat", "fan_only",
     ]
-    assert item.options[2].label == "cool"
+    # The label is the token said in Hebrew. It used to be the token itself,
+    # which is how four English menus ended up on every air conditioner; what
+    # this test is really about is that a bare list produces options at all.
+    assert item.options[2].label == "מקרר"
 
 
 def test_the_documented_shape_still_works() -> None:
@@ -723,3 +726,88 @@ async def test_a_status_reading_is_never_guessed_into_a_switch() -> None:
     assert canonical_kind("status", "WORKING", []) == "readonly"
     # And the guess is still made where the bridge genuinely said nothing.
     assert canonical_kind(None, True, []) == "toggle"
+
+
+# --- what the live house actually publishes ---------------------------------
+async def test_the_live_bridge_puts_its_raw_state_in_display() -> None:
+    """`display` is the field meant to hold the human reading.
+
+    The live `bobi_cc_devices` fills it with the entity's raw state, so taking
+    it verbatim put "off", "cool", "docked", "idle" and "unavailable" on the
+    rows of the busiest screen in the app. Rows below are copied from the live
+    response.
+    """
+    from app.services.resource_normalize import normalize_resource
+
+    payload = {
+        "available": True,
+        "groups": [
+            {
+                "id": "devices",
+                "items": [
+                    {"id": "salon", "label": "סלון", "kind": "toggle", "value": False,
+                     "display": "off", "controllable": True, "operations": ["power"]},
+                    {"id": "ac_salon", "label": "מזגן סלון", "kind": "toggle", "value": True,
+                     "display": "cool", "controllable": True, "operations": ["power"]},
+                    {"id": "robi", "label": "רובי", "kind": "toggle", "value": False,
+                     "display": "docked", "controllable": True,
+                     "operations": ["start", "stop", "pause", "return_to_base", "locate"]},
+                    {"id": "mosquito", "label": "קוטל יתושים", "kind": "toggle", "value": None,
+                     "display": "unavailable", "controllable": False, "operations": []},
+                ],
+            }
+        ],
+    }
+    shown = {item.id: item.display for item in normalize_resource("devices", payload).items}
+
+    assert shown == {
+        "salon": "כבוי",
+        "ac_salon": "מקרר",
+        "robi": "בעמדה",
+        "mosquito": "לא זמין",
+    }
+
+
+async def test_a_bare_option_list_is_labelled_in_hebrew() -> None:
+    """Every air conditioner in this house publishes four English menus.
+
+    `hvac_modes`, `fan_modes`, `swing_modes` and `preset_modes` arrive as bare
+    string lists, and a bare list has no label but its own token.
+    """
+    from app.services.resource_normalize import normalize_resource
+
+    payload = {
+        "available": True,
+        "groups": [{"id": "c", "items": [
+            {"id": "ac_salon_hvac_mode", "label": "מצב", "kind": "choice", "value": "cool",
+             "controllable": True, "operations": ["hvac_mode"],
+             "options": ["off", "auto", "cool", "dry", "heat", "fan_only"]},
+        ]}],
+    }
+    item = normalize_resource("devices", payload).items[0]
+
+    assert [option.label for option in item.options] == [
+        "כבוי", "אוטומטי", "מקרר", "מייבש", "מחמם", "אוורור",
+    ]
+    # The value a commit would carry is still Home Assistant's own token.
+    assert [option.value for option in item.options] == [
+        "off", "auto", "cool", "dry", "heat", "fan_only",
+    ]
+
+
+async def test_the_live_vacuum_keeps_its_switch_and_its_three_buttons() -> None:
+    """Copied from the live response: this vacuum names no `power` at all."""
+    from app.services.resource_normalize import normalize_resource
+
+    payload = {
+        "available": True,
+        "groups": [{"id": "v", "items": [
+            {"id": "robi", "label": "רובי", "kind": "toggle", "value": False, "display": "docked",
+             "controllable": True,
+             "operations": ["start", "stop", "pause", "return_to_base", "locate"]},
+        ]}],
+    }
+    robi = normalize_resource("devices", payload).items[0]
+
+    assert robi.primary_operation == "start"
+    assert robi.run_operations == ["pause", "return_to_base", "locate"]
