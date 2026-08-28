@@ -4,6 +4,50 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.18.0
+
+A switch moves when you press it.
+
+### Where the delay actually was
+
+Pressing a switch waited on three round trips before anything moved on screen:
+a preview, a commit, and then a fresh snapshot. The third was the expensive
+one, and it was expensive for a reason nobody intended.
+
+The device catalogue is cached for sixty seconds because rendering
+`bobi_cc_devices` is the slowest thing this app does. Switch positions are not
+in that cache — `live_state.overlay` re-reads every one of them from
+`/api/states` on every single request. The comment above the cache-drop said
+exactly that, and then the code dropped the catalogue anyway, for every commit
+including a light switch. So the very next read, the one the person who pressed
+the switch is waiting on, could not use the cache and had to re-render the whole
+template first.
+
+It now drops the catalogue only for a commit that changed something the
+catalogue actually carries — a temperature, a mode, a brightness. A power
+commit keeps it, because `/api/states` already reports the only thing that
+changed. A test asserts both halves: the toggle keeps the cache, the
+temperature still throws it away.
+
+### And the switch no longer waits to move
+
+The card showed the bridge's value the whole time, so even with the read made
+cheap there was still a preview and a commit to sit through. It now shows what
+it was asked to do, immediately, per device — pressing one switch never moves
+another.
+
+This is not a claim that the change landed, and nothing was relaxed to do it.
+The preview still happens, the commit still goes through the bridge, and the
+read-after-write still decides the truth: the requested value is held only
+until the bridge answers, and the switch then settles onto whatever it says —
+springing back if the house refused. A commit that fails or cannot be verified
+still opens the dialog to say so, and a refusal that comes back with the value
+unchanged releases the switch rather than leaving it showing a request that is
+never going to happen.
+
+Home Assistant is still the only path. Nothing here talks to a device directly,
+and no entity id or token reaches the browser.
+
 ## 3.17.1
 
 The installed app says what its scope is, instead of leaving it to be worked out.

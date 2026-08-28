@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Boxes, Search, SlidersHorizontal, X } from 'lucide-react';
 
 import { Badge } from '@/components/ui/Badge';
@@ -224,6 +224,7 @@ function DeviceCard({
   managed,
   writesEnabled,
   pending,
+  requested,
   onOpen,
   onToggle,
 }: {
@@ -231,6 +232,8 @@ function DeviceCard({
   managed: ManagedItem | undefined;
   writesEnabled: boolean;
   pending: boolean;
+  /** What this switch was just asked to become, until the bridge answers. */
+  requested: boolean | null;
   onOpen: () => void;
   onToggle: (item: ManagedItem, next: boolean) => void;
 }) {
@@ -238,7 +241,11 @@ function DeviceCard({
   // A switch belongs on something with two states. A thermostat's target
   // temperature is managed in the detail sheet, not by a knob on a card.
   const togglable = operation !== null && managed?.kind === 'toggle';
-  const on = managed?.value === true;
+  // `requested` is what this switch was just asked to do, and it wins until the
+  // bridge answers. Before, the switch showed the bridge's value throughout —
+  // so a press waited on a preview, a commit and a fresh snapshot before
+  // anything moved, and from a phone the tap felt lost.
+  const on = requested ?? managed?.value === true;
 
   return (
     <li>
@@ -337,6 +344,23 @@ export function DevicesPage() {
   }, [managed.itemsById]);
 
   const busy = managed.change.stage !== 'idle';
+
+  // What was just asked for, and what the bridge said when it was asked. Held
+  // per device id, so pressing one switch never moves another.
+  const [requested, setRequested] = useState<
+    { id: string; want: boolean; was: unknown } | null
+  >(null);
+  const requestedItem = requested ? managed.itemsById.get(requested.id) : undefined;
+  // The bridge has answered with something new, so it owns the switch again.
+  if (requested && requestedItem && requestedItem.value !== requested.was) setRequested(null);
+  // A refused write comes back unchanged and would otherwise leave the switch
+  // showing a request that is never going to happen. The dialog says what went
+  // wrong; this stops the switch implying otherwise even if nobody reads it.
+  useEffect(() => {
+    if (!requested) return;
+    const timer = setTimeout(() => setRequested(null), 6000);
+    return () => clearTimeout(timer);
+  }, [requested]);
 
   return (
     <>
@@ -507,8 +531,17 @@ export function DevicesPage() {
                         managed={managedByName.get(device.name) ?? undefined}
                         writesEnabled={managed.writesEnabled}
                         pending={busy}
+                        requested={
+                          requested &&
+                          requested.id === (managedByName.get(device.name)?.id ?? '')
+                            ? requested.want
+                            : null
+                        }
                         onOpen={() => setOpenId(device.id)}
-                        onToggle={(item, next) => managed.applyNow(item, next)}
+                        onToggle={(item, next) => {
+                          setRequested({ id: item.id, want: next, was: item.value });
+                          managed.applyNow(item, next);
+                        }}
                       />
                     ))}
                   </ul>

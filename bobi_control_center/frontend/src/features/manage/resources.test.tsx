@@ -749,6 +749,39 @@ describe('a device card', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
+  it('moves the switch the moment it is pressed, before anything has landed', async () => {
+    // The press used to wait on a preview, a commit and a fresh snapshot —
+    // three round trips — so from a phone the switch sat still and the tap
+    // felt lost. It now shows the request immediately. This holds the commit
+    // open so "immediately" is the only thing that could have moved it.
+    let releaseCommit: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      releaseCommit = resolve;
+    });
+
+    const inner = mockApi(deviceRoutes());
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/devices/commit')) await held;
+      return inner(input, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderWithProviders(<DevicesPage />);
+
+    const toggle = await screen.findByRole('switch', { name: 'אור מטבח' });
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+
+    await userEvent.click(toggle);
+
+    // Nothing has been confirmed by the house, and the switch has already moved.
+    await waitFor(() =>
+      expect(screen.getByRole('switch', { name: 'אור מטבח' })).toHaveAttribute(
+        'aria-checked',
+        'true',
+      ),
+    );
+    releaseCommit?.();
+  });
+
   it('shows no dialog *while* the switch is still applying', async () => {
     // The assertion above only looks once the gesture has finished, so it held
     // even while the dialog was opening mid-flight and closing itself on
