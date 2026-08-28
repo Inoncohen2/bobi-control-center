@@ -19,10 +19,10 @@
  *
  * Which devices get a sheet is not a list kept here. It is worked out from the
  * items the bridge sent: a device with extra items has a sheet, a device
- * without has a chip. Today that means the three air conditioners, because
- * their temperature is the only per-device setting the Shabbat bridge
- * publishes. If it starts publishing a brightness for the LED or a speed for
- * the vacuum, those get sheets too, and none of this changes.
+ * without has a chip. Today that means the three air conditioners, which
+ * publish a target temperature, a mode, a fan speed and a swing setting each.
+ * If the bridge starts publishing a brightness for the LED or a speed for the
+ * vacuum, those get sheets too, and none of this changes.
  */
 
 import { useMemo, useState } from 'react';
@@ -42,6 +42,21 @@ export function parseProfileId(id: string): { profile: string; part: string } | 
   const match = /^profile\.([^.]+)\.(.+)$/.exec(id);
   if (!match?.[1] || !match[2]) return null;
   return { profile: match[1], part: match[2] };
+}
+
+/**
+ * The device token a profile item belongs to.
+ *
+ * A device's only setting is named after the device itself
+ * (`profile.pre_on.ac_salon` — its target temperature). A device with several
+ * names the setting too (`profile.pre_on.ac_salon.hvac_mode`), because two
+ * items cannot share an id. Both belong to `ac_salon`, so the token is the
+ * first segment either way — without this, every extra setting would key
+ * itself under a token no device has and vanish from the screen rather than
+ * appear in that device's sheet.
+ */
+function deviceToken(part: string): string {
+  return part.split('.')[0] ?? part;
 }
 
 export interface ProfileParts {
@@ -64,7 +79,8 @@ export function splitProfile(items: ManagedItem[]): ProfileParts {
       continue;
     }
     // Anything else is named after the device it belongs to.
-    extras.set(parsed.part, [...(extras.get(parsed.part) ?? []), item]);
+    const token = deviceToken(parsed.part);
+    extras.set(token, [...(extras.get(token) ?? []), item]);
   }
 
   return { devices, extras };

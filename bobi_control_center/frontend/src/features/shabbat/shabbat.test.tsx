@@ -53,6 +53,12 @@ const SNAPSHOT = {
              value: ['dining', 'ac_salon'], options: DEVICES }),
       item({ id: 'profile.pre_on.ac_salon', label: 'מזגן סלון', kind: 'number',
              value: 24, display: '24°' }),
+      // A device with more than one setting names each one after itself, since
+      // two items cannot share an id. All of them still belong to `ac_salon`.
+      item({ id: 'profile.pre_on.ac_salon.hvac_mode', label: 'מצב הפעלה',
+             kind: 'choice', value: 'cool', display: 'cool' }),
+      item({ id: 'profile.pre_on.ac_salon.fan_mode', label: 'עוצמת מאוורר',
+             kind: 'choice', value: 'auto', display: 'auto' }),
     ]},
   ],
   items: [],
@@ -74,6 +80,19 @@ describe('splitting a profile', () => {
 
     expect(parts.devices?.id).toBe('profile.pre_on.devices');
     expect([...parts.extras.keys()]).toEqual(['ac_salon']);
+  });
+
+  it('gathers every setting of one device under that device, not under each id', () => {
+    const parts = splitProfile(SNAPSHOT.groups[2]!.items);
+
+    // The failure this guards against is silent: keyed by the whole id, each
+    // extra setting would land under a token no device has, and the sheet
+    // would open empty rather than wrong.
+    expect(parts.extras.get('ac_salon')?.map((i) => i.id)).toEqual([
+      'profile.pre_on.ac_salon',
+      'profile.pre_on.ac_salon.hvac_mode',
+      'profile.pre_on.ac_salon.fan_mode',
+    ]);
   });
 });
 

@@ -4,6 +4,42 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.14.0
+
+A Shabbat profile now sets how each air conditioner runs, not only how warm.
+
+### Mode, fan speed and swing, per air conditioner, per profile
+
+Until now a profile carried one number per air conditioner — its target
+temperature — and ran it in `cool` because the executor said so, in a
+hard-coded string nobody could see or change. Each air conditioner in an
+on-profile now also publishes **מצב הפעלה**, **עוצמת מאוורר** and **הנפה**,
+stored in `input_select` helpers and applied by `script.shabbat_apply_profile`.
+
+The options are the ones the units actually accept, read from each unit rather
+than assumed: the girls' air conditioner swings `off`/`on` and blows up to
+`turbo`, the other two swing four ways and blow up to `full`. The write bridge
+validates a choice against the helper's own option list, so the bridge that
+reads and the bridge that writes cannot come to disagree about what is legal —
+`turbo` is refused for a swing setting even though it is a valid fan speed.
+
+Every helper's first option is what the executor already did — `cool`, `auto`,
+`off` — so a profile that nobody edits behaves exactly as it did before.
+
+Verified against the live install, end to end: a commit moved the salon's
+swing from `off` to `vertical` and read it back; replaying the stale expected
+value answered `stale_preview`; an option outside the helper's list answered
+`invalid_value`. Nothing was relaxed to get there.
+
+### A device with several settings keeps them together
+
+The profile screen gathers a device's extra settings into its own sheet, keyed
+by the device token. Two items cannot share an id, so a device with more than
+one setting names each after itself — `profile.pre_on.ac_salon.hvac_mode` —
+and the token is now the first segment of that name. Without this the three new
+controls would each key themselves under a token no device has, and the sheet
+would have opened empty rather than wrong.
+
 ## 3.13.1
 
 The split read path from 3.11.0 is switched on.

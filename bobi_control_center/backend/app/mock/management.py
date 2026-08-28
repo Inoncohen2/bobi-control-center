@@ -344,6 +344,42 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                         "constraints": {"minimum": 16, "maximum": 30, "step": 0.5,
                                          "unit": "°C"},
                     },
+                    # A device with more than one setting names each one after
+                    # itself — two items cannot share an id — and all of them
+                    # still belong to `ac_salon`. The live bridge publishes
+                    # these three per air conditioner in each on-profile; a
+                    # double carrying only the temperature is how the screen
+                    # came to be tested against a payload no bridge sends.
+                    {
+                        "id": "profile.pre_on.ac_salon.hvac_mode",
+                        "label": "מצב הפעלה",
+                        "kind": "choice",
+                        "value": "cool",
+                        "risk": "medium",
+                        "controllable": True,
+                        "operations": ["set"],
+                        "options": ["cool", "heat", "dry", "fan_only", "auto"],
+                    },
+                    {
+                        "id": "profile.pre_on.ac_salon.fan_mode",
+                        "label": "עוצמת מאוורר",
+                        "kind": "choice",
+                        "value": "auto",
+                        "risk": "medium",
+                        "controllable": True,
+                        "operations": ["set"],
+                        "options": ["auto", "silent", "low", "medium", "high", "full"],
+                    },
+                    {
+                        "id": "profile.pre_on.ac_salon.swing_mode",
+                        "label": "הנפה",
+                        "kind": "choice",
+                        "value": "off",
+                        "risk": "medium",
+                        "controllable": True,
+                        "operations": ["set"],
+                        "options": ["off", "vertical", "horizontal", "both"],
+                    },
                     {
                         "id": "profile.pre_on.ac_parents",
                         "label": "מזגן הורים",
