@@ -4,6 +4,53 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.17.1
+
+The installed app says what its scope is, instead of leaving it to be worked out.
+
+### Two fixes that were both wrong in opposite directions
+
+iOS decides whether a home-screen icon opens as an app or as a page inside
+Safari's chrome by comparing the current URL against the manifest's `scope`.
+That comparison has now been got wrong twice:
+
+* **before 3.12.1** the manifest said `"start_url": "./"` and `"scope": "./"`.
+  Chromium resolves those against the manifest's own URL and gets the right
+  answer; iOS has long handled relative values here poorly, and a scope it
+  cannot resolve is a scope nothing is inside.
+* **3.12.1** removed both, reasoning that the specification then *derives* them
+  from the document that linked the manifest. That is what the specification
+  says. It did not fix the phone, because the derivation is the unreliable part.
+
+3.16.1 then found that the service worker had been serving the *old* manifest
+from a cache whose key was never bumped — a real bug, and a necessary fix, but
+not this one.
+
+### Nothing left to derive
+
+The manifest is now generated per request with **absolute** `start_url`,
+`scope` and `id`, and absolute icon URLs. It cannot be a static file, because
+this app is served from two places: a public hostname at the root, and a Home
+Assistant Ingress prefix generated per session and unknown at build time.
+`X-Ingress-Path` is what the proxy sends, carrying the prefix it stripped;
+absent, the app is at the root.
+
+| Served from | `scope` |
+| --- | --- |
+| the public hostname | `/` |
+| Ingress | `/api/hassio_ingress/<token>/` |
+
+Verified in a real browser rather than by reading the spec: the manifest
+resolves to an absolute scope, and both the loaded page and a hash route
+(`#/devices`) test as **inside** it. The response is `no-store` and `private`,
+because the Ingress prefix belongs to one session.
+
+A test asserts both shapes, and fakes the static directory rather than skipping
+when no frontend is built — so it runs in CI instead of quietly passing by.
+
+**This still needs the icon removed and re-added once**, after updating: iOS
+keeps the manifest an installed icon was created with.
+
 ## 3.17.0
 
 An update is a download now, not a build on the Raspberry Pi.

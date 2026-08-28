@@ -881,3 +881,60 @@ def test_every_declared_arch_is_actually_published() -> None:
         "config.yaml promises these architectures but the publish workflow "
         f"builds no image for them, so installing there would fail: {missing}"
     )
+
+
+def test_the_manifest_states_its_scope_absolutely_in_both_places(tmp_path, monkeypatch) -> None:
+    """An installed app is standalone only while it is inside its own scope.
+
+    iOS decides whether a home-screen icon opens as an app or inside Safari's
+    chrome by that comparison, and it has been got wrong twice: relative `"./"`
+    values, which iOS resolves poorly, and then no values at all, on the theory
+    that the specification derives them — which is true, and which is the part
+    that is unreliable.
+
+    So nothing is left to derive. This asserts the manifest states absolute
+    values for both places the app is served from: a public hostname at the
+    root, and an Ingress prefix generated per session, which is why it cannot
+    be a static file.
+
+    The static directory is faked rather than skipped over, so this runs in CI
+    — where no frontend is built — instead of quietly passing by.
+    """
+    from fastapi.testclient import TestClient
+
+    from app import main as main_module
+    from app.config import Settings
+
+    (tmp_path / "index.html").write_text("<!doctype html>", "utf-8")
+    (tmp_path / "manifest.webmanifest").write_text(
+        json.dumps(
+            {
+                "name": "בובי",
+                "display": "standalone",
+                "icons": [{"src": "./icon-192.png", "sizes": "192x192"}],
+            }
+        ),
+        "utf-8",
+    )
+    monkeypatch.setattr(main_module, "STATIC_DIR", tmp_path)
+
+    client = TestClient(main_module.create_app(Settings()))
+
+    public = client.get("/manifest.webmanifest")
+    assert public.status_code == 200
+    assert public.headers["content-type"].startswith("application/manifest+json")
+    body = public.json()
+    assert body["display"] == "standalone"
+    assert body["start_url"] == "/"
+    assert body["scope"] == "/"
+    # Every icon absolute too — a relative one is one more thing to resolve.
+    assert all(icon["src"].startswith("/") for icon in body["icons"])
+
+    prefix = "/api/hassio_ingress/TOKEN123"
+    ingress = client.get("/manifest.webmanifest", headers={"X-Ingress-Path": prefix}).json()
+    assert ingress["start_url"] == f"{prefix}/"
+    assert ingress["scope"] == f"{prefix}/"
+    assert all(icon["src"].startswith(f"{prefix}/") for icon in ingress["icons"])
+
+    # The prefix is per session, so a shared cache must never reuse one.
+    assert "no-store" in public.headers.get("cache-control", "")
