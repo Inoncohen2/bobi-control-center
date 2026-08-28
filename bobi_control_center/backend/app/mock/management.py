@@ -285,6 +285,27 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                         "controllable": True,
                         "operations": ["set"],
                     },
+                    # The two added clocks keep their switch and their hour
+                    # with the other times, and the profile card claims both so
+                    # neither is shown twice.
+                    {
+                        "id": "extra_off_enabled",
+                        "label": "שעון כיבוי נוסף",
+                        "kind": "boolean",
+                        "value": False,
+                        "risk": "medium",
+                        "controllable": True,
+                        "operations": ["set"],
+                    },
+                    {
+                        "id": "extra_off_time",
+                        "label": "שעת הכיבוי הנוסף",
+                        "kind": "time",
+                        "value": "00:00",
+                        "risk": "medium",
+                        "controllable": True,
+                        "operations": ["set"],
+                    },
                 ],
             },
             {
@@ -344,6 +365,42 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                         "constraints": {"minimum": 16, "maximum": 30, "step": 0.5,
                                          "unit": "°C"},
                     },
+                    # A device with more than one setting names each one after
+                    # itself — two items cannot share an id — and all of them
+                    # still belong to `ac_salon`. The live bridge publishes
+                    # these three per air conditioner in each on-profile; a
+                    # double carrying only the temperature is how the screen
+                    # came to be tested against a payload no bridge sends.
+                    {
+                        "id": "profile.pre_on.ac_salon.hvac_mode",
+                        "label": "מצב הפעלה",
+                        "kind": "choice",
+                        "value": "cool",
+                        "risk": "medium",
+                        "controllable": True,
+                        "operations": ["set"],
+                        "options": ["cool", "heat", "dry", "fan_only", "auto"],
+                    },
+                    {
+                        "id": "profile.pre_on.ac_salon.fan_mode",
+                        "label": "עוצמת מאוורר",
+                        "kind": "choice",
+                        "value": "auto",
+                        "risk": "medium",
+                        "controllable": True,
+                        "operations": ["set"],
+                        "options": ["auto", "silent", "low", "medium", "high", "full"],
+                    },
+                    {
+                        "id": "profile.pre_on.ac_salon.swing_mode",
+                        "label": "הנפה",
+                        "kind": "choice",
+                        "value": "off",
+                        "risk": "medium",
+                        "controllable": True,
+                        "operations": ["set"],
+                        "options": ["off", "vertical", "horizontal", "both"],
+                    },
                     {
                         "id": "profile.pre_on.ac_parents",
                         "label": "מזגן הורים",
@@ -354,6 +411,35 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                         "operations": ["set"],
                         "constraints": {"minimum": 16, "maximum": 30, "step": 0.5,
                                          "unit": "°C"},
+                    },
+                ],
+            },
+            # A clock the household added. It carries only a device list —
+            # its switch and its hour live with the other times, and the card
+            # claims them. An added on-clock deliberately has no air
+            # conditioner settings of its own: the bridge only turns the unit
+            # on and leaves whatever it was set to.
+            {
+                "id": "extra_off",
+                "label": "שעון נוסף — כיבוי",
+                "items": [
+                    {
+                        "id": "profile.extra_off.devices",
+                        "label": "מכשירים לכיבוי",
+                        "kind": "multi_select",
+                        "value": [],
+                        "risk": "medium",
+                        "controllable": True,
+                        "operations": ["set"],
+                        "options": [
+                            {"value": "dining", "label": "פינת אוכל"},
+                            {"value": "salon", "label": "אור סלון"},
+                            {"value": "kitchen", "label": "מטבח"},
+                            {"value": "led_salon", "label": "לד סלון"},
+                            {"value": "boiler", "label": "דוד"},
+                            {"value": "ac_salon", "label": "מזגן סלון"},
+                            {"value": "ac_parents", "label": "מזגן הורים"},
+                        ],
                     },
                 ],
             },
@@ -518,6 +604,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "operations": ["power"],
                 "device_class": "climate",
                 "capabilities": ["on_off", "temperature", "hvac_mode", "fan_mode"],
+                "entity_id": "climate.ac_salon",
             },
             {
                 "id": "ac_salon_temperature",
@@ -528,6 +615,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "operations": ["temperature"],
                 "device_class": "climate",
                 "constraints": {"min": 16, "max": 30, "step": 0.5, "unit": "°C"},
+                "entity_id": "climate.ac_salon",
             },
             {
                 "id": "ac_salon_hvac_mode",
@@ -538,6 +626,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "operations": ["hvac_mode"],
                 "device_class": "climate",
                 "options": ["off", "auto", "cool", "dry", "heat", "fan_only"],
+                "entity_id": "climate.ac_salon",
             },
             {
                 "id": "ac_salon_fan_mode",
@@ -548,6 +637,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "operations": ["fan_mode"],
                 "device_class": "climate",
                 "options": ["silent", "low", "medium", "high", "auto"],
+                "entity_id": "climate.ac_salon",
             },
             # The live vocabulary, with no `set` to fall back on. This house
             # names one verb per capability — `power`, `temperature`,
@@ -565,6 +655,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "device_class": "climate",
                 "capabilities": ["on_off", "temperature", "fan_mode", "swing_mode"],
                 "constraints": {"min": 16, "max": 30, "step": 1, "unit": "°"},
+                "entity_id": "climate.ac_parents",
             },
             # A vacuum, because this house has one and because it is the
             # busiest row the live vocabulary can produce: a switch for its
@@ -580,6 +671,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "operations": ["power", "start", "pause", "stop", "return_to_base", "locate"],
                 "device_class": "vacuum",
                 "capabilities": ["on_off", "start", "pause", "stop", "return_home"],
+                "entity_id": "vacuum.robot",
             },
             {
                 "id": "cam_lia",
@@ -590,6 +682,7 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "operations": [],
                 "device_class": "camera",
                 "unavailable_reason": "המצלמה אינה ניתנת לשליטה מכאן",
+                "entity_id": "camera.lia_local",
             },
         ],
     },

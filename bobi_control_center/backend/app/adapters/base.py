@@ -25,6 +25,7 @@ from app.models.bridge import (
     BridgeStatus,
     BridgeTasks,
     BridgeUsers,
+    CameraFrame,
     ConnectionInfo,
 )
 
@@ -107,4 +108,19 @@ class HomeAssistantAdapter(ABC):
         The bridge invokes Bobi's Skill Dispatcher with `probe_only=true`, so
         this inspects text without acting on it. Implementations must not add
         any execution path.
+        """
+
+    # --- cameras ----------------------------------------------------------
+    @abstractmethod
+    async def camera_frame(self, camera_id: str) -> CameraFrame:
+        """One still picture from a camera the bridge published.
+
+        Takes a **canonical id** and never an entity id: resolving one to the
+        other is the household's mapping, it is done server-side from the
+        bridge's own catalogue, and adding an entity-id parameter here would
+        undo the reason this method exists.
+
+        Reading a camera is a read. Implementations must not switch a camera on
+        to answer, and must not gain the ability to: a camera that is off or
+        unreachable is a failure to report, not a device to start.
         """

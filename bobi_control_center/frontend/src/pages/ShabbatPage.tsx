@@ -125,7 +125,27 @@ function ShabbatTime({ label, value }: { label: string; value: string | null }) 
 const PROFILE_TIME: Record<string, string> = {
   night_off: 'night_off_time',
   morning_on: 'morning_on_time',
+  extra_off: 'extra_off_time',
+  extra_on: 'extra_on_time',
 };
+
+/**
+ * The switch that decides whether a profile runs at all.
+ *
+ * Only the two extra clocks have one. The original four are the Shabbat the
+ * household already keeps — they run, and what is editable is which devices
+ * they touch. A clock that was added has to be able to sit at 00:00 doing
+ * nothing until somebody sets it, so it carries its own switch, and that
+ * switch belongs on the clock's own card rather than in a list of times where
+ * it would read as one more hour to set.
+ */
+const PROFILE_ENABLED: Record<string, string> = {
+  extra_off: 'extra_off_enabled',
+  extra_on: 'extra_on_enabled',
+};
+
+/** A clock the household added, rather than one of the original four. */
+const ADDED_CLOCK = new Set(['extra_off', 'extra_on']);
 
 /** A profile that runs relative to candle lighting rather than at a set hour. */
 const RELATIVE_TO_CANDLES = new Set(['pre_off', 'pre_on']);
@@ -155,7 +175,11 @@ function ShabbatGroups({
   // A time that a profile card now carries is not repeated up here. Two
   // controls for one item is how the same value gets changed twice by someone
   // who thought they were looking at two settings.
-  const claimed = new Set(profiles.map((group) => PROFILE_TIME[group.id]).filter(Boolean));
+  const claimed = new Set(
+    profiles
+      .flatMap((group) => [PROFILE_TIME[group.id], PROFILE_ENABLED[group.id]])
+      .filter(Boolean),
+  );
   const general = timingItems.filter((item) => !claimed.has(item.id));
 
   return (
@@ -177,6 +201,10 @@ function ShabbatGroups({
           const timeItem = timeId
             ? timingItems.find((item) => item.id === timeId)
             : undefined;
+          const enabledId = PROFILE_ENABLED[group.id];
+          const enabledItem = enabledId
+            ? timingItems.find((item) => item.id === enabledId)
+            : undefined;
           return (
             <ProfileEditor
               key={group.id}
@@ -184,14 +212,27 @@ function ShabbatGroups({
               description={
                 RELATIVE_TO_CANDLES.has(group.id)
                   ? 'רץ לפני כניסת השבת, לפי ההכנה שנקבעה למעלה.'
-                  : undefined
+                  : ADDED_CLOCK.has(group.id)
+                    ? 'רץ בשעה שנקבעה כאן, כל עוד השבת או החג בתוקף.'
+                    : undefined
               }
               items={group.items}
               writesEnabled={writesEnabled}
               onChange={request}
               timeControl={
-                timeItem ? (
-                  <ItemRow item={timeItem} onChange={request} writesEnabled={writesEnabled} />
+                enabledItem || timeItem ? (
+                  <div className="divide-y divide-slate-200 dark:divide-slate-700">
+                    {enabledItem ? (
+                      <ItemRow
+                        item={enabledItem}
+                        onChange={request}
+                        writesEnabled={writesEnabled}
+                      />
+                    ) : null}
+                    {timeItem ? (
+                      <ItemRow item={timeItem} onChange={request} writesEnabled={writesEnabled} />
+                    ) : null}
+                  </div>
                 ) : undefined
               }
             />

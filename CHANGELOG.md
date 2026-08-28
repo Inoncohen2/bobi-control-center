@@ -4,6 +4,144 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.16.0
+
+Two more Shabbat clocks — one that turns things off, one that turns them on.
+
+### They are clocks, not settings
+
+Each carries its own switch, its own hour and its own device list. Both arrive
+switched off, empty and at 00:00, so nothing happens until somebody sets one.
+The switch and the hour appear on the clock's own card rather than in the list
+of times, because two controls for one setting is how the same value gets
+changed twice by someone who thought they were looking at two.
+
+They run while **איסור מלאכה is in effect** rather than on a named weekday, so
+they hold on Yom Tov as well as Shabbat, and a clock left with an hour in it
+does nothing mid-week.
+
+An added on-clock has no air conditioner settings of its own: a unit in its
+list is switched on and keeps whatever it was already set to. The four original
+profiles are unchanged.
+
+### An empty helper is not a device called "unknown"
+
+Found while testing this: a freshly created `input_text` sits at `unknown`, not
+`""`. The token parse only rejected empty strings, so a new clock's device list
+read as `['unknown']` — one phantom device, which is why the first commit
+against it answered `stale_preview`. All three scripts now reject `unknown` and
+`unavailable` alongside the empty string, which also hardens the four original
+profiles against a helper that ever loses its value.
+
+### Verified against the live install
+
+The hour, the switch and the device list each previewed, committed and read
+back; a device token outside the whitelist was refused on the new clocks
+exactly as on the old ones. Every value used in testing was then set back, so
+both clocks are off, empty and at 00:00 — nothing fires this Shabbat that would
+not have fired before.
+
+## 3.15.0
+
+The cameras screen shows the cameras.
+
+### The picture comes through the backend, not from Home Assistant
+
+The browser asks this application for `cameras/<canonical id>/snapshot` and gets
+bytes. It never learns the entity id behind a camera, and it never receives a
+credential — which matters more here than anywhere else in the app, because the
+`entity_picture` URL Home Assistant publishes carries the camera's own access
+token, and that token is a working key to the stream for as long as it lives.
+It is not read, and it does not leave the server. The frame is fetched with the
+Supervisor token in a header, server-side.
+
+Resolving a canonical id to an entity is a whitelist with two locks: the
+mapping comes from the bridge's own camera catalogue, so only a camera the
+household published can be named at all; and the resolved entity must be in the
+`camera` domain, so a canonical id pointing at a switch cannot turn this into a
+general image proxy. `laundry` is a real id in the catalogue and is refused.
+Both failures answer the same plain 404, so guessing teaches nothing.
+
+### A camera that is not there says so
+
+`camera.lia_local` answers HTTP 500 on the live install, because the camera is
+unplugged. That is the path this release could actually verify end to end, and
+it is the one that had to be right: the screen says *המצלמה אינה זמינה כרגע*
+rather than showing a broken image icon, which would read as a bug in the app.
+
+### Nothing here can switch a camera on
+
+The cameras screen still passes `readOnly`, and `CameraView` takes no change
+handler at all — there is no control to disable, because none is rendered. The
+adapter method is a read that takes a canonical id, so there is no parameter
+through which a caller could ask it to act, and the architecture test that pins
+the abstract adapter surface now names it explicitly as one.
+
+The frame loads on entry and reloads only when a person asks. Polling a camera
+would have made this the busiest thing in the house on a screen left open.
+
+## 3.14.0
+
+A Shabbat profile now sets how each air conditioner runs, not only how warm.
+
+### Mode, fan speed and swing, per air conditioner, per profile
+
+Until now a profile carried one number per air conditioner — its target
+temperature — and ran it in `cool` because the executor said so, in a
+hard-coded string nobody could see or change. Each air conditioner in an
+on-profile now also publishes **מצב הפעלה**, **עוצמת מאוורר** and **הנפה**,
+stored in `input_select` helpers and applied by `script.shabbat_apply_profile`.
+
+The options are the ones the units actually accept, read from each unit rather
+than assumed: the girls' air conditioner swings `off`/`on` and blows up to
+`turbo`, the other two swing four ways and blow up to `full`. The write bridge
+validates a choice against the helper's own option list, so the bridge that
+reads and the bridge that writes cannot come to disagree about what is legal —
+`turbo` is refused for a swing setting even though it is a valid fan speed.
+
+Every helper's first option is what the executor already did — `cool`, `auto`,
+`off` — so a profile that nobody edits behaves exactly as it did before.
+
+Verified against the live install, end to end: a commit moved the salon's
+swing from `off` to `vertical` and read it back; replaying the stale expected
+value answered `stale_preview`; an option outside the helper's list answered
+`invalid_value`. Nothing was relaxed to get there.
+
+### A device with several settings keeps them together
+
+The profile screen gathers a device's extra settings into its own sheet, keyed
+by the device token. Two items cannot share an id, so a device with more than
+one setting names each after itself — `profile.pre_on.ac_salon.hvac_mode` —
+and the token is now the first segment of that name. Without this the three new
+controls would each key themselves under a token no device has, and the sheet
+would have opened empty rather than wrong.
+
+## 3.13.1
+
+The split read path from 3.11.0 is switched on.
+
+### The bridge now names the entity behind each device
+
+`script.bobi_cc_devices` publishes `entity_id` on every managed item. That was
+the one line the 3.11.0 split was waiting for: the application cannot map a
+canonical id to an entity by itself — that mapping is the household's and lives
+in Home Assistant — so until the bridge said it, `entity_map` returned `{}`, the
+overlay did nothing, and a switch position was only ever as fresh as the
+60-second catalogue cache. Switch positions now come from `/api/states` on every
+read, as designed.
+
+No entity id reaches the browser. `entity_map` reads it from the raw payload
+before the normalizer strips it, and the canonical model still has nowhere to
+put one.
+
+### The double had drifted from the bridge
+
+Only one item in `app/mock/management.py` carried an `entity_id`, so almost
+every test of the overlay ran against a payload no real bridge sends any more.
+Each device item in the double now carries one, and a test asserts it stays
+that way — the double mirroring the live bridge is where most of the serious
+bugs in this project have been found.
+
 ## 3.13.0
 
 The device catalogue acts on a tap, and a device's name opens everything it can

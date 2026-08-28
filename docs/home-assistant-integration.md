@@ -184,9 +184,120 @@ it hands a client, and `live_state.entity_map` reads it from the raw payload
 travels any further. There is a test asserting it does not appear in a rendered
 snapshot.
 
-Until that field is published, `entity_map` returns `{}`, the overlay does
-nothing, and device reads behave exactly as they did before the split. That is
-the intended fail-soft path, not a broken state.
+The bridge publishes it as of 3.13.1, so the overlay is live. Before that
+`entity_map` returned `{}` and device reads behaved exactly as they did before
+the split — the intended fail-soft path, not a broken state, and still what
+happens if the field ever stops arriving.
+
+## The Shabbat profile device list
+
+`script.bobi_cc_shabbat` offers fifteen device tokens, and that is the whole
+list on purpose. Widening it is not one change but three that must agree:
+
+| Script | What it holds |
+| --- | --- |
+| `bobi_cc_shabbat` | the `labels` map — which devices are *offered* |
+| `bobi_cc_shabbat_commit` | `allowed_tokens` — which may be *written* |
+| `shabbat_apply_profile` | a branch per token — which are actually *switched* |
+
+A token added only to the first is selectable, savable, and does nothing at the
+hour it matters. That is worse than not offering it.
+
+It was reviewed against the whole install in August 2026 and left at fifteen.
+What remains unlisted is not an oversight: infrastructure (`switch.hacs_*`),
+child locks, the switch-side duplicates of three lights already covered through
+their `light.*` entities, the camera's own feature switches, and the vacuum,
+which is deliberately fenced off — a profile that turns things *on* must never
+be able to start it.
+
+## The air conditioner settings in a profile (3.14)
+
+Each air conditioner in an on-profile publishes a target temperature plus
+`hvac_mode`, `fan_mode` and `swing_mode`, stored in `input_select` helpers named
+`shabbat_{pre,morning}_ac_{salon,parents,girls}_{hvac,fan,swing}_mode`.
+
+Two rules keep this honest:
+
+* the accepted options are read from the helper itself
+  (`state_attr(ac_helper, 'options')`), so the bridge that reads and the bridge
+  that writes cannot come to disagree about what is legal;
+* each helper's first option is what the executor previously hard-coded —
+  `cool`, `auto`, `off` — so an unedited profile behaves as it always did.
+
+The item ids are `profile.<phase>.<device>.<setting>`. The device a setting
+belongs to is the **first** segment after the phase, which is what lets a
+device with several settings keep them together on one screen.
+
+## The two added Shabbat clocks (3.16)
+
+Beyond the four fixed profiles there are two more clocks, `extra_off` and
+`extra_on`. Home Assistant needs storage to exist before it can be written, so
+these are fixed slots rather than unlimited creation — a clock is "added" by
+switching it on, not by conjuring storage.
+
+| Piece | Where |
+| --- | --- |
+| Device list | `input_text.shabbat_extra_{off,on}_profile` |
+| Hour | `input_datetime.shabbat_extra_{off,on}_time` |
+| On/off switch | `input_boolean.shabbat_extra_{off,on}_enabled` |
+| Trigger | `automation.sh_vn_shbt_sh_vn_nvsp_{kybvy,hdlqh}` |
+| Execution | `script.shabbat_apply_profile`, phases `extra_off` / `extra_on` |
+
+Each automation fires at its `input_datetime` and requires three conditions:
+the Shabbat clock master switch, that clock's own enabled switch, and
+`binary_sensor.jewish_calendar_issur_melacha_in_effect`. The last is why they
+are gated on Shabbat being *in effect* rather than on a weekday — it covers Yom
+Tov, and a clock left with an hour in it stays quiet mid-week.
+
+An air conditioner in `extra_on` is only switched on. These clocks have no
+temperature, mode, fan or swing settings of their own, so the unit keeps
+whatever it was set to.
+
+### An empty helper reads as `unknown`
+
+A freshly created `input_text` has the state `unknown`, not `""`. The profile
+token parse used to be `reject('eq','')`, which let `unknown` through as a
+phantom device token. All three Shabbat scripts now use:
+
+```jinja
+.split(',')|map('trim')|reject('in',['','unknown','unavailable'])|list
+```
+
+This matters beyond the new clocks: any of the original four would do the same
+if its helper ever lost its value.
+
+## The camera picture (3.15)
+
+`GET /api/bobi/cameras/{canonical_id}/snapshot` returns image bytes. It is the
+second read that does not go through a `bobi_cc_*` script — there is no bridge
+service that returns an image, and a Jinja template could not carry one.
+
+| Step | Where |
+| --- | --- |
+| Read the camera catalogue | `script.bobi_cc_devices` with `scope=cameras` |
+| Resolve canonical id → entity | `app/services/camera.resolve` |
+| Fetch the frame | `GET /camera_proxy/<entity>` with the Supervisor token |
+
+Three rules hold it in place:
+
+* **the request names a canonical id**, never an entity id — the route's path
+  pattern admits only `[a-z0-9_]+`, so an entity id (which has a dot) is
+  rejected before any lookup, and there is no parameter that accepts one;
+* **the resolved entity must be in the `camera` domain** — `laundry` is a real
+  canonical id in the catalogue and is refused, which is what stops this being
+  a general image proxy for whatever else the bridge published;
+* **the camera's own `access_token` is never read.** Home Assistant publishes
+  one on the entity as `entity_picture`, and it is a working credential for the
+  stream. The frame is authorised with the Supervisor token in a header
+  instead, and only bytes reach the browser.
+
+Both failure modes — unknown id, and an id that is not a camera — answer the
+same 404 with the same message. The response is `no-store, private` and
+`nosniff`; a camera frame is a picture of the inside of a house and does not
+belong in a cache.
+
+Reading a camera never starts one. `camera.lia_local` answers 500 while the
+camera is unplugged, and that becomes *המצלמה אינה זמינה כרגע*.
 
 ## Data the app deliberately does not touch
 

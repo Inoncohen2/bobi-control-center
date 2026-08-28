@@ -539,3 +539,31 @@ async def test_a_device_outside_the_list_is_refused_when_choices_live_in_options
 
     assert codes(response) == ["not_allowed"]
     assert response.would_execute is False
+
+
+async def test_a_shabbat_ac_mode_is_previewed_committed_and_verified() -> None:
+    """The air conditioner's mode, fan speed and swing are settings like any
+    other — the profile publishes them per device, and the same four steps
+    apply. This asserts the whole path rather than the preview alone, because
+    the bridge validates a choice against the helper's own option list and a
+    value outside it must be refused before anything is written."""
+    holder = bridge()
+    svc = ManagementService(holder, default_actor=OWNER)
+
+    refused = await preview(
+        svc, "shabbat", "set",
+        resource_id="profile.pre_on.ac_salon.hvac_mode",
+        payload={"value": "turbo"},
+    )
+    assert refused.valid is False
+
+    response = await preview(
+        svc, "shabbat", "set",
+        resource_id="profile.pre_on.ac_salon.hvac_mode",
+        payload={"value": "fan_only"},
+    )
+    assert response.valid is True
+
+    outcome = await commit(svc, "shabbat", response)
+    assert outcome.result.status == "committed"
+    assert [entry["resource_type"] for entry in holder.applied] == ["shabbat"]

@@ -280,3 +280,23 @@ async def test_a_commit_throws_the_catalogue_away() -> None:
 
     await bridge.resource_snapshot("devices")
     assert adapter.payload_calls == 2
+
+
+def test_the_double_publishes_an_entity_id_on_every_device_item() -> None:
+    """The double must mirror the live bridge, which now publishes one.
+
+    `bobi_cc_devices` grew an `entity_id` on each managed item so the split
+    read path has something to look a state up by. A double that kept it on a
+    single item would leave `entity_map` almost empty in every test, and the
+    overlay — the whole point of the split — would go on being asserted
+    against a payload no real bridge sends any more.
+    """
+    from app.mock.management import DEFAULT_RESOURCE_PAYLOADS
+
+    items = DEFAULT_RESOURCE_PAYLOADS["devices"]["items"]
+    missing = [item["id"] for item in items if not item.get("entity_id")]
+
+    assert not missing, f"device items without entity_id: {missing}"
+    assert entity_map(DEFAULT_RESOURCE_PAYLOADS["devices"]) == {
+        item["id"]: item["entity_id"] for item in items
+    }

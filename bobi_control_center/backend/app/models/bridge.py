@@ -537,3 +537,19 @@ class ConnectionInfo(CanonicalModel):
     #: This application's version, so the UI never hard-codes it.
     app_version: str = ""
     detail: str | None = None
+
+
+# --- cameras ----------------------------------------------------------------
+class CameraFrame(CanonicalModel):
+    """One still picture, on its way to the browser.
+
+    Not a URL. A URL to Home Assistant would have to carry either the entity id
+    or the camera's own access token, and neither may leave this process, so the
+    bytes themselves are the response.
+    """
+
+    #: The encoded image, exactly as Home Assistant returned it.
+    image: bytes
+    #: Echoed from the upstream response so the browser renders what arrived
+    #: rather than what this app guessed.
+    content_type: str = "image/jpeg"

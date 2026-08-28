@@ -43,6 +43,8 @@ const SNAPSHOT = {
   groups: [
     { id: 'timing', label: 'זמנים', description: null, items: [
       item({ id: 'night_off_time', label: 'כיבוי ליל שבת', kind: 'time', value: '23:15' }),
+      item({ id: 'extra_off_enabled', label: 'שעון כיבוי נוסף', kind: 'toggle', value: false }),
+      item({ id: 'extra_off_time', label: 'שעת הכיבוי הנוסף', kind: 'time', value: '00:00' }),
     ]},
     { id: 'night_off', label: 'ליל שבת — כיבוי', description: null, items: [
       item({ id: 'profile.night_off.devices', label: 'מכשירים לכיבוי', kind: 'list',
@@ -53,6 +55,19 @@ const SNAPSHOT = {
              value: ['dining', 'ac_salon'], options: DEVICES }),
       item({ id: 'profile.pre_on.ac_salon', label: 'מזגן סלון', kind: 'number',
              value: 24, display: '24°' }),
+      // A device with more than one setting names each one after itself, since
+      // two items cannot share an id. All of them still belong to `ac_salon`.
+      item({ id: 'profile.pre_on.ac_salon.hvac_mode', label: 'מצב הפעלה',
+             kind: 'choice', value: 'cool', display: 'cool' }),
+      item({ id: 'profile.pre_on.ac_salon.fan_mode', label: 'עוצמת מאוורר',
+             kind: 'choice', value: 'auto', display: 'auto' }),
+    ]},
+    // A clock the household added. The bridge sends these after the four the
+    // house already keeps, and it carries only a device list — its switch and
+    // its hour are up in the timing group.
+    { id: 'extra_off', label: 'שעון נוסף — כיבוי', description: null, items: [
+      item({ id: 'profile.extra_off.devices', label: 'מכשירים לכיבוי', kind: 'list',
+             value: [], options: [DEVICES[0]!] }),
     ]},
   ],
   items: [],
@@ -75,6 +90,19 @@ describe('splitting a profile', () => {
     expect(parts.devices?.id).toBe('profile.pre_on.devices');
     expect([...parts.extras.keys()]).toEqual(['ac_salon']);
   });
+
+  it('gathers every setting of one device under that device, not under each id', () => {
+    const parts = splitProfile(SNAPSHOT.groups[2]!.items);
+
+    // The failure this guards against is silent: keyed by the whole id, each
+    // extra setting would land under a token no device has, and the sheet
+    // would open empty rather than wrong.
+    expect(parts.extras.get('ac_salon')?.map((i) => i.id)).toEqual([
+      'profile.pre_on.ac_salon',
+      'profile.pre_on.ac_salon.hvac_mode',
+      'profile.pre_on.ac_salon.fan_mode',
+    ]);
+  });
 });
 
 describe('the Shabbat profile editor', () => {
@@ -82,11 +110,12 @@ describe('the Shabbat profile editor', () => {
     vi.stubGlobal('fetch', mockApi(ROUTES));
     renderWithProviders(<ShabbatPage />);
 
-    // Three devices × two profiles, and not one <select> among them.
+    // One chip per device per profile that offers it — three profiles offer
+    // this one — and not a single <select> among them.
     await waitFor(() =>
       expect(screen.getAllByRole('button', { name: 'פינת אוכל' })[0]).toBeEnabled(),
     );
-    expect(screen.getAllByRole('button', { name: 'פינת אוכל' })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'פינת אוכל' })).toHaveLength(3);
     expect(screen.queryByRole('combobox', { name: /מכשירים/ })).not.toBeInTheDocument();
   });
 
@@ -188,5 +217,28 @@ describe('a time that belongs to a profile', () => {
     await waitFor(() =>
       expect(screen.getAllByRole('combobox', { name: 'כיבוי ליל שבת — שעה' })).toHaveLength(1),
     );
+  });
+});
+
+
+describe('a Shabbat clock the household added', () => {
+  it('carries its own switch and hour on its card, not in the list of times', async () => {
+    vi.stubGlobal('fetch', mockApi(ROUTES));
+    renderWithProviders(<ShabbatPage />);
+
+    const card = (await screen.findByText('שעון נוסף — כיבוי')).closest('li')!;
+
+    // Both controls belong to the clock, so both are inside its card...
+    expect(within(card).getByText('שעון כיבוי נוסף')).toBeInTheDocument();
+    expect(within(card).getByText('שעת הכיבוי הנוסף')).toBeInTheDocument();
+
+    // ...and neither is left behind in the general timing list, where two
+    // controls for one setting is how the same value gets changed twice by
+    // someone who thought they were looking at two settings.
+    expect(screen.getAllByText('שעון כיבוי נוסף')).toHaveLength(1);
+    expect(screen.getAllByText('שעת הכיבוי הנוסף')).toHaveLength(1);
+
+    // The clock that was already there is unaffected.
+    expect(screen.getByText('כיבוי ליל שבת')).toBeInTheDocument();
   });
 });

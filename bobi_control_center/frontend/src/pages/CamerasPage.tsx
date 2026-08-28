@@ -9,9 +9,15 @@
  * * **There is no power control here at all.** Not "unless the bridge says so"
  *   — none. The screen passes `readOnly`, so a `controllable` that turned true
  *   in a future contract cannot quietly grow a power button here.
+ *
+ * Since 3.15 each camera also shows its picture. That does not soften either
+ * rule: the frame is a read, it is fetched by the backend so no entity id or
+ * credential reaches the browser, and `CameraView` takes no change handler, so
+ * the viewer has nothing to press that would reach the camera.
  */
 
 import { Card } from '@/components/ui/Card';
+import { CameraView } from '@/features/cameras/CameraView';
 import { ManagedResourcePage } from '@/features/manage/ManagedResourcePage';
 import { ResourceEditor } from '@/features/manage/ResourceEditor';
 import { CAMERA_CLASS, DeviceDetail } from './DeviceControlPage';
@@ -40,7 +46,12 @@ export function CamerasPage() {
           writesEnabled={writesEnabled}
           readOnly
           filter={isCamera}
-          renderDetail={(item) => <DeviceDetail item={item} />}
+          renderDetail={(item) => (
+            <>
+              <DeviceDetail item={item} />
+              <CameraView cameraId={item.id} label={item.label} />
+            </>
+          )}
           emptyLabel="בובי לא פרסם מצלמות."
         />
       )}

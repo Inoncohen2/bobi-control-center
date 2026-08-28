@@ -325,6 +325,10 @@ def test_the_adapter_interface_declares_no_write_method() -> None:
         "get_tasks",
         "get_diagnostics",
         "probe",
+        # A read, and named as one: it returns a picture and takes a canonical
+        # id, so there is no parameter through which a caller could ask it to
+        # change anything. Reading a camera must never switch one on.
+        "camera_frame",
     }
 
 
