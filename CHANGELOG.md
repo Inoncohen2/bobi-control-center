@@ -4,6 +4,36 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.9.2
+
+Two screens stopped being read-only, for the reason the contract itself named.
+
+`helpers` and `automations` were published with `operations: []` and the note
+"גשר הכתיבה קיים אך טרם אומת מול Home Assistant" — a deliberate gate, not a
+gap. Both bridges have now been run against this house and verified, so the
+gate opened on its own terms rather than being lifted:
+
+- **`script.bobi_cc_helper_commit`** — the Control Center's own end-to-end test
+  switch, off → on → off. Both calls `executed: true, verified: true`, each
+  read back against the helper's own state.
+- **`script.bobi_cc_automation_commit`** — "ניקוי Preview שפג" disabled,
+  re-enabled, and triggered. All three `executed: true, verified: true`. The
+  automation is enabled, as it was found.
+
+Every unverified verb stayed out: `rename` is implemented on neither bridge and
+is not declared, and `scenes` stays at `operations: []` because this house has
+no scenes.
+
+The contract's `detail` for both families now records what was verified and
+how, so the next reader does not have to take "אומת" on trust.
+
+What this changes on the screens: עזרים becomes editable — Bobi's AI switch and
+monthly cap, the smart-notification switches, the morning-summary time, the
+home-status policy. אוטומציות gets a switch per automation plus
+"הרצת אוטומציה עכשיו", which is the button 3.9.0 built and had nothing to bind
+to. Everything still goes through preview → confirm → commit, still needs the
+master switch, and is still refused on a stale expected value.
+
 ## 3.9.1
 
 Home Assistant became reachable again, so the parts of this that had only ever
