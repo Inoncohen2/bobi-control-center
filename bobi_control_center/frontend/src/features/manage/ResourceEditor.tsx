@@ -179,7 +179,11 @@ function ResourceGroup({
  * Checking here as well means a viewer is not shown a button that would come
  * back 403 — a kinder screen, not a second lock.
  */
-function isOperable(item: ManagedItem, writesEnabled: boolean, role: Role | undefined): boolean {
+export function isOperable(
+  item: ManagedItem,
+  writesEnabled: boolean,
+  role: Role | undefined,
+): boolean {
   return (
     writesEnabled &&
     item.controllable &&

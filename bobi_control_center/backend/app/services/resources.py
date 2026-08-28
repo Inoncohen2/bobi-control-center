@@ -636,6 +636,24 @@ def constraint_errors(item: ManagedItem, value: Any) -> list[tuple[str, str]]:
     limits: ManagedConstraints | None = item.constraints
     errors: list[tuple[str, str]] = []
 
+    # A list's permitted values live in `constraints.allowed` by the
+    # specification and in `options` by the live bridge's habit. Reading only
+    # the first was a hole rather than a cosmetic gap: with the choices in
+    # `options`, `limits.allowed` was empty, the check below was skipped
+    # entirely, and a Shabbat profile would have accepted a device token that
+    # was never on offer. Checked before `limits` is tested for None, because
+    # an item can publish options and no constraints block at all.
+    if item.kind == "list":
+        permitted = limits.allowed if (limits and limits.allowed) else item.options
+        if permitted:
+            allowed = {str(option.value) for option in permitted}
+            unknown = [str(part) for part in (value or []) if str(part) not in allowed]
+            if unknown:
+                errors.append(
+                    ("not_allowed", f"המכשירים האלה אינם חלק מהפרופיל: {'، '.join(unknown)}")
+                )
+        return errors
+
     if item.kind == "choice" and item.options:
         allowed = {str(option.value) for option in item.options}
         if str(value) not in allowed:
@@ -673,13 +691,5 @@ def constraint_errors(item: ManagedItem, value: Any) -> list[tuple[str, str]]:
         and len(str(value)) > limits.max_length
     ):
         errors.append(("too_long", f"הטקסט ארוך מדי (עד {limits.max_length} תווים)"))
-
-    if item.kind == "list" and limits.allowed:
-        allowed = {str(option.value) for option in limits.allowed}
-        unknown = [str(part) for part in (value or []) if str(part) not in allowed]
-        if unknown:
-            errors.append(
-                ("not_allowed", f"המכשירים האלה אינם חלק מהפרופיל: {'، '.join(unknown)}")
-            )
 
     return errors

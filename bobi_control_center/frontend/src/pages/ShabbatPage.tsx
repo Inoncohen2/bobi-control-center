@@ -6,10 +6,11 @@ import { AdvancedDisclosure, TechnicalDetails } from '@/components/ui/Advanced';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { EmptyState, QueryBoundary } from '@/components/state/QueryBoundary';
 import { useShabbat } from '@/hooks/queries';
-import type { ShabbatProfile } from '@/types/api';
+import type { ManagedItem, ResourceSnapshot, ShabbatProfile } from '@/types/api';
 import { ManagedSection } from '@/features/manage/ManagedSection';
 import { useManagedFamily } from '@/features/manage/useManagedFamily';
-import { ResourceEditor } from '@/features/manage/ResourceEditor';
+import { ItemRow, ResourceEditor } from '@/features/manage/ResourceEditor';
+import { ProfileEditor } from '@/features/shabbat/ProfileEditor';
 
 /**
  * Profiles are rendered from the list the bridge defines, not a fixed four, so
@@ -111,6 +112,96 @@ function ShabbatTime({ label, value }: { label: string; value: string | null }) 
   );
 }
 
+/**
+ * Which timing row governs which profile.
+ *
+ * The bridge keeps the times in a group of their own, away from the profiles
+ * they belong to, so a profile card has to be told where to look. The two
+ * "before Shabbat" profiles share one offset — they both run a fixed number of
+ * minutes before candle lighting — and that offset is edited once, in the
+ * timing card, rather than twice under two headings where changing either
+ * would silently change the other.
+ */
+const PROFILE_TIME: Record<string, string> = {
+  night_off: 'night_off_time',
+  morning_on: 'morning_on_time',
+};
+
+/** A profile that runs relative to candle lighting rather than at a set hour. */
+const RELATIVE_TO_CANDLES = new Set(['pre_off', 'pre_on']);
+
+/**
+ * The managed Shabbat family, reassembled.
+ *
+ * The generic editor renders whatever the bridge sent, in the order it sent it
+ * — which for this family is a row per item: a device picker, then three
+ * unrelated numbers, then the next profile's picker. Correct, and unreadable.
+ * Here the timing rows stay generic and each profile becomes a card.
+ */
+function ShabbatGroups({
+  snapshot,
+  request,
+  writesEnabled,
+}: {
+  snapshot: ResourceSnapshot;
+  request: (item: ManagedItem, value: unknown, operation?: string) => void;
+  writesEnabled: boolean;
+}) {
+  const profiles = snapshot.groups.filter((group) => group.id !== 'timing');
+  const timingItems = snapshot.groups
+    .filter((group) => group.id === 'timing')
+    .flatMap((group) => group.items);
+
+  // A time that a profile card now carries is not repeated up here. Two
+  // controls for one item is how the same value gets changed twice by someone
+  // who thought they were looking at two settings.
+  const claimed = new Set(profiles.map((group) => PROFILE_TIME[group.id]).filter(Boolean));
+  const general = timingItems.filter((item) => !claimed.has(item.id));
+
+  return (
+    <div className="space-y-4">
+      {general.length > 0 ? (
+        <ResourceEditor
+          snapshot={{
+            ...snapshot,
+            groups: [{ id: 'timing', label: 'זמנים', description: null, items: general }],
+          }}
+          onChange={request}
+          writesEnabled={writesEnabled}
+        />
+      ) : null}
+
+      <ul className="grid gap-3 lg:grid-cols-2">
+        {profiles.map((group) => {
+          const timeId = PROFILE_TIME[group.id];
+          const timeItem = timeId
+            ? timingItems.find((item) => item.id === timeId)
+            : undefined;
+          return (
+            <ProfileEditor
+              key={group.id}
+              label={group.label}
+              description={
+                RELATIVE_TO_CANDLES.has(group.id)
+                  ? 'רץ לפני כניסת השבת, לפי ההכנה שנקבעה למעלה.'
+                  : undefined
+              }
+              items={group.items}
+              writesEnabled={writesEnabled}
+              onChange={request}
+              timeControl={
+                timeItem ? (
+                  <ItemRow item={timeItem} onChange={request} writesEnabled={writesEnabled} />
+                ) : undefined
+              }
+            />
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 export function ShabbatPage() {
   const query = useShabbat();
   const managed = useManagedFamily('shabbat');
@@ -173,7 +264,7 @@ export function ShabbatPage() {
                   {config.draft_owners.length > 0
                     ? `קיימת טיוטה שמורה של ${config.draft_owners.join(', ')}.`
                     : 'קיימת טיוטה שנשמרה ב-Home Assistant.'}{' '}
-                  ניהול טיוטות מהממשק יהיה זמין בשלב הבא.
+                  היא נערכת ב-Home Assistant.
                 </p>
               </Card>
             ) : null}
@@ -243,7 +334,7 @@ export function ShabbatPage() {
       <div className="mt-6">
         <ManagedSection resource="shabbat" title="פרופילים וזמנים">
           {({ snapshot, request, writesEnabled }) => (
-            <ResourceEditor snapshot={snapshot} onChange={request} writesEnabled={writesEnabled} />
+            <ShabbatGroups snapshot={snapshot} request={request} writesEnabled={writesEnabled} />
           )}
         </ManagedSection>
       </div>

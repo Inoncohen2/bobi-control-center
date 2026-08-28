@@ -112,7 +112,7 @@ async def test_writes_off_previews_but_refuses_to_commit() -> None:
     [
         ("settings", "set", "morning_enabled", {"value": False}),
         ("users", "rename", "user_2", {"name": "הודיה כהן"}),
-        ("shabbat", "set_timing", "pre_shabbat_offset_minutes", {"value": 45}),
+        ("shabbat", "set", "pre_shabbat_offset_minutes", {"value": 45}),
         ("rules", "disable", "rule_1", {}),
         ("calendar", "edit", "evt_1", {"location": "בית"}),
         ("devices", "set", "kitchen", {"value": True}),
@@ -134,7 +134,7 @@ async def test_preview_performs_no_write(resource, operation, resource_id, paylo
     [
         ("settings", "set", "morning_enabled"),
         ("users", "rename", "user_2"),
-        ("shabbat", "set_timing", "alert_enabled"),
+        ("shabbat", "set", "alert_enabled"),
         ("rules", "disable", "rule_1"),
         ("devices", "set", "kitchen"),
     ],
@@ -336,8 +336,8 @@ async def test_saving_a_shabbat_profile_says_no_device_is_touched() -> None:
     response = await preview(
         service(),
         "shabbat",
-        "set_membership",
-        resource_id="pre_on",
+        "set",
+        resource_id="profile.pre_on.devices",
         payload={"value": ["kitchen", "salon"]},
     )
 
@@ -350,8 +350,8 @@ async def test_a_device_outside_the_profile_list_is_refused() -> None:
     response = await preview(
         service(),
         "shabbat",
-        "set_membership",
-        resource_id="pre_on",
+        "set",
+        resource_id="profile.pre_on.devices",
         payload={"value": ["kitchen", "the_neighbours_boiler"]},
     )
 
@@ -360,11 +360,11 @@ async def test_a_device_outside_the_profile_list_is_refused() -> None:
 
 async def test_shabbat_ac_temperatures_respect_the_published_range() -> None:
     too_hot = await preview(
-        service(), "shabbat", "set_temperature", resource_id="ac_salon_temperature",
+        service(), "shabbat", "set", resource_id="profile.pre_on.ac_salon",
         payload={"value": 31},
     )
     fine = await preview(
-        service(), "shabbat", "set_temperature", resource_id="ac_salon_temperature",
+        service(), "shabbat", "set", resource_id="profile.pre_on.ac_salon",
         payload={"value": 25},
     )
 
@@ -376,7 +376,7 @@ async def test_a_shabbat_commit_does_not_reach_a_device_service() -> None:
     holder = bridge()
     svc = ManagementService(holder, default_actor=OWNER)
     response = await preview(
-        svc, "shabbat", "set_timing", resource_id="night_off_time", payload={"value": "23:00"}
+        svc, "shabbat", "set", resource_id="night_off_time", payload={"value": "23:00"}
     )
     await commit(svc, "shabbat", response)
 
@@ -506,3 +506,32 @@ async def test_a_read_only_system_action_needs_no_word() -> None:
 
     assert response.valid is True
     assert response.confirm_word is None
+
+
+async def test_a_device_outside_the_list_is_refused_when_choices_live_in_options() -> None:
+    """The same refusal, with the choices where the live bridge puts them.
+
+    `constraints.allowed` is the documented home; the live Shabbat bridge sends
+    `options`. The check read only the first, so with a real payload
+    `limits.allowed` was empty, the whole check was skipped, and a profile
+    would have accepted a device token that was never on offer.
+    """
+    payload = {
+        "available": True,
+        "groups": [{"id": "pre_on", "items": [
+            {"id": "profile.pre_on.devices", "label": "מכשירים להדלקה", "kind": "multi_select",
+             "value": ["kitchen"], "controllable": True, "operations": ["set"],
+             "options": [{"value": "kitchen", "label": "מטבח"},
+                         {"value": "salon", "label": "אור סלון"}]},
+        ]}],
+    }
+    svc = service(resources={**DEFAULT_RESOURCE_PAYLOADS, "shabbat": payload})
+
+    response = await preview(
+        svc, "shabbat", "set",
+        resource_id="profile.pre_on.devices",
+        payload={"value": ["kitchen", "the_neighbours_boiler"]},
+    )
+
+    assert codes(response) == ["not_allowed"]
+    assert response.would_execute is False

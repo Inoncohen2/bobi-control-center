@@ -4,6 +4,64 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.12.0
+
+Each Shabbat profile is its own card, and you work it rather than read it.
+
+### One card per profile
+
+The bridge publishes a profile as a flat list of dotted ids —
+`profile.pre_on.devices`, `profile.pre_on.ac_salon` — and the generic editor
+rendered exactly that: a picker, then three unrelated numbers, then the next
+profile's picker. Nothing said which profile a row belonged to, or that a
+temperature belonged to a device that was in one.
+
+Now each profile is a card carrying its own time control and its own devices:
+
+* **every device is a chip** — one tap on or off, which is the whole
+  interaction for a light or a socket;
+* **a device with more to set opens a sheet** — its own membership switch plus
+  every extra control the bridge published for it *in that profile* — and the
+  chip then reads back what was chosen: **מזגן סלון · 24°C**.
+
+Which devices get a sheet is not a list kept in the screen. It is worked out
+from the items the bridge sent, so it is right by construction. Today that is
+the three air conditioners, because their temperature is the only per-device
+setting the Shabbat bridge publishes — an LED, the scent diffuser and the
+vacuum get plain chips because there is nothing more to say about them in a
+profile. If the bridge starts publishing a brightness or a fan speed, those get
+sheets too and none of this changes.
+
+A time that a profile card carries is no longer repeated in the general timing
+card. Two controls for one value is how the same setting gets changed twice by
+someone who thought they were looking at two.
+
+### A profile would have accepted a device that was never on offer
+
+Found while making the test double match the live bridge. A list's permitted
+values live in `constraints.allowed` by the specification and in `options` by
+the live bridge's habit, and the check read only the first — so against a real
+payload the allowed set was empty, the check was skipped entirely, and
+`the_neighbours_boiler` was as acceptable as the kitchen light.
+
+Both the refusal and the picker now read either. The frontend had the same gap
+and it is closed the same way.
+
+### The chips ignored the role
+
+The generic rows ask `isOperable`; the new chips asked a shorter question of
+their own and left the role out of it, so a viewer got a padlock on the row and
+a tappable chip beside it. There is one definition of "may this be operated"
+now, and both use it.
+
+### The test double now matches the live Shabbat bridge
+
+It published three groups of its own invention — timing, profiles,
+temperatures — where the house publishes one group per profile with dotted ids
+and a `multi_select` whose choices live in `options`. A screen written against
+the real thing engaged with none of it, which is why the mismatch had to go
+before any of the above could be seen to work.
+
 ## 3.11.1
 
 Three faults visible in a photograph of the running app.
