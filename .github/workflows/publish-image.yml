@@ -1,0 +1,152 @@
+name: Publish app image
+
+# The Supervisor builds an app locally unless the manifest names an image, and
+# on a Raspberry Pi that is two minutes of `docker buildx` per release — enough
+# to make the Supervisor itself unresponsive while it runs, and enough to fail
+# outright, which it has. This publishes the image instead, so an update is a
+# pull.
+#
+# `config.yaml` names `ghcr.io/inoncohen2/{arch}-addon-bobi_control_center`, and
+# the Supervisor substitutes `{arch}` and appends the manifest version as the
+# tag. Those two names must agree exactly or an update cannot install at all —
+# with `image:` set there is no local-build fallback. The verify job at the end
+# asserts the agreement rather than trusting it.
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'bobi_control_center/**'
+      - '.github/workflows/publish-image.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The two architectures Home Assistant OS actually ships on today.
+          # `armv7` was dropped: the Supervisor warns it is deprecated, and
+          # emulating it here cost more build time than the platform is used.
+          - arch: aarch64
+            platform: linux/arm64
+          - arch: amd64
+            platform: linux/amd64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the image name and version from the manifest
+        id: manifest
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          version=$(sed -n 's/^version:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' bobi_control_center/config.yaml)
+          template=$(sed -n 's/^image:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' bobi_control_center/config.yaml)
+          [ -n "${version}" ] || fail "config.yaml has no readable version"
+          [ -n "${template}" ] || fail "config.yaml has no image: key"
+
+          # The name is taken from the manifest rather than rebuilt from
+          # `github.repository_owner`, which is `Inoncohen2` — capitalised, and
+          # therefore not a legal Docker repository name. Deriving it here means
+          # what is pushed and what the Supervisor pulls cannot disagree,
+          # instead of being two strings someone has to keep identical.
+          image="${template/\{arch\}/${{ matrix.arch }}}"
+          case "${image}" in *[A-Z]*) fail "image name must be lowercase: ${image}";; esac
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+          echo "Publishing ${image}:${version}"
+
+      - name: Is this version already published?
+        id: exists
+        run: |
+          set -uo pipefail
+          image="${{ steps.manifest.outputs.image }}"
+          tag="${{ steps.manifest.outputs.version }}"
+          # A published tag is never rebuilt: the Supervisor pulls by version,
+          # so replacing the contents of a tag it may already have pulled would
+          # make "3.16.1" mean two different images.
+          if docker manifest inspect "${image}:${tag}" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "${image}:${tag} already exists — nothing to do."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-qemu-action@v3
+        if: steps.exists.outputs.skip == 'false'
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.exists.outputs.skip == 'false'
+
+      - uses: docker/login-action@v3
+        if: steps.exists.outputs.skip == 'false'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        if: steps.exists.outputs.skip == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./bobi_control_center
+          platforms: ${{ matrix.platform }}
+          push: true
+          provenance: false
+          tags: |
+            ${{ steps.manifest.outputs.image }}:${{ steps.manifest.outputs.version }}
+          labels: |
+            io.hass.version=${{ steps.manifest.outputs.version }}
+            io.hass.arch=${{ matrix.arch }}
+            io.hass.type=addon
+            io.hass.name=Bobi Control Center
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          build-args: |
+            BUILD_VERSION=${{ steps.manifest.outputs.version }}
+            BUILD_ARCH=${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+  verify:
+    name: The Supervisor can pull what the manifest names
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Every declared arch has an image at the manifest version
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          version=$(sed -n 's/^version:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' bobi_control_center/config.yaml)
+          template=$(sed -n 's/^image:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' bobi_control_center/config.yaml)
+          [ -n "${template}" ] || fail "config.yaml has no image: key — the Supervisor would build locally"
+
+          # Exactly the arches the manifest promises, resolved through exactly
+          # the name the Supervisor will resolve.
+          arches=$(python3 -c "
+          import yaml
+          print(' '.join(yaml.safe_load(open('bobi_control_center/config.yaml'))['arch']))
+          ")
+
+          for arch in ${arches}; do
+            image="${template/\{arch\}/${arch}}:${version}"
+            echo "checking ${image}"
+            # Anonymously, because that is how the Supervisor pulls it. A
+            # private package passes an authenticated check and then fails on
+            # the Pi, which is the worst possible time to find out.
+            docker manifest inspect "${image}" >/dev/null 2>&1 \
+              || fail "${image} cannot be pulled anonymously — publish it, or make the GHCR package public"
+          done
+
+          echo "Every declared arch is pullable at ${version}."

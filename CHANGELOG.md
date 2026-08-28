@@ -4,6 +4,49 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.17.0
+
+An update is a download now, not a build on the Raspberry Pi.
+
+### The Supervisor was compiling this app on every release
+
+There was no `image:` in the manifest, so the Supervisor did what it does
+without one: it ran `docker buildx build` on the Pi itself. Every single time.
+
+That is about two minutes of a Raspberry Pi 4 per release — 3.16.0 took 2:02,
+3.13.0 1:48, 3.10.1 1:53 — and it is not idle time. The Supervisor answers
+nothing while it runs: the logs for the 3.16.0 update carry
+`Timeout connecting to Supervisor`, a failed `/host/info`, and a backup listing
+that timed out. The 3.9.0 build did not merely stall, it failed outright and
+left the update undone. Six releases in one afternoon meant twelve minutes of
+that.
+
+The manifest now names
+`ghcr.io/inoncohen2/{arch}-addon-bobi_control_center`, and a workflow publishes
+that image for each architecture when the version changes. The Pi pulls a
+finished image.
+
+### The part that had to be made safe
+
+Naming an image removes the Supervisor's local-build fallback entirely: from
+now on a version whose image was never published cannot be installed **at all**
+— not slowly, not at all. Two things guard that:
+
+* a test asserts every architecture in `arch:` is one the publish workflow
+  actually builds, so the manifest cannot promise a platform CI never produces;
+* the workflow's own `verify` job pulls each declared image **anonymously**,
+  which is how the Supervisor pulls it. A package left private passes an
+  authenticated check and then fails on the Pi, which is the worst possible
+  moment to discover it.
+
+A published tag is never rebuilt, so a version the Pi has already pulled cannot
+come to mean a different image.
+
+### armv7 dropped
+
+The Supervisor warns the value is deprecated, and emulating that platform in CI
+cost more than a platform nobody here runs. `aarch64` and `amd64` remain.
+
 ## 3.16.1
 
 Two things that were reported from a phone, and were both real.
