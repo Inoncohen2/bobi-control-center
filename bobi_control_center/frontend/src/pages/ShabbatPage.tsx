@@ -79,6 +79,38 @@ function ProfileCard({ profile }: { profile: ShabbatProfile }) {
   );
 }
 
+/**
+ * "פרשת כי תבוא", without saying "פרשת" twice.
+ *
+ * The `jewish_calendar` sensor gives the bare name of the portion, so the word
+ * belongs here — but a bridge that includes it should not produce
+ * "פרשת פרשת ראה", which is what the test double did.
+ */
+function parashaTitle(parasha: string): string {
+  const name = parasha.trim();
+  return name.startsWith('פרשת') ? name : `פרשת ${name}`;
+}
+
+/**
+ * One Shabbat time, big enough to read from across the kitchen.
+ *
+ * `tabular-nums` so 18:51 and 19:45 line up under each other. No bidi isolate:
+ * a colon between two digit runs is a numeric separator, so "18:51" already
+ * resolves left-to-right inside a right-to-left line. A range like "18:00–19:00"
+ * does need one — the dash there separates two runs rather than joining one —
+ * which is why the calendar has isolates and this does not.
+ */
+function ShabbatTime({ label, value }: { label: string; value: string | null }) {
+  return (
+    <div className="rounded-2xl bg-white/70 px-3 py-2 text-center dark:bg-slate-900/40">
+      <dt className="text-xs text-slate-500 dark:text-slate-400">{label}</dt>
+      <dd className="mt-0.5 text-3xl font-bold tabular-nums text-slate-900 dark:text-slate-50">
+        {value ?? '—'}
+      </dd>
+    </div>
+  );
+}
+
 export function ShabbatPage() {
   const query = useShabbat();
   const managed = useManagedFamily('shabbat');
@@ -100,40 +132,39 @@ export function ShabbatPage() {
       >
         {(config) => (
           <div className="space-y-6">
+            {/*
+              The two numbers the week is planned around, given the room they
+              deserve. They used to sit as small print beside the parasha, and
+              they used to be timestamps: `2026-08-28T15:51:00+00:00`, which is
+              neither the right hour here nor a thing anyone reads.
+            */}
             <Card className="bg-gradient-to-bl from-bobi-50 to-white dark:from-bobi-500/10 dark:to-slate-800/60">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <Flame
-                    aria-hidden="true"
-                    size={22}
-                    className="text-bobi-600 dark:text-bobi-400"
-                  />
-                  <div>
-                    <p className="text-sm font-medium text-bobi-700 dark:text-bobi-300">
-                      {config.parasha ?? 'השבת הקרובה'}
-                    </p>
-                    {config.pre_shabbat_offset_minutes !== null ? (
-                      <p className="text-xs text-slate-500 dark:text-slate-400">
-                        הכנה {config.pre_shabbat_offset_minutes} דקות לפני הכניסה
-                      </p>
-                    ) : null}
-                  </div>
+              <div className="flex items-center gap-2">
+                <Flame
+                  aria-hidden="true"
+                  size={20}
+                  className="shrink-0 text-bobi-600 dark:text-bobi-400"
+                />
+                <div className="min-w-0">
+                  <p className="truncate text-base font-semibold text-slate-900 dark:text-slate-50">
+                    {config.parasha ? parashaTitle(config.parasha) : 'השבת הקרובה'}
+                  </p>
+                  <p className="truncate text-xs text-slate-500 dark:text-slate-400">
+                    {[config.hebrew_date, config.holiday].filter(Boolean).join(' · ')}
+                  </p>
                 </div>
-                <dl className="flex gap-6">
-                  <div>
-                    <dt className="text-xs text-slate-500 dark:text-slate-400">כניסת שבת</dt>
-                    <dd className="text-xl font-bold tabular-nums text-slate-900 dark:text-slate-50">
-                      {config.candle_lighting ?? '—'}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs text-slate-500 dark:text-slate-400">צאת שבת</dt>
-                    <dd className="text-xl font-bold tabular-nums text-slate-900 dark:text-slate-50">
-                      {config.havdalah ?? '—'}
-                    </dd>
-                  </div>
-                </dl>
               </div>
+
+              <dl className="mt-4 grid grid-cols-2 gap-3">
+                <ShabbatTime label="כניסת שבת" value={config.candle_lighting} />
+                <ShabbatTime label="צאת שבת" value={config.havdalah} />
+              </dl>
+
+              {config.pre_shabbat_offset_minutes !== null ? (
+                <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                  בובי מכין את הבית {config.pre_shabbat_offset_minutes} דקות לפני הכניסה.
+                </p>
+              ) : null}
             </Card>
 
             {config.has_draft ? (

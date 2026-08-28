@@ -8,8 +8,20 @@
     />
     <meta name="theme-color" content="#4f46e5" />
     <meta name="description" content="מרכז הניהול של בובי" />
+    <!--
+      Installed-app metadata. Every path here is relative: Home Assistant
+      serves this under a generated Ingress prefix that is unknown at build
+      time, so an absolute "/manifest.webmanifest" would resolve to the
+      Supervisor's root and 404.
+    -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="בובי" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
     <title>בובי · מרכז ניהול</title>
   </head>
   <body>

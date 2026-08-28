@@ -358,6 +358,18 @@ describe('ShabbatPage', () => {
     expect(screen.getAllByText('כיבוי לפני שבת').length).toBeGreaterThan(0);
   });
 
+  // The week has a name, and the household plans around it. The card used to
+  // print the parasha as its only heading and the two times as small print
+  // beside it — and the times were timestamps, because the bridge forwarded a
+  // `jewish_calendar` sensor straight through.
+  it('names the week and the Hebrew date', async () => {
+    vi.stubGlobal('fetch', mockApi(ALL_ROUTES));
+    renderWithProviders(<ShabbatPage />);
+
+    expect(await screen.findByText('פרשת ראה')).toBeInTheDocument();
+    expect(screen.getByText(/אלול/)).toBeInTheDocument();
+  });
+
   it('resolves device tokens to friendly labels', async () => {
     vi.stubGlobal('fetch', mockApi(ALL_ROUTES));
     renderWithProviders(<ShabbatPage />);

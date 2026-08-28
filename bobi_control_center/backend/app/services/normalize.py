@@ -23,8 +23,12 @@ The one thing it will not do is invent data: absent means absent.
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import re
+from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.models.bridge import (
     AiStatus,
@@ -1127,9 +1131,56 @@ _AC_TEMPERATURE_KEYS = (
     "ac_temperatures", "ac_temps", "temperatures", "temps", "ac",
 )
 
+#: `HH:MM`, however the bridge said it.
+#:
+#: The Shabbat bridge is meant to publish a time of day, and now does. It did
+#: not: it forwarded the `jewish_calendar` sensor, which is a UTC instant, so
+#: the screen showed `2026-08-28T15:51:00+00:00` where a household wants
+#: "18:51" — the wrong hour as well as the wrong shape, this house being three
+#: hours ahead of UTC.
+#:
+#: The bridge is fixed; this is the second lock, because a time of day is what
+#: the field means and a screen should not have to wonder. A timestamp that
+#: carries its own offset is rendered in that offset — no timezone database is
+#: consulted and none is needed, since the bridge speaks in the house's own
+#: local time. Anything already shaped like a clock is left exactly as it is,
+#: and anything unrecognised is passed through rather than blanked: an odd
+#: value a household can see beats a dash it cannot explain.
+def _clock(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if _CLOCK.match(text):
+        return text[:5]
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        return text
+    # A stamp that arrived in UTC is not a time anybody here reads: 15:51Z is
+    # 18:51 in this house, which is the whole bug. Convert it where the system
+    # has a timezone database, and fall back to its own offset where it does
+    # not — the add-on's base image is not guaranteed to ship one, and a
+    # missing tzdata must not turn a clock into a stack trace.
+    if moment.utcoffset() == _UTC_OFFSET:
+        with contextlib.suppress(ZoneInfoNotFoundError, KeyError, ValueError):
+            moment = moment.astimezone(ZoneInfo(_HOUSE_TZ))
+    return moment.strftime("%H:%M")
+
+
+_CLOCK = re.compile(r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$")
+
+#: Where this house is, used only to rescue a bridge that sent UTC.
+_HOUSE_TZ = "Asia/Jerusalem"
+_UTC_OFFSET = timedelta(0)
+
+
 _SHABBAT_MAPPED = {
     "upcoming", "times", "profiles", "drafts", "candle_lighting", "havdalah",
-    "parasha", "pre_shabbat_offset_minutes", "pre_offset_minutes",
+    "parasha", "parsha", "hebrew_date", "holiday",
+    "candle_lighting_at", "havdalah_at",
+    "pre_shabbat_offset_minutes", "pre_offset_minutes",
     "offset_minutes", *_AC_TEMPERATURE_KEYS,
     "device_labels", "labels", "has_draft", "writes_enabled",
     "pre_off_profile", "pre_on_profile", "night_off_profile", "morning_on_profile",
@@ -1193,9 +1244,13 @@ def normalize_shabbat(payload: Payload) -> BridgeShabbat:
         pre_offset = _int(_first(payload, *offset_keys))
 
     return BridgeShabbat(
-        candle_lighting=time_of("candle_lighting", "candles", "shabbat_start", "start"),
-        havdalah=time_of("havdalah", "shabbat_end", "end"),
+        candle_lighting=_clock(time_of("candle_lighting", "candles", "shabbat_start", "start")),
+        havdalah=_clock(time_of("havdalah", "shabbat_end", "end")),
+        candle_lighting_at=time_of("candle_lighting_at"),
+        havdalah_at=time_of("havdalah_at"),
         parasha=time_of("parasha", "parsha"),
+        hebrew_date=time_of("hebrew_date", "hebrew_day"),
+        holiday=time_of("holiday", "yom_tov") or None,
         pre_shabbat_offset_minutes=pre_offset,
         profiles=profiles,
         ac_temperatures=_collect_ac_temperatures(payload, upcoming, profiles_raw, labels),

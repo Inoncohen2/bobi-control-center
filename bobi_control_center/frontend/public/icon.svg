@@ -1,0 +1,44 @@
+<!--
+  Bobi's mark: a robot's face, friendly at a glance and legible at 48px.
+
+  The whole drawing lives inside the middle 62% of the canvas. That is not
+  styling — Android crops a maskable icon to whatever shape the launcher likes,
+  and anything outside the inner circle can be cut. Drawing once, well inside
+  the safe zone, means the same file works masked and unmasked.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="בובי">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="0.55" stop-color="#4f46e5"/>
+      <stop offset="1" stop-color="#4338ca"/>
+    </linearGradient>
+    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#eef2ff"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" fill="url(#sky)"/>
+
+  <!-- Antenna, drawn before the head so the stalk tucks behind it. -->
+  <rect x="244" y="120" width="24" height="52" rx="12" fill="#c7d2fe"/>
+  <circle cx="256" cy="118" r="21" fill="#ffffff"/>
+
+  <!-- Head. -->
+  <rect x="132" y="164" width="248" height="204" rx="58" fill="url(#face)"/>
+
+  <!-- Eyes, set wide: close-set eyes read as a scowl at small sizes. -->
+  <circle cx="206" cy="252" r="26" fill="#4338ca"/>
+  <circle cx="306" cy="252" r="26" fill="#4338ca"/>
+  <circle cx="215" cy="243" r="8" fill="#ffffff"/>
+  <circle cx="315" cy="243" r="8" fill="#ffffff"/>
+
+  <!-- Smile. -->
+  <path d="M206 306 Q256 342 306 306" stroke="#4338ca" stroke-width="20"
+        stroke-linecap="round" fill="none"/>
+
+  <!-- Ears. -->
+  <rect x="108" y="232" width="22" height="62" rx="11" fill="#c7d2fe"/>
+  <rect x="382" y="232" width="22" height="62" rx="11" fill="#c7d2fe"/>
+</svg>

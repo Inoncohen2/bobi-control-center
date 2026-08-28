@@ -268,7 +268,11 @@ export function makeShabbat(overrides: Partial<BridgeShabbat> = {}): BridgeShabb
   return {
     candle_lighting: '18:52',
     havdalah: '19:51',
-    parasha: 'פרשת ראה',
+    candle_lighting_at: '2026-08-28T18:52:00+03:00',
+    havdalah_at: '2026-08-29T19:51:00+03:00',
+    parasha: 'ראה',
+    hebrew_date: 'ט"ו אלול ה\' תשפ"ו',
+    holiday: null,
     pre_shabbat_offset_minutes: 20,
     profiles: [
       {

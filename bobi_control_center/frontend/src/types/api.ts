@@ -304,9 +304,16 @@ export interface ShabbatProfile {
 }
 
 export interface BridgeShabbat {
+  /** A time of day — "18:51" — never a timestamp. */
   candle_lighting: string | null;
   havdalah: string | null;
+  /** The full local instant, for anything that computes rather than reads. */
+  candle_lighting_at: string | null;
+  havdalah_at: string | null;
   parasha: string | null;
+  hebrew_date: string | null;
+  /** Null when it is an ordinary week, so the card shows no empty label. */
+  holiday: string | null;
   pre_shabbat_offset_minutes: number | null;
   profiles: ShabbatProfile[];
   /** Each temperature stays tied to its air conditioner. */

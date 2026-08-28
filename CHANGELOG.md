@@ -4,6 +4,53 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.10.0
+
+An installable app, a Shabbat clock that says the hour, and the week's portion.
+
+### The site installs to the home screen
+
+There was no manifest, no service worker and no app icon — only a favicon. Now:
+a web app manifest, a mark drawn as SVG and rendered to the sizes iOS and
+Android ask for (including a maskable one with a proper safe zone), and a small
+service worker.
+
+Every path is relative, and that is the whole difficulty: Home Assistant serves
+this add-on under a generated Ingress prefix that is unknown at build time, so
+an absolute `/manifest.webmanifest` resolves to the Supervisor's root. Verified
+under a stand-in prefix as well as at the root — manifest parsed, all four icons
+served, worker active and scoped to the Ingress path rather than to `/`.
+
+The worker caches the shell and **nothing** from `/api`. A cached reading is a
+lie about a light that may since have been switched off.
+
+### The Shabbat clock said `2026-08-28T15:51:00+00:00`
+
+The bridge forwarded the `jewish_calendar` sensor, which holds a UTC instant.
+So the card showed a timestamp rather than a time — and the wrong hour, this
+house being three hours ahead. It now publishes a local clock: **18:51** and
+**19:45**, with the full local instant kept beside it for anything that
+computes rather than reads.
+
+The normalizer coerces a timestamp to a clock as well, so this cannot come back
+through a different bridge: a stamp carrying its own offset is rendered in it,
+and a UTC one is converted where the system has a timezone database and left in
+its own offset where it does not.
+
+### …and the week now has a name
+
+`פרשת כי תבוא`, with the Hebrew date under it and the festival when there is
+one, all from the same integration. The two times are now the card's headline
+rather than small print beside the parasha.
+
+### Times are edited on a 24-hour clock
+
+`<input type="time">` renders its text in the **browser's UI language**, which
+no page setting reaches: with the browser locale forced to `he-IL`, Chromium
+still drew "11:30 PM" on a Hebrew right-to-left screen. So the control is built
+rather than borrowed — two selects, which open the same native wheel on a phone
+and are unambiguous in every locale. Every time field in the app uses it.
+
 ## 3.9.2
 
 Two screens stopped being read-only, for the reason the contract itself named.

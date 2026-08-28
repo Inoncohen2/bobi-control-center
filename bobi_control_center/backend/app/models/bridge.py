@@ -404,9 +404,22 @@ class ShabbatProfile(CanonicalModel):
 class BridgeShabbat(CanonicalModel):
     """Normalized `script.bobi_cc_shabbat`. READ-ONLY in Phase 2."""
 
+    #: A time of day — "18:51" — not a timestamp.
+    #:
+    #: The `jewish_calendar` sensors hold a UTC instant, and this house is three
+    #: hours ahead of it. Passing the sensor through put `2026-08-28T15:51:00+00:00`
+    #: on the screen: the wrong hour, in a format nobody reads, where a household
+    #: wants the two numbers it plans its Friday around.
     candle_lighting: str | None = None
     havdalah: str | None = None
+    #: The full local instant, kept beside the clock for anything that needs to
+    #: compute with it rather than read it.
+    candle_lighting_at: str | None = None
+    havdalah_at: str | None = None
     parasha: str | None = None
+    #: "ט\"ו אלול ה' תשפ\"ו", and the festival when there is one.
+    hebrew_date: str | None = None
+    holiday: str | None = None
     pre_shabbat_offset_minutes: int | None = None
     profiles: list[ShabbatProfile] = Field(default_factory=list)
     #: Each temperature stays tied to its air conditioner, id and label both.

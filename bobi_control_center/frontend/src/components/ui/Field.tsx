@@ -102,11 +102,6 @@ export function SelectField({
   );
 }
 
-/** A `type="time"` input keeps native pickers on iOS. */
-export function TimeField(props: Omit<TextFieldProps, 'type'>) {
-  return <TextField type="time" {...props} />;
-}
-
 export function Chip({
   selected,
   onClick,
@@ -136,3 +131,104 @@ export function Chip({
     </button>
   );
 }
+
+/**
+ * A time, on a 24-hour clock, whatever the browser thinks the locale is.
+ *
+ * `<input type="time">` looks right until you see it: the format of the *shown*
+ * text comes from the browser's UI language, not from the page's `lang` and not
+ * from anything a page can set. In a Hebrew, right-to-left, Israeli household
+ * it rendered "11:30 PM" — and it kept rendering "11:30 PM" with the browser
+ * locale forced to `he-IL`, because that setting does not reach this control.
+ *
+ * So the clock is built rather than borrowed. Two selects are not a downgrade
+ * on a phone: iOS and Android both open a native wheel for a `<select>`, which
+ * is the same gesture the time input gave, and the value is unambiguous in
+ * every locale on earth.
+ *
+ * The value in and out stays `HH:MM` — the same string `<input type="time">`
+ * held — so nothing upstream of this control has to know it changed.
+ */
+export function TimeField({
+  label,
+  value,
+  onChange,
+  help,
+  className,
+  srOnlyLabel,
+  disabled,
+}: {
+  label: string;
+  /** `HH:MM`. An unparseable value leaves both wheels empty rather than lying. */
+  value: string;
+  onChange: (next: string) => void;
+  help?: string;
+  className?: string;
+  srOnlyLabel?: boolean;
+  disabled?: boolean;
+}) {
+  const generated = useId();
+  const helpId = help ? `${generated}-help` : undefined;
+  const [hour = '', minute = ''] = /^\d{1,2}:\d{2}/.test(value)
+    ? value.split(':').map((part) => part.padStart(2, '0'))
+    : [];
+
+  const emit = (nextHour: string, nextMinute: string) => {
+    // Half a time is not a time. Until both wheels are set there is nothing
+    // to preview, so nothing is emitted and the row stays as the bridge left it.
+    if (!nextHour || !nextMinute) return;
+    onChange(`${nextHour}:${nextMinute}`);
+  };
+
+  return (
+    <div className={className}>
+      <Label htmlFor={`${generated}-hour`} srOnly={srOnlyLabel}>
+        {label}
+      </Label>
+      {/* `dir="ltr"`: a clock reads hours-then-minutes in every language. */}
+      <div dir="ltr" className="flex items-center gap-1.5">
+        <select
+          id={`${generated}-hour`}
+          aria-describedby={helpId}
+          aria-label={`${label} — שעה`}
+          value={hour}
+          disabled={disabled}
+          onChange={(event) => emit(event.target.value, minute || '00')}
+          className={CONTROL_CLASSES}
+        >
+          {hour ? null : <option value="">--</option>}
+          {HOURS.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+        <span aria-hidden="true" className="text-lg font-semibold text-slate-400">
+          :
+        </span>
+        <select
+          aria-label={`${label} — דקות`}
+          value={minute}
+          disabled={disabled}
+          onChange={(event) => emit(hour || '00', event.target.value)}
+          className={CONTROL_CLASSES}
+        >
+          {minute ? null : <option value="">--</option>}
+          {MINUTES.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </div>
+      {help ? (
+        <p id={helpId} className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          {help}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+const HOURS = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, '0'));
+const MINUTES = Array.from({ length: 60 }, (_, index) => String(index).padStart(2, '0'));

@@ -26,7 +26,7 @@ import { Lock } from 'lucide-react';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader } from '@/components/ui/Card';
-import { Chip, SelectField, TextField } from '@/components/ui/Field';
+import { Chip, SelectField, TextField, TimeField } from '@/components/ui/Field';
 import { Switch } from '@/components/ui/Switch';
 import { allows, useRole } from '@/features/auth/useRole';
 import { useManagementContract } from '@/hooks/queries';
@@ -453,6 +453,24 @@ function ItemControl({
           className={cn('w-full', !membersDirty && 'invisible')}
           onClick={() => onChange(item, members)}
           disabled={!membersDirty}
+        >
+          בדוק שינוי
+        </Button>
+      </div>
+    );
+  }
+
+  if (item.kind === 'time') {
+    // Its own control rather than `<input type="time">`, which renders
+    // "11:30 PM" in a Hebrew household because the format follows the
+    // browser's UI language and no page setting reaches it.
+    return (
+      <div className="space-y-2">
+        <TimeField label={item.label} srOnlyLabel value={draft} onChange={setDraft} />
+        <Button
+          className={cn('w-full', !dirty && 'invisible')}
+          onClick={() => onChange(item, draft)}
+          disabled={!dirty}
         >
           בדוק שינוי
         </Button>

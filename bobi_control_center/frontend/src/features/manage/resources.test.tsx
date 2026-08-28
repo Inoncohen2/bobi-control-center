@@ -706,3 +706,53 @@ describe('a device card', () => {
     expect(screen.queryByRole('switch')).not.toBeInTheDocument();
   });
 });
+
+// `<input type="time">` renders its text in the browser's UI language, which no
+// page setting reaches: with the context locale forced to he-IL, Chromium still
+// drew "11:30 PM" on a Hebrew right-to-left screen. So the clock is built here
+// rather than borrowed, and these hold it to a 24-hour reading.
+describe('a time the bridge published', () => {
+  const timeRoutes = (value: string) =>
+    routes({
+      '/api/bobi/manage/settings/snapshot': makeResourceSnapshot({
+        items: [
+          makeManagedItem({
+            id: 'night_off_time',
+            label: 'כיבוי ליל שבת',
+            kind: 'time',
+            value,
+            display: value,
+          }),
+        ],
+      }),
+    });
+
+  it('is edited on a 24-hour clock, with no AM or PM anywhere', async () => {
+    stub(timeRoutes('23:30'));
+    renderWithProviders(<SettingsManagePage />);
+
+    const hours = await screen.findByRole('combobox', { name: 'כיבוי ליל שבת — שעה' });
+    const minutes = screen.getByRole('combobox', { name: 'כיבוי ליל שבת — דקות' });
+    expect(hours).toHaveValue('23');
+    expect(minutes).toHaveValue('30');
+    // 23 exists as an hour, which a 12-hour control could not offer.
+    expect(screen.queryByText(/AM|PM/)).not.toBeInTheDocument();
+  });
+
+  it('asks for a preview only once a whole time has been chosen', async () => {
+    const fetchMock = stub(timeRoutes('23:30'));
+    renderWithProviders(<SettingsManagePage />);
+
+    const hours = await screen.findByRole('combobox', { name: 'כיבוי ליל שבת — שעה' });
+    await userEvent.selectOptions(hours, '07');
+    await userEvent.click(screen.getByRole('button', { name: 'בדוק שינוי' }));
+
+    await waitFor(() =>
+      expect(paths(fetchMock).some((path) => path.includes('/settings/preview'))).toBe(true),
+    );
+    const sent = fetchMock.mock.calls.find(([input]) =>
+      String(input).includes('/settings/preview'),
+    );
+    expect(JSON.parse(String((sent?.[1] as RequestInit).body)).payload.value).toBe('07:30');
+  });
+});

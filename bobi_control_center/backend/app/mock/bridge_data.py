@@ -297,9 +297,16 @@ def shabbat_payload() -> dict[str, Any]:
     return {
         "api_version": "1",
         "upcoming": {
-            "parasha": "פרשת ראה",
+            # The live bridge's shape: a local time of day for reading, the
+            # full local instant beside it for computing, and the week's
+            # portion and Hebrew date from the same integration.
+            "parasha": "ראה",
+            "hebrew_date": "ט\"ו אלול ה' תשפ\"ו",
+            "holiday": "",
             "candle_lighting": "18:52",
             "havdalah": "19:51",
+            "candle_lighting_at": "2026-08-28T18:52:00+03:00",
+            "havdalah_at": "2026-08-29T19:51:00+03:00",
             "pre_offset_minutes": 20,
         },
         # Each profile carries its own temperatures, as the real bridge does.

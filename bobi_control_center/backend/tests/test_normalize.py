@@ -941,3 +941,41 @@ def test_an_issue_component_is_said_in_hebrew() -> None:
     issues = normalize.normalize_diagnostics(payload).issues
 
     assert [issue.component for issue in issues] == ["מכשיר", "חיישן", "zigbee_coordinator"]
+
+
+def test_shabbat_times_are_a_clock_not_a_timestamp() -> None:
+    """The screen wants the two numbers a household plans its Friday around.
+
+    The `jewish_calendar` sensors hold a UTC instant, and the bridge used to
+    forward one, so "כניסת שבת" read `2026-08-28T15:51:00+00:00` — the wrong
+    shape and, this house being three hours ahead, the wrong hour too. The
+    bridge now sends a local clock; this is the second lock on the same door.
+    """
+    shabbat = normalize.normalize_shabbat(
+        {"upcoming": {"candle_lighting": "2026-08-28T15:51:00+00:00",
+                      "havdalah": "2026-08-29T16:45:00+00:00"}}
+    )
+
+    assert shabbat.candle_lighting == "18:51"
+    assert shabbat.havdalah == "19:45"
+
+
+def test_a_clock_the_bridge_already_sent_is_left_alone() -> None:
+    shabbat = normalize.normalize_shabbat(
+        {"upcoming": {"candle_lighting": "18:51", "havdalah": "19:45"}}
+    )
+
+    assert (shabbat.candle_lighting, shabbat.havdalah) == ("18:51", "19:45")
+
+
+def test_the_week_and_the_hebrew_date_reach_the_screen() -> None:
+    shabbat = normalize.normalize_shabbat(
+        {"upcoming": {"parasha": "כי תבוא", "hebrew_date": "ט\"ו אלול ה' תשפ\"ו",
+                      "holiday": "", "candle_lighting_at": "2026-08-28T18:51:00+03:00"}}
+    )
+
+    assert shabbat.parasha == "כי תבוא"
+    assert shabbat.hebrew_date == "ט\"ו אלול ה' תשפ\"ו"
+    # An empty holiday is no holiday, not an empty label on the card.
+    assert shabbat.holiday is None
+    assert shabbat.candle_lighting_at == "2026-08-28T18:51:00+03:00"
