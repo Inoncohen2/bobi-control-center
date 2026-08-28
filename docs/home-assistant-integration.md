@@ -155,11 +155,44 @@ Read-only is structural, not a convention:
 - `writes_enabled` is forced to `False` on status and Shabbat responses even if
   the bridge says otherwise.
 
+## The split read path (3.11)
+
+Device reads come from two places now, chosen by how often each half changes:
+
+| Half | Source | Cached |
+| --- | --- | --- |
+| Catalogue — which devices exist, canonical ids, Hebrew names, capabilities, limits | `script.bobi_cc_devices` | 60s |
+| Live state — what is on right now | `GET /api/states` | never |
+
+Writes are unaffected and stay entirely in the `bobi_cc_*_commit` bridges.
+
+### The one bridge change this needs
+
+The app cannot look up a canonical id's entity for itself — that mapping is the
+household's, and it lives in Home Assistant. So `bobi_cc_devices` must publish
+`entity_id` on each **managed item** (its `entries` already carry one; the
+items do not):
+
+```jinja
+{'id': 'laundry', 'label': 'חדר כביסה', 'kind': 'toggle', ...,
+ 'entity_id': 'switch.tvrt_kbysh_vkhtsr_switch_1'}
+```
+
+Nothing else changes. The normalizer already strips `entity_id` from everything
+it hands a client, and `live_state.entity_map` reads it from the raw payload
+*before* that stripping — so the id is used to look a state up and never
+travels any further. There is a test asserting it does not appear in a rendered
+snapshot.
+
+Until that field is published, `entity_map` returns `{}`, the overlay does
+nothing, and device reads behave exactly as they did before the split. That is
+the intended fail-soft path, not a broken state.
+
 ## Data the app deliberately does not touch
 
 | Not touched | Why |
 | --- | --- |
-| Raw entity states | The bridge's device catalog is the contract |
+| Raw entity states *for anything but a switch position* | The bridge's device catalog is the contract; see the split above |
 | Bobi's scripts, helpers, automations | Not the app's concern |
 | WhatsApp numbers and LIDs | The bridge withholds them; the app must not reintroduce them |
 | Task internal descriptions | The bridge sanitises them |
