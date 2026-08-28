@@ -749,6 +749,42 @@ describe('a device card', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
+  it('shows no dialog *while* the switch is still applying', async () => {
+    // The assertion above only looks once the gesture has finished, so it held
+    // even while the dialog was opening mid-flight and closing itself on
+    // success: `startAndApply` sets a preview one tick before it commits, and
+    // the dialog opened on that. On a phone over Cloudflare that is a modal
+    // reading "עדיין לא בוצע דבר" sitting over a spinner — for a light switch.
+    // So this holds the commit open and looks while it is in flight.
+    let releaseCommit: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      releaseCommit = resolve;
+    });
+
+    const routes = deviceRoutes();
+    const inner = mockApi(routes);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/devices/commit')) await held;
+      return inner(input, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderWithProviders(<DevicesPage />);
+
+    await userEvent.click(await screen.findByRole('switch', { name: 'אור מטבח' }));
+
+    // The commit is in flight and deliberately unresolved.
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([input]) => String(input).endsWith('/devices/commit')),
+      ).toBe(true),
+    );
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByText('עדיין לא בוצע דבר. אפשר לבטל.')).not.toBeInTheDocument();
+
+    releaseCommit?.();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
   it('still stops and asks when the backend calls the change destructive', async () => {
     const fetchMock = stub(
       deviceRoutes(KITCHEN, true, {

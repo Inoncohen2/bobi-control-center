@@ -808,3 +808,44 @@ def test_the_manifest_states_no_start_url_or_scope() -> None:
     # Icon paths stay relative: they are resolved against the manifest URL,
     # which is the same directory the icons are served from either way.
     assert all(icon["src"].startswith("./") for icon in manifest["icons"])
+
+
+# --- the installed app --------------------------------------------------------
+def test_every_fixed_name_shell_file_is_revalidated() -> None:
+    """A cached shell file whose name never changes must never be cache-first.
+
+    This is the bug that kept 3.12.1's manifest fix off an installed phone for
+    four releases. `manifest.webmanifest` was pre-cached under a cache key that
+    was not bumped when its content changed, and every later request was
+    answered from that cache — so iOS went on reading the `scope` the fix had
+    removed, and re-adding the home-screen icon re-installed the stale manifest.
+
+    Cache-first is correct for `assets/index-<hash>.js`, where a changed file is
+    a changed URL. It is wrong for every file with a fixed name, and the
+    manifest is the one that decides whether iOS treats this as an app at all.
+    """
+    worker = APP_ROOT / "frontend" / "public" / "sw.js"
+    if not worker.is_file():
+        pytest.skip("frontend not present in this checkout")
+
+    source = worker.read_text("utf-8")
+
+    def listed(name: str) -> list[str]:
+        match = re.search(rf"const {name} = \[(.*?)\]", source, re.DOTALL)
+        assert match, f"{name} not found in sw.js"
+        return re.findall(r"'([^']+)'", match.group(1))
+
+    # Every pre-cached file except the bare './' navigation entry, which the
+    # navigate branch already answers network-first.
+    precached = [name for name in listed("SHELL_FILES") if name != "./"]
+    revalidated = listed("ALWAYS_REVALIDATE")
+
+    missing = [
+        name
+        for name in precached
+        if not any(name.lstrip(".") == other for other in revalidated)
+    ]
+    assert not missing, (
+        "these shell files are pre-cached under a fixed name but not revalidated, "
+        f"so a corrected copy can never reach an installed phone: {missing}"
+    )
