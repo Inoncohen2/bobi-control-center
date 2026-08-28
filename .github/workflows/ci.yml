@@ -168,19 +168,27 @@ jobs:
 
           git ls-files | grep -E '(^|/)\.env$' && fail "a .env file is committed" || true
 
+          # What follows scans *shipped* code. Tests and the mock double are
+          # excluded from all three patterns for one reason, already stated for
+          # the third: they name these patterns deliberately, in order to
+          # assert the application never emits them. A scan that fails on the
+          # fixture proving a phone number gets redacted is failing on the
+          # evidence that the redaction works.
+
           # A token *value* assigned to a Home Assistant credential.
-          if git grep -nEI "(SUPERVISOR_TOKEN|HA_TOKEN|api_key|webhook_secret|password)[[:space:]]*[:=][[:space:]]*['\"][^'\"]{8,}" -- . ':!*.md' ':!.github/*'; then
+          if git grep -nEI "(SUPERVISOR_TOKEN|HA_TOKEN|api_key|webhook_secret|password)[[:space:]]*[:=][[:space:]]*['\"][^'\"]{8,}" -- . ':!*.md' ':!.github/*' ':!*/tests/*' ':!*.test.*'; then
             fail "a credential value appears to be committed"
           fi
 
           # Dialable phone numbers.
-          if git grep -nEI "(\+[0-9]{9,15})|(\b0[0-9]{1,2}-?[0-9]{7}\b)" -- . ':!*.md' ':!package-lock.json'; then
+          if git grep -nEI "(\+[0-9]{9,15})|(\b0[0-9]{1,2}-?[0-9]{7}\b)" -- . ':!*.md' ':!package-lock.json' ':!*/tests/*' ':!*.test.*'; then
             fail "a phone number appears to be committed"
           fi
 
-          # WhatsApp identifiers. Tests are excluded: the suite names these
-          # patterns in order to assert they never appear in a response.
-          if git grep -nEI "@(c\.us|s\.whatsapp\.net|lid)" -- . ':!*.md' ':!*/tests/*' ':!*.test.*'; then
+          # WhatsApp identifiers. `mock/` is excluded as well: it plants a
+          # canary id on purpose, which the suite then asserts never reaches a
+          # response.
+          if git grep -nEI "@(c\.us|s\.whatsapp\.net|lid)" -- . ':!*.md' ':!*/tests/*' ':!*.test.*' ':!*/mock/*'; then
             fail "a WhatsApp identifier appears to be committed"
           fi
 
