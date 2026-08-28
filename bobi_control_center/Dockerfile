@@ -13,7 +13,13 @@
 ARG BUILD_FROM=python:3.11-slim
 
 # --- stage 1: compile the React frontend -----------------------------------
-FROM node:22-alpine AS frontend
+# Pinned to the *builder's* platform, not the target's. This stage emits
+# `dist/` — JavaScript, CSS and images, none of which differ by architecture —
+# so emulating it buys nothing and costs everything: the first aarch64 publish
+# spent over half an hour inside QEMU, almost all of it on `npm ci` and Vite.
+# The Python stage below still builds for the target, which is the part that
+# actually contains native wheels.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend
 
 WORKDIR /build
 
