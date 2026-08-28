@@ -4,6 +4,50 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.16.1
+
+Two things that were reported from a phone, and were both real.
+
+### The manifest fix from 3.12.1 never reached a phone
+
+The service worker pre-caches the shell — `index.html`, `manifest.webmanifest`,
+`icon-192.png` — under the cache key `bobi-shell-v1`, and answers everything
+that is not a navigation **cache-first**. The key was never bumped when 3.12.1
+rewrote the manifest, and `activate` only deletes caches whose key differs from
+the current one. So the old manifest, the one still carrying `scope`, was
+served from that cache for good.
+
+That is why the fix appeared not to work: deleting the home-screen icon and
+adding it again re-installed the same stale manifest, and iOS went on drawing
+the out-of-scope bar with the domain in it. The reasoning that made the shell
+cache-first — *"the name changes when the content does"* — is true of
+`assets/index-<hash>.js` and of nothing else in that list.
+
+The cache key is now `bobi-shell-v2`, so the stale copy is dropped on activate,
+and every fixed-name shell file is fetched network-first with the cache as a
+fallback. The app still opens with no signal; it just cannot pin a file whose
+content it has no way to notice changing. A test now fails if a pre-cached
+fixed-name file is not revalidated.
+
+**This still needs the icon removed and re-added once**, after updating: iOS
+keeps the manifest an installed icon was created with. The difference is that
+this time the manifest it fetches is the corrected one.
+
+### A light switch showed a dialog it was supposed to skip
+
+3.13.0 made a switch apply at once, and it did — but the dialog opened anyway
+while it worked. `startAndApply` sets the preview one tick before it commits,
+and the dialog opens on *"a preview exists and we are not idle"*, so flipping a
+light raised a modal reading **עדיין לא בוצע דבר** over a spinner, which then
+closed itself when the commit landed. Against localhost that is a flicker;
+from a phone, through Cloudflare, it is a dialog that sits there.
+
+The change now stays silent for the whole gesture and speaks only when there is
+something to say — the backend asked for confirmation, the write failed, or it
+came back unverified. Nothing was relaxed: the preview, the token, the expected
+state and the read-after-write are all still there, and a destructive change
+still stops and asks.
+
 ## 3.16.0
 
 Two more Shabbat clocks — one that turns things off, one that turns them on.

@@ -11,10 +11,36 @@
  * cache-first, and everything else is network-only.
  */
 
-const SHELL = 'bobi-shell-v1';
+/**
+ * Bump this whenever a shell file's *content* can differ from what an
+ * installed phone already cached.
+ *
+ * v1 → v2 because it had not been bumped when 3.12.1 rewrote the manifest, and
+ * `activate` only deletes caches whose key differs from this one. The corrected
+ * manifest was therefore never fetched by any device that already had the
+ * worker: the old one was served from `bobi-shell-v1` for good, iOS kept
+ * reading the `scope` that 3.12.1 removed, and deleting the home-screen icon
+ * and adding it again re-installed the same stale manifest.
+ */
+const SHELL = 'bobi-shell-v2';
 
 /** Resolved against the worker's own URL, so an Ingress prefix is inherited. */
 const SHELL_FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png'];
+
+/**
+ * Shell files whose content changes without their name changing.
+ *
+ * The cache-first rule below is sound for `assets/index-<hash>.js`, where a
+ * changed file is a changed URL and a hit is current by construction. These
+ * three have fixed names, so cache-first pins whichever copy the worker
+ * happened to fetch on the day it installed — which is the whole of the bug
+ * above. They go to the network first and fall back to the cache, so the app
+ * still opens with no signal.
+ *
+ * The manifest matters most: it is the file that decides whether iOS treats
+ * this as an installed app at all.
+ */
+const ALWAYS_REVALIDATE = ['/manifest.webmanifest', '/index.html', '/icon-192.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -65,19 +91,31 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  const store = (response) => {
+    if (response.ok && response.type === 'basic') {
+      const copy = response.clone();
+      void caches.open(SHELL).then((cache) => cache.put(request, copy));
+    }
+    return response;
+  };
+
+  // A fixed-name shell file. Ask the network, keep the answer, and fall back
+  // to the cache only when there is no network — never the other way round, or
+  // a corrected manifest can never reach a phone that cached the old one.
+  if (ALWAYS_REVALIDATE.some((name) => url.pathname.endsWith(name))) {
+    event.respondWith(
+      fetch(request)
+        .then(store)
+        .catch(() =>
+          caches
+            .match(request, { ignoreSearch: true })
+            .then((hit) => hit ?? Response.error()),
+        ),
+    );
+    return;
+  }
+
   // Hashed build assets: the name changes when the content does, so a hit is
   // always current and a miss is filled once.
-  event.respondWith(
-    caches.match(request).then(
-      (hit) =>
-        hit ??
-        fetch(request).then((response) => {
-          if (response.ok && response.type === 'basic') {
-            const copy = response.clone();
-            void caches.open(SHELL).then((cache) => cache.put(request, copy));
-          }
-          return response;
-        }),
-    ),
-  );
+  event.respondWith(caches.match(request).then((hit) => hit ?? fetch(request).then(store)));
 });

@@ -37,7 +37,7 @@ const RESULT_TONES: Record<string, ResultTone> = {
 };
 
 export function ChangeDialog({ change }: { change: ManagedChange }) {
-  const { stage, preview, result, error } = change;
+  const { stage, preview, result, error, silent } = change;
   const [word, setWord] = useState('');
 
   // A fresh preview starts a fresh confirmation.
@@ -45,7 +45,12 @@ export function ChangeDialog({ change }: { change: ManagedChange }) {
     setWord('');
   }, [preview?.preview_id]);
 
-  const open = stage !== 'idle' && (preview !== null || error !== null);
+  // `silent` is what makes a switch feel like a switch. Without it this opens
+  // the moment `startAndApply` has a preview — which is *before* it commits —
+  // so flipping a light showed a dialog saying nothing had happened yet, over
+  // a spinner, until the commit landed. The flag drops the instant there is
+  // something to report, so a refusal or an unverified write still surfaces.
+  const open = !silent && stage !== 'idle' && (preview !== null || error !== null);
   if (!open) return null;
 
   const showingResult = stage === 'result' && result !== null;

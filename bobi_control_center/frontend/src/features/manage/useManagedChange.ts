@@ -31,6 +31,21 @@
  *
  * And it is quiet only when it works: a commit that fails, or that comes back
  * unverified, opens the dialog to say so. Silence means the house agreed.
+ *
+ * ## Quiet means quiet for the whole round trip
+ *
+ * `silent` exists because "no dialog" was only true at the end. The dialog
+ * opens on `stage !== 'idle' && preview !== null`, and `startAndApply` sets a
+ * preview one tick before it starts committing — so the dialog opened, showed
+ * *"עדיין לא בוצע דבר"* over a spinner, and closed itself when the commit
+ * landed. On a desktop against localhost that is a flicker. On a phone,
+ * through Cloudflare, it is a modal that appears, sits there, and vanishes —
+ * for a light switch.
+ *
+ * So the flag is held for the whole gesture and dropped the moment there is
+ * something to say: the preview wants asking, the commit failed, or it came
+ * back unverified. Silence still means the house agreed; it just no longer
+ * means "the house agreed, eventually".
  */
 
 import { useCallback, useState } from 'react';
@@ -47,6 +62,12 @@ export interface ManagedChange {
   preview: PreviewResponse | null;
   result: CommitResponse | null;
   error: ApiError | Error | null;
+  /**
+   * This gesture is being applied without asking, so nothing may be shown for
+   * it — not even while it is in flight. Cleared as soon as there is something
+   * to say.
+   */
+  silent: boolean;
   /** Ask the backend to describe a change. Never writes. */
   start: (request: PreviewRequest) => Promise<void>;
   /**
@@ -77,12 +98,14 @@ export function useManagedChange(
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [result, setResult] = useState<CommitResponse | null>(null);
   const [error, setError] = useState<ApiError | Error | null>(null);
+  const [silent, setSilent] = useState(false);
 
   const reset = useCallback(() => {
     setStage('idle');
     setPreview(null);
     setResult(null);
     setError(null);
+    setSilent(false);
   }, []);
 
   const start = useCallback(
@@ -90,6 +113,7 @@ export function useManagedChange(
       setStage('previewing');
       setError(null);
       setResult(null);
+      setSilent(false);
       try {
         const response = await bobi.previewChange(resource, request);
         setPreview(response);
@@ -151,12 +175,15 @@ export function useManagedChange(
       setStage('previewing');
       setError(null);
       setResult(null);
+      // Held for the whole gesture, not merely at the end — see the note above.
+      setSilent(true);
       let response: PreviewResponse;
       try {
         response = await bobi.previewChange(resource, request);
       } catch (caught) {
         setError(caught as Error);
         setStage('idle');
+        setSilent(false);
         return;
       }
       setPreview(response);
@@ -164,6 +191,7 @@ export function useManagedChange(
       // The backend's own judgement, not a second one made here.
       const needsAsking = !response.valid || response.destructive || Boolean(response.confirm_word);
       if (needsAsking) {
+        setSilent(false);
         setStage('preview');
         return;
       }
@@ -178,10 +206,13 @@ export function useManagedChange(
       // out loud rather than to close a dialog over.
       if (outcome?.result.status === 'committed') {
         reset();
+        return;
       }
+      // Something to say: a refusal, a throw, or a write nobody could confirm.
+      setSilent(false);
     },
     [resource, applyTo, reset],
   );
 
-  return { stage, preview, result, error, start, startAndApply, commit, reset };
+  return { stage, preview, result, error, silent, start, startAndApply, commit, reset };
 }
