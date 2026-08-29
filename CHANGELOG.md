@@ -4,6 +4,111 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.19.0
+
+Everything that was actually broken, and an honest answer for the rest.
+
+### A light can be turned on at a brightness
+
+`bobi_cc_devices` published brightness and colour temperature as
+`controllable: false, operations: []` whenever the light was off. The reading
+really is absent then — but the *capability* is not, and `light.turn_on` carries
+brightness in the same call. The effect was that no light in this house could be
+turned on at a brightness: you turned it on, waited for the next poll, and only
+then got a slider.
+
+The bridge now publishes the control with a value of nothing, and
+`bobi_cc_device_commit` binds an expected of nothing to a light that is off. The
+binding still holds both ways — an expected of nothing against a light that is
+*on*, or a number against a light that has since been switched off, is
+`stale_preview` exactly as before. Run against the house: the living-room LED
+went from off to brightness 40 in one confirmed change, `executed` and
+`verified`, and the same commit repeated against the now-lit light was refused
+as stale.
+
+### Smart rules can be created
+
+`bobi_cc_rules` had been claiming `create_supported: true` while the contract
+listed `rule_create` under `not_supported` and no commit script implemented it.
+One of the two was lying.
+
+`bobi_cc_rule_commit` now has a create branch, and it does not write the rule
+itself — it hands the request to `script.whatsapp_ai_rule_v2_add`, the one place
+that knows the stored format and that already runs the duplicate check, the
+conflict check against rules at the same target and time, and the execution
+guard. The Control Center's preview and typed confirmation stand in for that
+engine's own approval gate. No chat id goes in or comes back. Rated `high`, so
+the confirmation word is typed rather than clicked: a rule is a standing
+instruction to Bobi, and the family default would have put a scheduled "turn
+everything off" behind a single button. Run against the house: a one-shot rule
+created and deleted, both `executed` and `verified`.
+
+Rewriting an existing rule is still not offered — a rule is a compound object
+and the contract carries one value per item.
+
+### The bridge's own `detail` block was being dropped
+
+`detail` sits in `_ITEM_KEYS`, so `safe_detail` skipped it — and skipping is not
+flattening. Every item's nested detail went on the floor: a device's domain,
+area, capabilities and limits, and a rule's mode, command, days and time. That
+is why the rules screen rendered an empty strip of badges, and why nobody had
+noticed that the days it expected as `"mon"` arrive as `0`. It is merged in now,
+through the same redaction, with the top-level extras winning.
+
+### A camera that cannot answer no longer reads as fine
+
+`camera.lia_local` reported `idle` for days while every attempt to fetch a
+picture answered HTTP 500. Through the universal state table that became
+*"ממתין"*, so the devices screen looked healthy while the cameras screen failed.
+`idle` on a camera says only that nothing is streaming, and it now reads
+*"לא משדרת"*. The word is chosen per domain, and the domain now reaches the
+normalizer because of the fix above.
+
+### `/health` no longer answers a question it was not being asked
+
+`writes_enabled` meant two opposite things. On the adapter it meant "this
+implementation may write without a bridge" — always false. In Home Assistant's
+contract it means the household's master switch, which is **on**. `/health`
+reported the first, so anyone checking whether writes worked read `false` while
+commits were reaching the house. The adapter's flag is now
+`unrestricted_writes`, and the master switch is deliberately not answered by the
+health check: it costs a Home Assistant round trip, and the watchdog polls that
+endpoint.
+
+### The double no longer advertises more than the house does
+
+`app/mock/management.py` declared every verb in `SPECS[resource].operations`,
+while the live contract declares a subset. So every "the bridge did not declare
+this" path was tested only against a bridge that declared everything. A family
+payload may now carry its own `operations`, and
+`tests/test_double_matches_the_house.py` configures the double with the live 3c
+lists. Writing that test immediately reproduced the original bug inside the
+double itself — the house says `add` where this application says `create`, and
+an untranslated `add` was dropped by the closed set, leaving the calendar with
+no operations at all.
+
+### What is not a gap, checked rather than assumed
+
+Three things stay in `not_supported`, and the reasons are recorded in the
+contract and in the tests so they are not re-litigated:
+
+- **Editing or deleting a calendar event.** Home Assistant publishes exactly two
+  calendar services, `create_event` and `get_events`. Both other paths are
+  WebSocket commands a script cannot reach. (The iCloud calendar also reports
+  `supported_features: 1` — create only.)
+- **Renaming anything.** There is no rename service anywhere in Home Assistant;
+  an entity rename is a registry command.
+- **The helper timer verbs.** The allowlist holds twelve curated ids — eight
+  booleans, two numbers, a datetime and a select — and not one timer or counter.
+  The house has 28 timers, but they are Bobi's own machinery: confirmation
+  timeouts, guard timers, menu sessions. Exposing those to a web page would
+  corrupt conversations in flight.
+
+`CLAUDE.md` said fourteen `bobi_cc_*` services (it is 33, derived from `SPECS`),
+said the master switch was off, and said not to touch Home Assistant at all —
+which had stopped describing how the bridge work actually gets done. All three
+are corrected.
+
 ## 3.18.1
 
 Only the switch you pressed reacts.

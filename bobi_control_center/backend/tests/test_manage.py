@@ -102,8 +102,8 @@ async def test_a_commit_is_refused_while_writes_are_off() -> None:
 async def test_the_application_never_reports_writes_it_cannot_do() -> None:
     from app.adapters import MockHomeAssistantAdapter, RealHomeAssistantAdapter
 
-    assert RealHomeAssistantAdapter.writes_enabled is False
-    assert MockHomeAssistantAdapter.writes_enabled is False
+    assert RealHomeAssistantAdapter.unrestricted_writes is False
+    assert MockHomeAssistantAdapter.unrestricted_writes is False
 
 
 # --- fail closed ------------------------------------------------------------

@@ -50,10 +50,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logger.info(
-            "Bobi Control Center %s starting — adapter=%s writes_enabled=%s",
+            "Bobi Control Center %s starting — adapter=%s unrestricted_writes=%s",
             APP_VERSION,
             adapter.name,
-            adapter.writes_enabled,
+            adapter.unrestricted_writes,
         )
         try:
             yield
@@ -93,13 +93,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/health", tags=["system"], summary="Health check")
     async def health() -> dict[str, object]:
-        """Used by the Docker healthcheck and the Supervisor watchdog."""
+        """Used by the Docker healthcheck and the Supervisor watchdog.
+
+        `unrestricted_writes` is this app's own claim — always false, because
+        every write goes through a `bobi_cc_*_commit` script. It is deliberately
+        *not* the household's master switch: that lives in Home Assistant, is
+        read from the contract, and is reported by `GET /api/manage/status`.
+        Answering it here would put a Home Assistant round trip inside the
+        watchdog's poll, which is the one request that must stay cheap.
+        """
         return {
             "ok": True,
             "app": APP_NAME,
             "version": APP_VERSION,
             "adapter": adapter.name,
-            "writes_enabled": adapter.writes_enabled,
+            "unrestricted_writes": adapter.unrestricted_writes,
         }
 
     _mount_frontend(app)

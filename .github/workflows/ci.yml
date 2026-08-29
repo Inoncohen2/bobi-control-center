@@ -89,7 +89,12 @@ jobs:
           curl -sf http://127.0.0.1:8099/health | tee /dev/stderr | grep -q '"ok":true'
           # Without a token the app must fall back to mock data, not crash.
           curl -sf http://127.0.0.1:8099/health | grep -q '"adapter":"mock"'
-          curl -sf http://127.0.0.1:8099/health | grep -q '"writes_enabled":false'
+          # `unrestricted_writes`, not `writes_enabled`: the two used to share a
+          # name and mean opposite things — this one is "the adapter may write
+          # without a bridge", which is permanently false, while Home
+          # Assistant's `writes_enabled` is the household's master switch and is
+          # on. The health check answers only for this app.
+          curl -sf http://127.0.0.1:8099/health | grep -q '"unrestricted_writes":false'
           curl -sf http://127.0.0.1:8099/api/bobi/status >/dev/null
           curl -sf http://127.0.0.1:8099/ | grep -q '<div id="root">'
           docker rm -f bobi-ci

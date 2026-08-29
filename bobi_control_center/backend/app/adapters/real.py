@@ -80,7 +80,7 @@ class RealHomeAssistantAdapter(HomeAssistantAdapter):
     """Read-only client for the Bobi Control Center bridge."""
 
     name = "home_assistant"
-    writes_enabled = False
+    unrestricted_writes = False
 
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
         self._base_url = settings.ha_base_url.rstrip("/")

@@ -269,8 +269,8 @@ def test_unrestricted_writes_stay_off() -> None:
     """Phase 3A adds management, not a general permission to write."""
     from app.adapters import MockHomeAssistantAdapter, RealHomeAssistantAdapter
 
-    assert RealHomeAssistantAdapter.writes_enabled is False
-    assert MockHomeAssistantAdapter.writes_enabled is False
+    assert RealHomeAssistantAdapter.unrestricted_writes is False
+    assert MockHomeAssistantAdapter.unrestricted_writes is False
 
 
 def test_the_mock_adapter_declares_no_write_bridge() -> None:

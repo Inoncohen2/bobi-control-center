@@ -580,7 +580,23 @@ _STATE_WORDS: dict[str, str] = {
 }
 
 
-def state_word(text: str) -> str:
+#: Words whose plain reading is wrong for one particular domain.
+#:
+#: A camera sitting at `idle` came through the table below as *"ממתין"*, which
+#: reads as a camera that is fine and waiting. It says no such thing: `idle`
+#: means only that nothing is streaming right now, and the camera in this house
+#: was `idle` for days while every attempt to fetch a picture answered HTTP 500.
+#: The devices screen therefore looked healthy while the cameras screen failed.
+#:
+#: The honest word for a camera says what the state actually reports and claims
+#: nothing about whether the camera can produce a picture — which this side has
+#: not asked and cannot know without fetching one.
+_DOMAIN_STATE_WORDS: dict[str, dict[str, str]] = {
+    "camera": {"idle": "לא משדרת"},
+}
+
+
+def state_word(text: str, domain: str | None = None) -> str:
     """Home Assistant's word for a state, in Hebrew — or the text unchanged.
 
     Separate from `humanise` because a bridge may publish its own `display`,
@@ -592,8 +608,18 @@ def state_word(text: str) -> str:
     Only the universal vocabulary is translated, and anything else is returned
     as it came: a bridge that publishes a real Hebrew display must pass through
     this untouched.
+
+    `domain` narrows the reading where the universal word would be misleading —
+    see `_DOMAIN_STATE_WORDS`. It is optional because most callers have a bare
+    word and no context, and a missing domain must never change an answer that
+    was already right.
     """
-    return _STATE_WORDS.get(text.strip().lower(), text)
+    token = text.strip().lower()
+    if domain:
+        override = _DOMAIN_STATE_WORDS.get(domain.strip().lower())
+        if override and token in override:
+            return override[token]
+    return _STATE_WORDS.get(token, text)
 
 
 def humanise(value: Any, item: ManagedItem | None = None) -> str:

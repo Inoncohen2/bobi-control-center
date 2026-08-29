@@ -21,6 +21,8 @@ neither relaxed because of the other.
 
 from __future__ import annotations
 
+import re
+from datetime import datetime
 from typing import Any
 
 from app.models.manage import (
@@ -190,6 +192,104 @@ def device_capability_error(item: ManagedItem, payload: dict[str, Any]) -> Field
     return None
 
 
+#: The two shapes a smart rule can have, as the bridge names them.
+RULE_MODES = ("once", "weekly")
+_TIME_OF_DAY = re.compile(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
+_CALENDAR_DAY = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+
+
+def rule_creation_errors(payload: dict[str, Any]) -> list[FieldError]:
+    """Everything wrong with a new rule, said in one go.
+
+    Checked here and not left to the bridge for the same reason the calendar's
+    fields are: a preview that shows a rule with no time is a confirmation of
+    nothing, and the engine behind the bridge answers an invalid rule by sending
+    the household a WhatsApp message rather than by telling this screen. These
+    mirror `script.whatsapp_ai_rule_v2_add`'s own checks; Home Assistant runs
+    them again, and neither side relies on the other.
+    """
+    errors: list[FieldError] = []
+
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        errors.append(FieldError(field="name", code="required", message="צריך שם לאוטומציה."))
+    elif len(name) > 100:
+        errors.append(
+            FieldError(field="name", code="too_long", message="השם ארוך מדי (עד 100 תווים).")
+        )
+
+    if not str(payload.get("command") or "").strip():
+        errors.append(
+            FieldError(
+                field="command",
+                code="required",
+                message="צריך לכתוב מה בובי יעשה כשהאוטומציה תרוץ.",
+            )
+        )
+
+    mode = str(payload.get("mode") or "").strip().lower()
+    if mode not in RULE_MODES:
+        errors.append(
+            FieldError(
+                field="mode",
+                code="not_allowed",
+                message="אפשר לבחור אוטומציה חד-פעמית או קבועה.",
+            )
+        )
+
+    due = str(payload.get("due") or "").strip()
+    if not due:
+        errors.append(FieldError(field="due", code="required", message="צריך מועד הרצה."))
+    elif not _in_the_future(due):
+        errors.append(
+            FieldError(field="due", code="in_the_past", message="המועד צריך להיות בעתיד.")
+        )
+
+    if mode == "weekly":
+        days = payload.get("days")
+        if not isinstance(days, list) or not 1 <= len(days) <= 7:
+            errors.append(
+                FieldError(field="days", code="required", message="צריך לבחור לפחות יום אחד.")
+            )
+        if not _TIME_OF_DAY.match(str(payload.get("time") or "").strip()):
+            errors.append(FieldError(field="time", code="invalid", message="צריך שעה תקינה."))
+        until = str(payload.get("until") or "").strip()
+        if until and not _CALENDAR_DAY.match(until):
+            errors.append(
+                FieldError(field="until", code="invalid", message="תאריך הסיום אינו תקין.")
+            )
+        elif until and due[:10] and until < due[:10]:
+            errors.append(
+                FieldError(
+                    field="until",
+                    code="before_start",
+                    message="תאריך הסיום מוקדם מהמועד הראשון.",
+                )
+            )
+
+    return errors
+
+
+def _in_the_future(due: str) -> bool:
+    """Whether a due stamp is later than now, tolerating what a form sends.
+
+    Both a naive `2026-09-01T08:00:00` and an offset-bearing one must work: the
+    screen sends the first and the bridge answers with the second. A stamp that
+    cannot be parsed at all is not treated as future — an unreadable date is a
+    refusal, not a pass.
+    """
+    from app.services.manage import _now
+
+    try:
+        moment = datetime.fromisoformat(due)
+    except ValueError:
+        return False
+    reference = _now()
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=reference.tzinfo)
+    return moment > reference
+
+
 def conflicts_of(item: ManagedItem | None, snapshot: ResourceSnapshot) -> list[dict[str, Any]]:
     """Conflicts the bridge reported, if it reported any.
 
@@ -322,6 +422,16 @@ def describe(
                 FieldError(field="user_id", code="required", message="צריך לבחור יומן.")
             )
 
+    if resource == "rules" and creating:
+        # A smart rule is a standing instruction to Bobi: at the named time it
+        # runs `command` as though someone had asked for it. That is the most
+        # consequential thing this application can create, and it is the reason
+        # the risk is raised here rather than left at the family default — a
+        # scheduled "turn everything off" deserves the typed word, and no item
+        # exists to carry a rating of its own.
+        risk = "high"
+        errors.extend(rule_creation_errors(payload))
+
     if resource == "devices" and item is not None:
         error = device_capability_error(item, payload)
         if error is not None:
@@ -423,6 +533,10 @@ _FIELD_LABELS = {
     "members": "מכשירים",
     "temperature": "טמפרטורה",
     "scope": "היקף",
+    "mode": "סוג",
+    "command": "מה בובי יעשה",
+    "due": "מתי",
+    "until": "עד תאריך",
 }
 
 

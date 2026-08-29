@@ -567,3 +567,149 @@ async def test_a_shabbat_ac_mode_is_previewed_committed_and_verified() -> None:
     outcome = await commit(svc, "shabbat", response)
     assert outcome.result.status == "committed"
     assert [entry["resource_type"] for entry in holder.applied] == ["shabbat"]
+
+
+# --- a light that is off ----------------------------------------------------
+async def test_a_light_that_is_off_can_still_be_given_a_brightness() -> None:
+    """The whole point of publishing a control with no value.
+
+    The bridge used to hide brightness and colour temperature whenever the light
+    was off — the reading really is absent then — and the consequence was that
+    no light in this house could be turned on *at* a brightness. You turned it
+    on, waited for the next poll, and only then got a slider.
+
+    `light.turn_on` carries brightness in the same call, so the capability was
+    never missing; only the reading was. The item now arrives controllable with
+    a value of `None`, and the preview binds to that absence rather than
+    refusing it.
+    """
+    svc = service()
+
+    response = await preview(
+        svc,
+        "devices",
+        "brightness",
+        resource_id="led_salon_brightness",
+        payload={"value": 40},
+    )
+
+    assert response.valid, codes(response)
+    outcome = await commit(svc, "devices", response)
+    assert outcome.result.status == "committed"
+    assert outcome.result.verification.verified is True
+
+
+async def test_the_brightness_of_a_light_that_is_off_is_offered_not_hidden() -> None:
+    """The item itself, before any preview: controllable, with nothing to show."""
+    snapshot = await bridge().resource_snapshot("devices")
+    item = next(entry for entry in snapshot.items if entry.id == "led_salon_brightness")
+
+    assert item.value is None, "a light that is off has no brightness, and says so"
+    assert item.controllable is True
+    assert item.operations == ["brightness"]
+    assert item.unavailable_reason is None, (
+        "'הבהירות תהיה זמינה כשהאור יידלק' was the message that made this "
+        "unreachable — it described the reading and then withdrew the control"
+    )
+
+
+# --- a camera that cannot answer -------------------------------------------
+async def test_a_camera_sitting_idle_does_not_read_as_a_camera_that_is_fine() -> None:
+    """`idle` is not reassurance, and the Hebrew must not turn it into some.
+
+    The camera in this house reported `idle` for days while every attempt to
+    fetch a picture answered HTTP 500. Through the universal state table that
+    became *"ממתין"*, so the devices screen looked healthy while the cameras
+    screen failed. `idle` on a camera means only that nothing is streaming.
+    """
+    snapshot = await bridge().resource_snapshot("devices")
+    camera = next(entry for entry in snapshot.items if entry.id == "cam_lia")
+
+    assert camera.display == "לא משדרת"
+    assert camera.display != "ממתין"
+
+
+# --- creating a smart rule --------------------------------------------------
+async def test_creating_a_rule_asks_for_the_word_typed() -> None:
+    """A standing instruction to Bobi is rated high, not at the family default.
+
+    There is no item to carry a rating, so `rules` would otherwise fall back to
+    `default_risk`, which is `low` — a scheduled "turn everything off" behind a
+    single button.
+    """
+    svc = service()
+
+    response = await preview(
+        svc,
+        "rules",
+        "create",
+        payload={
+            "name": "כיבוי לילה",
+            "mode": "once",
+            "command": "תכבה הכול",
+            "due": "2099-01-01T22:00:00",
+        },
+    )
+
+    assert response.valid, codes(response)
+    assert response.risk == "high"
+    assert response.confirm_word, "a high-risk change is confirmed by typing, not by a button"
+
+
+async def test_a_rule_with_no_time_is_refused_while_it_is_being_described() -> None:
+    """Checked here, not left to the bridge.
+
+    The engine behind the bridge answers an invalid rule by sending the
+    household a WhatsApp message rather than by telling this screen, so a
+    preview that reached it would show a rule with no time and confirm nothing.
+    """
+    svc = service()
+
+    response = await preview(
+        svc,
+        "rules",
+        "create",
+        payload={"name": "בלי מועד", "mode": "once", "command": "תכבה הכול"},
+    )
+
+    assert not response.valid
+    assert "due" in [error.field for error in response.errors]
+
+
+async def test_a_rule_whose_moment_has_passed_is_refused() -> None:
+    """A rule due in the past would never run, and the engine refuses it too."""
+    svc = service()
+
+    response = await preview(
+        svc,
+        "rules",
+        "create",
+        payload={
+            "name": "אתמול",
+            "mode": "once",
+            "command": "תכבה הכול",
+            "due": "2020-01-01T22:00:00",
+        },
+    )
+
+    assert not response.valid
+    assert "in_the_past" in codes(response)
+
+
+async def test_a_weekly_rule_needs_days_and_a_time() -> None:
+    svc = service()
+
+    response = await preview(
+        svc,
+        "rules",
+        "create",
+        payload={
+            "name": "כל שבוע",
+            "mode": "weekly",
+            "command": "תדליק את הדוד",
+            "due": "2099-01-01T22:00:00",
+        },
+    )
+
+    assert not response.valid
+    assert {"days", "time"} <= {error.field for error in response.errors}

@@ -16,6 +16,7 @@ import { SystemPage } from '@/pages/SystemPage';
 import { CamerasPage } from '@/pages/CamerasPage';
 import { DevicesPage } from '@/pages/DevicesPage';
 import { CalendarPage } from '@/pages/CalendarPage';
+import { RulesManagePage } from '@/pages/RulesManagePage';
 import {
   makeConnection,
   makeDevices,
@@ -978,5 +979,72 @@ describe('a time the bridge published', () => {
       String(input).includes('/settings/preview'),
     );
     expect(JSON.parse(String((sent?.[1] as RequestInit).body)).payload.value).toBe('07:30');
+  });
+});
+
+// --- creating a smart rule --------------------------------------------------
+describe('the rules screen', () => {
+  /** The contract this house publishes for `rules` since 2026-08-29. */
+  const RULE_OPERATIONS = [
+    { id: 'create', label: 'יצירת אוטומציה', destructive: false, valueless: false },
+    { id: 'enable', label: 'הפעלה', destructive: false, valueless: true },
+    { id: 'disable', label: 'השבתה', destructive: false, valueless: true },
+    { id: 'delete', label: 'מחיקה', destructive: true, valueless: true },
+  ];
+
+  function rulesRoutes(operations = RULE_OPERATIONS) {
+    return {
+      ...BASE,
+      '/api/bobi/manage/contract': makeManagementWith(
+        'rules',
+        { writes_enabled: true },
+        operations,
+      ),
+      '/api/bobi/manage/rules/snapshot': makeResourceSnapshot({ items: [] }),
+      '/api/bobi/manage/rules/preview': makePreview(),
+    };
+  }
+
+  it('offers the form the contract declares', async () => {
+    stub(rulesRoutes());
+    renderWithProviders(<RulesManagePage />);
+
+    expect(await screen.findByText('אוטומציה חדשה')).toBeInTheDocument();
+    expect(screen.getByLabelText('מה בובי יעשה')).toBeInTheDocument();
+  });
+
+  it('draws no form when the contract does not declare creating one', async () => {
+    // This is what the house published until 2026-08-29: `rule_create` sat in
+    // `not_supported` and the commit script had no create branch. A screen that
+    // offered the form anyway would collect a whole rule and then be refused.
+    stub(rulesRoutes(RULE_OPERATIONS.filter((operation) => operation.id !== 'create')));
+    renderWithProviders(<RulesManagePage />);
+
+    // Wait for the *snapshot* to have rendered, not merely the page title: the
+    // title is there on the first paint, so asserting against it proved
+    // nothing — the form was still absent because nothing had loaded yet.
+    expect(await screen.findByText('אין אוטומציות.')).toBeInTheDocument();
+    expect(screen.queryByText('אוטומציה חדשה')).not.toBeInTheDocument();
+  });
+
+  it('will not send a weekly rule with no day chosen', async () => {
+    // The engine needs the *next* run, not a time of day, and it cannot work
+    // one out without days. Leaving the button live would send a rule the
+    // bridge refuses after the person had filled the whole form in.
+    const user = userEvent.setup();
+    stub(rulesRoutes());
+    renderWithProviders(<RulesManagePage />);
+
+    await screen.findByText('אוטומציה חדשה');
+    await user.type(screen.getByLabelText('שם'), 'בוקר');
+    await user.type(screen.getByLabelText('מה בובי יעשה'), 'תדליק את הדוד');
+    await user.selectOptions(screen.getByLabelText('סוג'), 'weekly');
+    await user.type(screen.getByLabelText('שעה'), '06:30');
+
+    const check = screen.getByRole('button', { name: 'בדוק שינוי' });
+    expect(check).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'ג׳' }));
+    expect(check).toBeEnabled();
   });
 });
