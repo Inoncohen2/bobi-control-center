@@ -1,11 +1,17 @@
 /**
- * A switch that never guesses.
+ * A switch that shows what it was asked, and settles on what it was told.
  *
- * Pressing it does not set the knob. It asks the backend, and the knob moves
- * only once a commit has been read back — the position on screen is Home
- * Assistant's answer, never an optimistic guess. That is why `pending` dims
- * rather than flips: a switch that slid over and slid back would be the
- * interface lying twice.
+ * It does not decide either. `on` is whatever the caller passes: the device
+ * catalogue passes the pressed position straight away and replaces it with the
+ * bridge's answer the moment one arrives, so a press is visible immediately
+ * and a refusal slides the knob back. Callers that have nothing to be
+ * optimistic about pass Home Assistant's value throughout, and the knob simply
+ * waits.
+ *
+ * `pending` is for **this** switch only. It pulses and refuses further presses
+ * while one change is in flight, and handing it a whole page's change state
+ * made every switch on screen pulse and go unpressable while a single light
+ * turned on.
  *
  * What a press *leads to* depends on the caller and on the backend's own
  * judgement. On the device catalogue it previews and commits in one gesture,

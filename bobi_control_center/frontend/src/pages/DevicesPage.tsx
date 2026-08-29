@@ -524,26 +524,29 @@ export function DevicesPage() {
                     <span className="font-normal">({areaDevices.length})</span>
                   </h2>
                   <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                    {areaDevices.map((device) => (
-                      <DeviceCard
-                        key={device.id}
-                        device={device}
-                        managed={managedByName.get(device.name) ?? undefined}
-                        writesEnabled={managed.writesEnabled}
-                        pending={busy}
-                        requested={
-                          requested &&
-                          requested.id === (managedByName.get(device.name)?.id ?? '')
-                            ? requested.want
-                            : null
-                        }
-                        onOpen={() => setOpenId(device.id)}
-                        onToggle={(item, next) => {
-                          setRequested({ id: item.id, want: next, was: item.value });
-                          managed.applyNow(item, next);
-                        }}
-                      />
-                    ))}
+                    {areaDevices.map((device) => {
+                      const item = managedByName.get(device.name) ?? undefined;
+                      // Only the switch that was pressed is waiting on
+                      // anything. `busy` is the whole page's change state, and
+                      // handing it to every card made all of them pulse and go
+                      // unpressable while one light turned on.
+                      const mine = Boolean(item && requested?.id === item.id);
+                      return (
+                        <DeviceCard
+                          key={device.id}
+                          device={device}
+                          managed={item}
+                          writesEnabled={managed.writesEnabled}
+                          pending={mine && busy}
+                          requested={mine ? (requested?.want ?? null) : null}
+                          onOpen={() => setOpenId(device.id)}
+                          onToggle={(toggled, next) => {
+                            setRequested({ id: toggled.id, want: next, was: toggled.value });
+                            managed.applyNow(toggled, next);
+                          }}
+                        />
+                      );
+                    })}
                   </ul>
                 </section>
               ))}

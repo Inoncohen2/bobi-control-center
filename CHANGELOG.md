@@ -4,6 +4,25 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.18.1
+
+Only the switch you pressed reacts.
+
+3.18.0 made the pressed switch move at once, but left the other half of the
+problem in place: `pending` was still handed the whole page's change state. It
+does two things — it pulses the switch and it refuses further presses — so
+turning on one light made **every** switch on the screen blink and go
+unpressable until that light answered.
+
+It is now per device. The pressed switch pulses and holds still; the rest are
+untouched and remain usable.
+
+`Switch`'s own documentation had gone stale in the same place, still promising
+the knob "never guesses" and moves only after a read-back — which stopped being
+true in 3.18.0. It now says what the component actually does: it shows what the
+caller passes, the catalogue passes the pressed position and replaces it with
+the bridge's answer, and `pending` belongs to one switch.
+
 ## 3.18.0
 
 A switch moves when you press it.
