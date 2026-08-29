@@ -37,7 +37,7 @@ class MockHomeAssistantAdapter(HomeAssistantAdapter):
     """Deterministic demo data in the exact shape of the bridge."""
 
     name = "mock"
-    writes_enabled = False
+    unrestricted_writes = False
 
     async def connection_info(self) -> ConnectionInfo:
         return ConnectionInfo(

@@ -10,7 +10,30 @@ def test_health(client: TestClient) -> None:
     body = client.get("/health").json()
     assert body["ok"] is True
     assert body["app"] == "bobi-control-center"
-    assert body["writes_enabled"] is False
+    assert body["unrestricted_writes"] is False
+
+
+def test_health_does_not_speak_for_home_assistants_master_switch() -> None:
+    """`/health` answers for this app, not for the household.
+
+    The two used to share the name `writes_enabled`, running in opposite
+    directions: the health check reported `false` — meaning "this adapter never
+    writes without a bridge" — while the live contract reported `true` and
+    commits were reaching the house. Anyone reading the health check to find out
+    whether writes worked got the wrong answer.
+
+    So the field is gone from `/health` under that name, and the master switch
+    is not answered here at all: it lives behind a Home Assistant round trip,
+    and the watchdog polls this endpoint.
+    """
+    from app.adapters.mock import MockHomeAssistantAdapter
+    from app.main import create_app
+
+    with TestClient(create_app()) as client:
+        body = client.get("/health").json()
+
+    assert "writes_enabled" not in body
+    assert body["unrestricted_writes"] is MockHomeAssistantAdapter.unrestricted_writes
 
 
 def test_connection(client: TestClient) -> None:

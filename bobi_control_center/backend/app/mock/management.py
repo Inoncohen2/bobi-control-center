@@ -32,7 +32,7 @@ from app.models.manage import (
     TaskSnapshot,
 )
 from app.services.resource_normalize import normalize_resource, unavailable
-from app.services.resources import SPECS, VALUELESS_OPERATIONS
+from app.services.resources import SPECS, VALUELESS_OPERATIONS, canonical_operation
 
 _OPEN = "needs_action"
 _COMPLETED = "completed"
@@ -589,6 +589,41 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "entity_id": "light.kitchen",
                 "constraints": {"min": 1, "max": 100, "step": 1, "unit": "%"},
             },
+            # A light that is off, and its brightness beside it. The live bridge
+            # used to publish this pair as `controllable: false, operations: []`
+            # whenever the light was off — the reading really is absent then —
+            # and the effect was that no light in the house could ever be turned
+            # on *at* a brightness. You turned it on, waited for the next poll,
+            # and only then got a slider.
+            #
+            # `light.turn_on` carries brightness in the same call, so the
+            # capability was never the thing that was missing; only the reading
+            # was. The bridge now publishes the control with a value of nothing,
+            # and the commit binds an expected of nothing to a light that is off.
+            # Both halves are mirrored here so the screen is tested against what
+            # Home Assistant actually sends.
+            {
+                "id": "led_salon",
+                "label": "לד סלון",
+                "kind": "toggle",
+                "value": False,
+                "controllable": True,
+                "operations": ["power"],
+                "device_class": "light",
+                "capabilities": ["on_off", "brightness"],
+                "entity_id": "light.led_salon",
+            },
+            {
+                "id": "led_salon_brightness",
+                "label": "לד סלון — בהירות",
+                "kind": "number",
+                "value": None,
+                "controllable": True,
+                "operations": ["brightness"],
+                "device_class": "light",
+                "constraints": {"min": 1, "max": 255, "step": 1},
+                "entity_id": "light.led_salon",
+            },
             # The live shape: a device's switch is one item and each capability
             # is another, named `<device>_<capability>`. The double published a
             # single number per air conditioner, so the sheet that gathers a
@@ -674,13 +709,20 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "entity_id": "vacuum.robot",
             },
             {
+                # `idle` and not `streaming`, because that is what the live
+                # camera reports — for days at a time, including every day the
+                # picture itself answered HTTP 500. The double said `streaming`,
+                # so nothing ever exercised the word that was actually reaching
+                # the screen.
                 "id": "cam_lia",
                 "label": "מצלמת ליה",
                 "kind": "readonly",
-                "value": "streaming",
+                "value": "idle",
+                "display": "idle",
                 "controllable": False,
                 "operations": [],
                 "device_class": "camera",
+                "detail": {"domain": "camera", "area": "חדר בנות"},
                 "unavailable_reason": "המצלמה אינה ניתנת לשליטה מכאן",
                 "entity_id": "camera.lia_local",
             },
@@ -877,6 +919,30 @@ class MockManagementBridge(ManagementBridge):
         #: Every apply() call, so a test can assert a preview made none.
         self.applied: list[dict[str, Any]] = []
 
+    def _declared_operations(self, resource: str) -> tuple[str, ...]:
+        """The verbs this family's payload says it has.
+
+        Falls back to the whole spec when the payload is silent, which keeps
+        every test that predates the `operations` key working. A payload that
+        *does* name them is taken at its word, including an empty list — the
+        live contract publishes exactly that for `scenes`, because this house
+        has no scenes.
+
+        Names go through `canonical_operation` on the way in, exactly as the
+        real contract normalizer does. Skipping that step here reproduced the
+        original bug inside the double itself: the house says `add` for a
+        calendar and this application says `create`, so an untranslated `add`
+        was filtered out by the closed set and the calendar came back with no
+        operations at all.
+        """
+        payload = self.resources.get(resource) or {}
+        declared = payload.get("operations")
+        if declared is None:
+            return SPECS[resource].operations
+        allowed = SPECS[resource].operations
+        canonical = (canonical_operation(resource, str(name)) for name in declared)
+        return tuple(name for name in canonical if name in allowed)
+
     async def status(self) -> ManagementStatus:
         if not self._available:
             return ManagementStatus(available=False, reason=UNAVAILABLE_MESSAGE)
@@ -928,6 +994,20 @@ class MockManagementBridge(ManagementBridge):
                         id=resource,
                         label=SPECS[resource].label,
                         available=True,
+                        # What the *family payload* declares, not what this
+                        # application can imagine. Every operation in
+                        # `SPECS[resource].operations` used to be advertised
+                        # here, and the live 3c contract advertises a subset of
+                        # them: calendar names `add` and nothing else, helpers
+                        # name `set` and none of the timer verbs, automations
+                        # and scripts name no `rename`. So the double was more
+                        # permissive than Home Assistant, and every "this
+                        # operation was not declared" path went untested against
+                        # anything realistic.
+                        #
+                        # A payload with no `operations` key still falls back to
+                        # the spec, so a test that only cares about one family's
+                        # data does not have to spell out a contract.
                         operations=[
                             ManagedOperation(
                                 id=operation,
@@ -935,7 +1015,7 @@ class MockManagementBridge(ManagementBridge):
                                 destructive=operation in SPECS[resource].destructive,
                                 valueless=operation in VALUELESS_OPERATIONS,
                             )
-                            for operation in SPECS[resource].operations
+                            for operation in self._declared_operations(resource)
                         ],
                         # What a `create` may be aimed at — the live contract
                         # publishes these for the families that have them, and
@@ -1086,18 +1166,29 @@ class MockManagementBridge(ManagementBridge):
     ) -> BridgeOutcome:
         """A 3.0 family commit, checked the way the live bridge checks one."""
         spec = SPECS[resource]
-        if operation not in spec.operations:
+        # The family's own declaration, so a double configured with a real
+        # contract refuses what that contract omits — the same refusal Home
+        # Assistant gives, arriving at the same point.
+        if operation not in self._declared_operations(resource):
             return BridgeOutcome(executed=False, verified=False, reason="unsupported_operation")
 
         if operation in spec.creating:
             new_id = f"{resource}_{secrets.token_hex(3)}"
             entry = {
                 "id": new_id,
-                "label": payload.get("label") or payload.get("value") or new_id,
+                # `name` too: a smart rule carries its title there, not in
+                # `label` or `value`, so a created rule used to come back
+                # labelled `rules_a1b2c3`.
+                "label": (
+                    payload.get("label") or payload.get("name") or payload.get("value") or new_id
+                ),
                 "kind": "toggle",
                 "value": True,
                 "controllable": True,
-                "operations": list(spec.operations),
+                "operations": [
+                    name for name in self._declared_operations(resource)
+                    if name not in spec.creating
+                ],
                 **{k: v for k, v in payload.items() if k not in ("label",)},
             }
             self.resources.setdefault(resource, {"available": True}).setdefault(

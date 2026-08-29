@@ -36,10 +36,20 @@ class HomeAssistantAdapter(ABC):
     #: Identifies the implementation in `/health` and the settings screen.
     name: str = "abstract"
 
-    #: Unrestricted writes. Still False in Phase 3A, for every implementation:
-    #: management is per-operation and goes through the bridge below, never
-    #: through a general permission to write.
-    writes_enabled: bool = False
+    #: May this adapter write *without* going through a bridge script?
+    #:
+    #: False for every implementation, permanently. Management is per-operation
+    #: and goes through the bridge below, never through a general permission to
+    #: write.
+    #:
+    #: This used to be called `writes_enabled`, which is also the name Home
+    #: Assistant's contract uses for something else entirely — the household's
+    #: master switch, read in `ManagementStatus.writes_enabled`. The two ran in
+    #: opposite directions: `/health` reported `writes_enabled: false` while the
+    #: master switch was on and commits were reaching the house, which reads as
+    #: "writes are off" to anyone checking. One name, two claims, so the names
+    #: are now different.
+    unrestricted_writes: bool = False
 
     # --- management -------------------------------------------------------
     def management_bridge(self) -> ManagementBridge | None:

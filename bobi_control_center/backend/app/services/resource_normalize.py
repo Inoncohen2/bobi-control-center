@@ -127,8 +127,31 @@ def safe_detail(payload: dict[str, Any]) -> dict[str, Any]:
     — phone numbers included — straight past a per-item redaction that was
     working perfectly. Anything that only checks the top level of a structure
     is checking the one level the data was not hiding in.
+
+    ## The bridge's own `detail` block
+
+    `detail` is in `_ITEM_KEYS`, so this used to skip it — and skipping is not
+    the same as flattening. The live bridge puts a nested `detail` on every
+    item: a device's `{domain, area, capabilities, limits}`, a rule's
+    `{mode, command, days, time, until}`. All of it was being dropped on the
+    floor, which is why `RuleDetail` on the rules screen rendered an empty strip
+    of badges and nobody noticed that the days it expected as `"mon"` arrive as
+    `0` — the days never got there to be misread.
+
+    It is merged in first and top-level extras win over it, so a bridge that
+    publishes the same key twice does not have the nested copy quietly
+    outrank the one beside it. Everything goes through the same redaction: the
+    nested block is exactly where a raw entity id or a chat id would hide.
     """
     safe: dict[str, Any] = {}
+    nested = payload.get("detail")
+    if isinstance(nested, dict):
+        for key, value in nested.items():
+            if _private(key):
+                continue
+            cleaned = _safe_value(value)
+            if cleaned is not _DROP:
+                safe[key] = cleaned
     for key, value in payload.items():
         if key in _ITEM_KEYS or _private(key):
             continue
@@ -439,7 +462,11 @@ def _item(payload: dict[str, Any], *, default_group: str | None = None) -> Manag
     # raw state. Taking it verbatim put "off", "cool" and "docked" on every
     # device row: the field meant for the human reading, holding the machine's.
     stated = normalize._text(payload.get("display"))
-    item.display = state_word(stated) if stated else humanise(value, item)
+    # The domain goes with it: the same raw word does not mean the same thing on
+    # every kind of device, and a camera reading "ממתין" while it cannot produce
+    # a picture is the case that proved it.
+    domain = normalize._text(item.detail.get("domain")) if item.detail else None
+    item.display = state_word(stated, domain) if stated else humanise(value, item)
     return item
 
 

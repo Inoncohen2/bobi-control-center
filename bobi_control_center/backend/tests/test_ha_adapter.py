@@ -238,8 +238,8 @@ def test_neither_adapter_exposes_a_write_method() -> None:
 
 
 def test_writes_are_disabled_on_both_adapters() -> None:
-    assert RealHomeAssistantAdapter.writes_enabled is False
-    assert MockHomeAssistantAdapter.writes_enabled is False
+    assert RealHomeAssistantAdapter.unrestricted_writes is False
+    assert MockHomeAssistantAdapter.unrestricted_writes is False
 
 
 def test_the_mock_adapter_cannot_reach_the_network() -> None:
