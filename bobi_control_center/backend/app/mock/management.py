@@ -48,6 +48,76 @@ PRIVATE_CANARY = "MUST-NOT-APPEAR"
 # answers rather than in the normalized shape — so every test that touches a
 # family exercises the normalizer too, and a change there cannot pass unnoticed.
 DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
+    # The household's own lists, in the shape `bobi_cc_lists_snapshot` answers:
+    # one group per list, one item per entry. The counts and the mix here are
+    # taken from the real house on 2026-08-30 — a shopping list with a single
+    # item on it, five recipes, two reminders and several empty lists — because
+    # a double where every list is full never exercises the empty state, and
+    # the empty state is what a family sees most mornings.
+    "lists": {
+        "available": True,
+        "groups": [
+            {
+                "id": "shopping",
+                "label": "קניות",
+                "items": [
+                    {
+                        "id": "shopping_1",
+                        "label": "חלב",
+                        "kind": "toggle",
+                        "value": False,
+                        "controllable": True,
+                        "operations": ["complete", "delete"],
+                        "list_id": "shopping",
+                    }
+                ],
+            },
+            {
+                "id": "recipes",
+                "label": "מתכונים",
+                "items": [
+                    {
+                        "id": "recipe_1",
+                        "label": "שקשוקה",
+                        "kind": "toggle",
+                        "value": False,
+                        "controllable": True,
+                        "operations": ["complete", "delete"],
+                        "list_id": "recipes",
+                    },
+                    {
+                        "id": "recipe_2",
+                        "label": "עוגת שוקולד",
+                        "kind": "toggle",
+                        "value": True,
+                        "controllable": True,
+                        "operations": ["reopen", "delete"],
+                        "list_id": "recipes",
+                    },
+                ],
+            },
+            {
+                "id": "reminders",
+                "label": "תזכורות",
+                "items": [
+                    {
+                        "id": "reminder_1",
+                        "label": "לחדש ביטוח",
+                        "kind": "toggle",
+                        "value": False,
+                        "controllable": True,
+                        "operations": ["complete", "delete"],
+                        "list_id": "reminders",
+                        "due": "2026-09-15",
+                    }
+                ],
+            },
+            # Empty on purpose. A family list with nothing on it is the common
+            # case, and a screen that only ever renders full lists has never
+            # been asked what an empty one should say.
+            {"id": "family", "label": "משפחה", "items": []},
+        ],
+    },
     "settings": {
         "available": True,
         "groups": [

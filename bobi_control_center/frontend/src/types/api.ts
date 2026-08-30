@@ -668,6 +668,7 @@ export interface ResourceSnapshot {
 
 /** The families with a `/{resource}/snapshot` endpoint. */
 export type ManagedResource =
+  | 'lists'
   | 'settings'
   | 'users'
   | 'shabbat'

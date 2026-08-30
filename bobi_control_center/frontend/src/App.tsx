@@ -13,6 +13,7 @@ import { DashboardPage } from '@/pages/DashboardPage';
 import { DevicesPage } from '@/pages/DevicesPage';
 import { DiagnosticsPage } from '@/pages/DiagnosticsPage';
 import { HelpersPage } from '@/pages/HelpersPage';
+import { ListsPage } from '@/pages/ListsPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { NotificationsPage } from '@/pages/NotificationsPage';
 import { RulesPage } from '@/pages/RulesPage';
@@ -37,6 +38,7 @@ export function App() {
         <Route path="automations" element={<Navigate to="/rules" replace />} />
         <Route path="shabbat" element={<ShabbatPage />} />
         <Route path="tasks" element={<TasksPage />} />
+        <Route path="lists" element={<ListsPage />} />
         <Route path="users" element={<UsersPage />} />
         <Route path="test-center" element={<TestCenterPage />} />
         <Route path="cameras" element={<CamerasPage />} />
