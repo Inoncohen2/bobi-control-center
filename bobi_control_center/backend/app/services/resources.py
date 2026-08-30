@@ -44,6 +44,8 @@ from app.models.manage import (
 RESOURCE_IDS = (
     "tasks",
     "features",
+    "lists",
+    "vouchers",
     "settings",
     "users",
     "shabbat",
@@ -75,6 +77,26 @@ SETTINGS_OPERATIONS = ("set",)
 #: features path that already speaks them. What `set` means is decided by the
 #: payload, and the rules that used to key off the verb — the last-admin guard,
 #: the phone door — now read the payload instead.
+#: The household's own lists — shopping, recipes, reminders, the family list.
+#:
+#: These are separate from `tasks`, which is one specific list published by
+#: `bobi_cc_task_snapshot` and addressed per household member. A list here is a
+#: *group*, and its entries are the items; the bridge decides which lists exist
+#: and this side never names a `todo.*` entity.
+#:
+#: Which lists appear is emphatically the bridge's call, and the reason matters:
+#: this house has eighteen `todo` lists and only about half are for people. The
+#: rest are Bobi's own machinery — a 338-entry activity log, a multimodal
+#: context store keyed by chat id, a WhatsApp outbox. Publishing "every list"
+#: would put a conversation log carrying phone numbers on a family screen.
+LIST_OPERATIONS = ("create", "set", "complete", "reopen", "delete")
+#: A voucher is a *reading* with two things you can do to it: say it has been
+#: used, and throw it away. There is deliberately no `create` and no `set` —
+#: a voucher is created by photographing one into WhatsApp, where Bobi reads
+#: the provider, the item, the expiry and the code off the picture at a stated
+#: confidence. A web form that let someone type a voucher by hand would be a
+#: second, worse source of truth for the same object.
+VOUCHER_OPERATIONS = ("complete", "reopen", "delete")
 USER_OPERATIONS = ("set", "enable", "disable", "set_role", "rename", "set_phone")
 SHABBAT_OPERATIONS = ("set", "set_timing", "set_membership", "set_temperature")
 RULE_OPERATIONS = ("create", "edit", "enable", "disable", "delete")
@@ -228,6 +250,37 @@ class ResourceSpec:
 
 
 SPECS: dict[str, ResourceSpec] = {
+    "vouchers": ResourceSpec(
+        id="vouchers",
+        label="ארנק השוברים",
+        snapshot_service="bobi_cc_vouchers_snapshot",
+        commit_service="bobi_cc_voucher_commit",
+        operations=VOUCHER_OPERATIONS,
+        destructive=frozenset({"delete"}),
+        id_field="voucher_id",
+        titles={
+            "complete": "סימון כמומש",
+            "reopen": "החזרה לארנק",
+            "delete": "מחיקת שובר",
+        },
+    ),
+    "lists": ResourceSpec(
+        id="lists",
+        label="רשימות הבית",
+        snapshot_service="bobi_cc_lists_snapshot",
+        commit_service="bobi_cc_list_commit",
+        operations=LIST_OPERATIONS,
+        destructive=frozenset({"delete"}),
+        creating=frozenset({"create"}),
+        id_field="item_id",
+        titles={
+            "create": "הוספה לרשימה",
+            "set": "שינוי פריט",
+            "complete": "סימון כבוצע",
+            "reopen": "החזרה לרשימה",
+            "delete": "מחיקה מהרשימה",
+        },
+    ),
     "settings": ResourceSpec(
         id="settings",
         label="הגדרות בובי",

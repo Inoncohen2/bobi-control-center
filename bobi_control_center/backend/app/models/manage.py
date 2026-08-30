@@ -37,6 +37,8 @@ from app.models.bridge import CanonicalModel
 MANAGED_RESOURCES = (
     "tasks",
     "features",
+    "lists",
+    "vouchers",
     "settings",
     "users",
     "shabbat",

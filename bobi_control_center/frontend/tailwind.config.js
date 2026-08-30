@@ -30,6 +30,25 @@ export default {
           800: '#3730a3',
           900: '#312e81',
         },
+        // The ground the warm screens sit on.
+        //
+        // Slate is a cold grey with blue in it, and a whole page of it reads
+        // like a control panel. This is the same lightness with the hue turned
+        // the other way, so a card looks like paper on a table rather than a
+        // window in an enclosure. Indigo above stays the identity — the warmth
+        // is the surface it sits on, not a change of brand.
+        warm: {
+          50: '#faf8f5',
+          100: '#f4f0ea',
+          200: '#e9e2d8',
+          300: '#d8ccbc',
+          400: '#bda98f',
+          500: '#a08a6d',
+          600: '#856f54',
+          700: '#6b5843',
+          800: '#4a3d2f',
+          900: '#2b241c',
+        },
       },
       borderRadius: {
         xl: '1rem',

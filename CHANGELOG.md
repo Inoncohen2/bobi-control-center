@@ -4,6 +4,138 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.21.0
+
+ארנק השוברים.
+
+I said vouchers were not stored as vouchers anywhere. That was wrong, and the
+search that produced it was too shallow — `ha_search` was unavailable, so I
+looked at helper names and one conversation log and stopped. Searching properly
+found all of it.
+
+### What Bobi already does
+
+A voucher photographed into WhatsApp is parsed into fields, at a stated
+confidence. From a real entry written on 2026-08-30:
+
+```json
+{"kind":"voucher","confidence":100,
+ "data":{"voucher":{"provider":"עובדים 360","item":"מחבת 20 ס״מ + תרווד מחורץ",
+   "brand":"Foodappeal","expiry_date":"14.10.2026","expiry_time":"23:59",
+   "code":"[קוד שובר הושמט]"}}}
+```
+
+There is a wallet — Bobi sent *"🎟️ ארנק השוברים — אין כרגע שוברים פעילים"* the
+same evening — and a voucher edit flow, named exactly like the rule one
+(`bobi_voucher_edit_context_inon` / `_hodaya`).
+
+### Where the wallet lives, and why nothing found it
+
+**Supabase.** `bobi_supabase_status` is `healthy`, last sync 20:17. Checked and
+ruled out on the Home Assistant side: every `todo` list (`bobi_knowledge` 0,
+`bobi_personal_memory` 0), all 338 entries of `bobi_activity` — zero voucher
+mentions — and all 232 `input_text` helpers, where the only voucher entries are
+the two edit-context ones, both empty. The wallet is simply not in Home
+Assistant, which is why looking harder *inside* Home Assistant kept failing.
+
+### The screen
+
+A `vouchers` family and a wallet screen: live vouchers, then spent ones. Field
+names are copied from that real entry rather than invented.
+
+**No `create` verb, deliberately.** A voucher is created by photographing one.
+A web form would be a second, worse source of truth, and a hand-typed expiry is
+exactly the field you do not want wrong.
+
+**The code is off the screen until it is asked for.** A voucher code is money,
+and this is a screen a guest can glance at or that gets photographed and
+forwarded. Bobi draws the same line in its own store — it redacts the code in
+the structured block it keeps. Revealing one is a press on that one voucher, and
+a spent voucher never offers it at all.
+
+**The expiry is parsed day-first.** Bobi writes `14.10.2026`; handing that to
+`Date` reads it month-first, so the 14th of October becomes the 10th of month
+fourteen — silently wrong, in the one field the card exists to convey. A test
+fails if the order is swapped.
+
+### One thing to look at on Bobi's side
+
+At 09:42 Bobi recognised a voucher valid until 14.10.2026 with `confidence:
+100`. At 20:05 the wallet answered *"אין כרגע שוברים פעילים"*. Either the
+voucher was never written to the wallet, or the wallet reads a different scope.
+That is an engine question, not a Control Center one.
+
+### Still not delivered
+
+`bobi_cc_vouchers_snapshot` and `bobi_cc_lists_snapshot` — the two bridge reads
+these screens need — are **not written**. The Home Assistant script tooling was
+unavailable throughout (`ha_get_skill_guide`, `ha_config_set_script`,
+`ha_search` and `ha_get_overview` all returned "requires approval"). Until they
+land both screens do what the design intends for an undeclared family: they say
+so, and ask for no snapshot.
+
+## 3.20.0
+
+The household's lists get a screen, and the screens a family opens get a
+warmer one.
+
+### רשימות
+
+The site showed exactly one list: `bobi_cc_task_snapshot` publishes
+`todo.mshymvt_ynvn` and nothing else. The house has **eighteen** `todo` lists,
+and the ones a family actually keeps — shopping, recipes, reminders, the family
+list — were not among them.
+
+There is now a `lists` family: one screen, one tile per list, entries inside it.
+The colour is per subject rather than per state, so the shopping list is amber
+every time you open it and nobody has to read the headings.
+
+**Which lists appear is the bridge's decision, and that is not deference for
+its own sake.** Only about half of those eighteen belong to people. The rest are
+Bobi's own machinery: an activity log of 338 entries, a multimodal context store
+keyed by chat id, a WhatsApp outbox. A screen that rendered "every list" would
+put a conversation log carrying phone numbers in front of the family. So the
+allowlist lives in the bridge, where the household controls it, and the screen
+renders what it is handed — including a list this application has never heard
+of, which gets the neutral tone rather than being dropped for being unfamiliar.
+
+### A warmer ground
+
+Slate is a cold grey with blue in it, and a whole page of it reads like a
+control panel. `warm` is the same lightness with the hue turned the other way,
+so a card looks like paper on a table. Indigo stays the identity; the warmth is
+the surface under it, not a change of brand.
+
+`Tile` is the new unit of layout for the household screens — bigger than
+`Card`, with an icon chip and a colour. Every accent class is written out in
+full rather than assembled: Tailwind compiles the classes it can see, so
+`bg-${tone}-100` produces markup pointing at CSS that was never generated, the
+card renders with no colour, and nothing reports a problem.
+
+Two smaller decisions worth recording:
+
+- **A count is of what is still open, not of what is on the list.** A badge
+  reading "2" beside a shopping list with one thing left to buy is worse than
+  no badge.
+- **An empty list says something, and never "0".** An empty family list is the
+  normal case, not a fault.
+
+### The bottom bar stayed at five
+
+It is built from `PRIMARY_NAV.length + 1`, so a sixth tab would have fitted
+rather than broken — into about fifty points of width on a phone, under the
+size a thumb reliably hits. So adding one meant removing one: `רשימות`
+displaced `אוטומציות`, because shopping is opened daily and this house
+currently has no smart rules at all. Automations keep their screen and their
+place in "עוד".
+
+### Not delivered
+
+The bridge read script this screen needs, `bobi_cc_lists_snapshot`, is **not
+written yet** — the Home Assistant tooling was unavailable for the whole of this
+change. Until it lands the screen behaves exactly as the design intends for a
+family the contract has not declared: it says so, and asks for no snapshot.
+
 ## 3.19.0
 
 Everything that was actually broken, and an honest answer for the rest.

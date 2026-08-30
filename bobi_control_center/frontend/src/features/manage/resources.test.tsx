@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { SettingsManagePage } from '@/pages/SettingsManagePage';
@@ -17,6 +17,8 @@ import { CamerasPage } from '@/pages/CamerasPage';
 import { DevicesPage } from '@/pages/DevicesPage';
 import { CalendarPage } from '@/pages/CalendarPage';
 import { RulesManagePage } from '@/pages/RulesManagePage';
+import { ListsPage } from '@/pages/ListsPage';
+import { VouchersPage } from '@/pages/VouchersPage';
 import {
   makeConnection,
   makeDevices,
@@ -1046,5 +1048,181 @@ describe('the rules screen', () => {
 
     await user.click(screen.getByRole('button', { name: 'ג׳' }));
     expect(check).toBeEnabled();
+  });
+});
+
+// --- the household's lists --------------------------------------------------
+describe('the lists screen', () => {
+  function listRoutes(snapshot?: Parameters<typeof makeResourceSnapshot>[0]) {
+    return {
+      ...BASE,
+      '/api/bobi/manage/contract': makeManagementWith('lists', { writes_enabled: true }, []),
+      '/api/bobi/manage/lists/snapshot':
+        snapshot === undefined
+          ? makeResourceSnapshot({
+              groups: [
+                {
+                  id: 'shopping',
+                  label: 'קניות',
+                  description: null,
+                  items: [
+                    makeManagedItem({ id: 'a', label: 'חלב', kind: 'toggle', value: false }),
+                    makeManagedItem({ id: 'b', label: 'לחם', kind: 'toggle', value: true }),
+                  ],
+                },
+                { id: 'family', label: 'משפחה', description: null, items: [] },
+              ],
+              items: [],
+            })
+          : makeResourceSnapshot(snapshot),
+    };
+  }
+
+  it('shows each list with the things on it', async () => {
+    stub(listRoutes());
+    renderWithProviders(<ListsPage />);
+
+    expect(await screen.findByText('קניות')).toBeInTheDocument();
+    expect(screen.getByText('חלב')).toBeInTheDocument();
+    expect(screen.getByText('לחם')).toBeInTheDocument();
+  });
+
+  it('counts what is still open, not what is on the list', async () => {
+    // Two items, one already bought. A badge reading "2" next to a list with
+    // one thing left to buy is worse than no badge at all.
+    stub(listRoutes());
+    renderWithProviders(<ListsPage />);
+
+    await screen.findByText('קניות');
+    const shopping = screen.getByRole('heading', { name: 'קניות' }).closest('section');
+    expect(shopping).not.toBeNull();
+    expect(within(shopping as HTMLElement).getByText('1')).toBeInTheDocument();
+  });
+
+  it('says something human when a list is empty', async () => {
+    // And never a bare "0": an empty family list is the normal case, not a
+    // fault, so the count is withheld and the tile explains itself.
+    stub(listRoutes());
+    renderWithProviders(<ListsPage />);
+
+    expect(await screen.findByText('הרשימה ריקה.')).toBeInTheDocument();
+    const family = screen.getByRole('heading', { name: 'משפחה' }).closest('section');
+    expect(within(family as HTMLElement).queryByText('0')).not.toBeInTheDocument();
+  });
+
+  it('renders a list it has never heard of rather than dropping it', async () => {
+    // The colours are keyed on the bridge's group id. A household that adds a
+    // list this application has no entry for must still see it.
+    stub(
+      listRoutes({
+        groups: [
+          {
+            id: 'garden',
+            label: 'גינה',
+            description: null,
+            items: [makeManagedItem({ id: 'c', label: 'לזרוע בזיליקום', kind: 'toggle', value: false })],
+          },
+        ],
+        items: [],
+      }),
+    );
+    renderWithProviders(<ListsPage />);
+
+    expect(await screen.findByText('גינה')).toBeInTheDocument();
+    expect(screen.getByText('לזרוע בזיליקום')).toBeInTheDocument();
+  });
+});
+
+// --- the voucher wallet -----------------------------------------------------
+describe('the voucher wallet', () => {
+  function voucherRoutes(items: ReturnType<typeof makeManagedItem>[]) {
+    return {
+      ...BASE,
+      '/api/bobi/manage/contract': makeManagementWith('vouchers', { writes_enabled: true }, []),
+      '/api/bobi/manage/vouchers/snapshot': makeResourceSnapshot({ items, groups: [] }),
+    };
+  }
+
+  /** The shape Bobi actually writes, field for field. */
+  const LIVE = makeManagedItem({
+    id: 'v1',
+    label: 'מחבת 20 ס״מ + תרווד מחורץ',
+    kind: 'toggle',
+    value: false,
+    detail: {
+      provider: 'עובדים 360',
+      brand: 'Foodappeal',
+      expiry_date: '14.10.2026',
+      code: 'SECRET-CODE-1234',
+    },
+  });
+
+  it('shows the voucher and who it is from', async () => {
+    stub(voucherRoutes([LIVE]));
+    renderWithProviders(<VouchersPage />);
+
+    expect(await screen.findByText('מחבת 20 ס״מ + תרווד מחורץ')).toBeInTheDocument();
+    expect(screen.getByText('עובדים 360 · Foodappeal')).toBeInTheDocument();
+  });
+
+  it('keeps the redemption code off the screen until it is asked for', async () => {
+    // A voucher code is money, and this is a screen a guest can glance at or
+    // that gets photographed and forwarded. Bobi draws the same line in its own
+    // store: it redacts the code in the structured block it keeps.
+    const user = userEvent.setup();
+    stub(voucherRoutes([LIVE]));
+    renderWithProviders(<VouchersPage />);
+
+    await screen.findByText('מחבת 20 ס״מ + תרווד מחורץ');
+    expect(screen.queryByText('SECRET-CODE-1234')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'הצג קוד מימוש' }));
+    expect(screen.getByText('SECRET-CODE-1234')).toBeInTheDocument();
+  });
+
+  it('never offers the code of a voucher already used', async () => {
+    stub(
+      voucherRoutes([
+        makeManagedItem({
+          id: 'v2',
+          label: 'קפה וקרואסון',
+          kind: 'toggle',
+          value: true,
+          detail: { provider: 'ארומה', code: 'SPENT-CODE-9999' },
+        }),
+      ]),
+    );
+    renderWithProviders(<VouchersPage />);
+
+    expect(await screen.findByText('קפה וקרואסון')).toBeInTheDocument();
+    expect(screen.getByText('מומש')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'הצג קוד מימוש' })).not.toBeInTheDocument();
+  });
+
+  it('warns when a voucher is nearly out of time', async () => {
+    // Bobi writes the expiry day-first — `14.10.2026`. Handing that to `Date`
+    // reads it month-first, so a voucher expiring on the 14th of October would
+    // be read as the 10th of the 14th month: silently wrong, and wrong in the
+    // one field the whole card exists to convey.
+    const soon = new Date();
+    soon.setDate(soon.getDate() + 3);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const dayFirst = `${pad(soon.getDate())}.${pad(soon.getMonth() + 1)}.${soon.getFullYear()}`;
+
+    stub(
+      voucherRoutes([
+        makeManagedItem({ id: 'v3', label: 'שובר', kind: 'toggle', value: false, detail: { expiry_date: dayFirst } }),
+      ]),
+    );
+    renderWithProviders(<VouchersPage />);
+
+    expect(await screen.findByText('עוד 3 ימים')).toBeInTheDocument();
+  });
+
+  it('says the wallet is empty rather than showing nothing', async () => {
+    stub(voucherRoutes([]));
+    renderWithProviders(<VouchersPage />);
+
+    expect(await screen.findByText(/אין כרגע שוברים בארנק/)).toBeInTheDocument();
   });
 });
