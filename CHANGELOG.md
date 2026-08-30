@@ -4,6 +4,76 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.21.0
+
+ארנק השוברים.
+
+I said vouchers were not stored as vouchers anywhere. That was wrong, and the
+search that produced it was too shallow — `ha_search` was unavailable, so I
+looked at helper names and one conversation log and stopped. Searching properly
+found all of it.
+
+### What Bobi already does
+
+A voucher photographed into WhatsApp is parsed into fields, at a stated
+confidence. From a real entry written on 2026-08-30:
+
+```json
+{"kind":"voucher","confidence":100,
+ "data":{"voucher":{"provider":"עובדים 360","item":"מחבת 20 ס״מ + תרווד מחורץ",
+   "brand":"Foodappeal","expiry_date":"14.10.2026","expiry_time":"23:59",
+   "code":"[קוד שובר הושמט]"}}}
+```
+
+There is a wallet — Bobi sent *"🎟️ ארנק השוברים — אין כרגע שוברים פעילים"* the
+same evening — and a voucher edit flow, named exactly like the rule one
+(`bobi_voucher_edit_context_inon` / `_hodaya`).
+
+### Where the wallet lives, and why nothing found it
+
+**Supabase.** `bobi_supabase_status` is `healthy`, last sync 20:17. Checked and
+ruled out on the Home Assistant side: every `todo` list (`bobi_knowledge` 0,
+`bobi_personal_memory` 0), all 338 entries of `bobi_activity` — zero voucher
+mentions — and all 232 `input_text` helpers, where the only voucher entries are
+the two edit-context ones, both empty. The wallet is simply not in Home
+Assistant, which is why looking harder *inside* Home Assistant kept failing.
+
+### The screen
+
+A `vouchers` family and a wallet screen: live vouchers, then spent ones. Field
+names are copied from that real entry rather than invented.
+
+**No `create` verb, deliberately.** A voucher is created by photographing one.
+A web form would be a second, worse source of truth, and a hand-typed expiry is
+exactly the field you do not want wrong.
+
+**The code is off the screen until it is asked for.** A voucher code is money,
+and this is a screen a guest can glance at or that gets photographed and
+forwarded. Bobi draws the same line in its own store — it redacts the code in
+the structured block it keeps. Revealing one is a press on that one voucher, and
+a spent voucher never offers it at all.
+
+**The expiry is parsed day-first.** Bobi writes `14.10.2026`; handing that to
+`Date` reads it month-first, so the 14th of October becomes the 10th of month
+fourteen — silently wrong, in the one field the card exists to convey. A test
+fails if the order is swapped.
+
+### One thing to look at on Bobi's side
+
+At 09:42 Bobi recognised a voucher valid until 14.10.2026 with `confidence:
+100`. At 20:05 the wallet answered *"אין כרגע שוברים פעילים"*. Either the
+voucher was never written to the wallet, or the wallet reads a different scope.
+That is an engine question, not a Control Center one.
+
+### Still not delivered
+
+`bobi_cc_vouchers_snapshot` and `bobi_cc_lists_snapshot` — the two bridge reads
+these screens need — are **not written**. The Home Assistant script tooling was
+unavailable throughout (`ha_get_skill_guide`, `ha_config_set_script`,
+`ha_search` and `ha_get_overview` all returned "requires approval"). Until they
+land both screens do what the design intends for an undeclared family: they say
+so, and ask for no snapshot.
+
 ## 3.20.0
 
 The household's lists get a screen, and the screens a family opens get a

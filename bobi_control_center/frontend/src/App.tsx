@@ -14,6 +14,7 @@ import { DevicesPage } from '@/pages/DevicesPage';
 import { DiagnosticsPage } from '@/pages/DiagnosticsPage';
 import { HelpersPage } from '@/pages/HelpersPage';
 import { ListsPage } from '@/pages/ListsPage';
+import { VouchersPage } from '@/pages/VouchersPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { NotificationsPage } from '@/pages/NotificationsPage';
 import { RulesPage } from '@/pages/RulesPage';
@@ -39,6 +40,7 @@ export function App() {
         <Route path="shabbat" element={<ShabbatPage />} />
         <Route path="tasks" element={<TasksPage />} />
         <Route path="lists" element={<ListsPage />} />
+        <Route path="vouchers" element={<VouchersPage />} />
         <Route path="users" element={<UsersPage />} />
         <Route path="test-center" element={<TestCenterPage />} />
         <Route path="cameras" element={<CamerasPage />} />

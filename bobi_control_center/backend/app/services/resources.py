@@ -45,6 +45,7 @@ RESOURCE_IDS = (
     "tasks",
     "features",
     "lists",
+    "vouchers",
     "settings",
     "users",
     "shabbat",
@@ -89,6 +90,13 @@ SETTINGS_OPERATIONS = ("set",)
 #: context store keyed by chat id, a WhatsApp outbox. Publishing "every list"
 #: would put a conversation log carrying phone numbers on a family screen.
 LIST_OPERATIONS = ("create", "set", "complete", "reopen", "delete")
+#: A voucher is a *reading* with two things you can do to it: say it has been
+#: used, and throw it away. There is deliberately no `create` and no `set` —
+#: a voucher is created by photographing one into WhatsApp, where Bobi reads
+#: the provider, the item, the expiry and the code off the picture at a stated
+#: confidence. A web form that let someone type a voucher by hand would be a
+#: second, worse source of truth for the same object.
+VOUCHER_OPERATIONS = ("complete", "reopen", "delete")
 USER_OPERATIONS = ("set", "enable", "disable", "set_role", "rename", "set_phone")
 SHABBAT_OPERATIONS = ("set", "set_timing", "set_membership", "set_temperature")
 RULE_OPERATIONS = ("create", "edit", "enable", "disable", "delete")
@@ -242,6 +250,20 @@ class ResourceSpec:
 
 
 SPECS: dict[str, ResourceSpec] = {
+    "vouchers": ResourceSpec(
+        id="vouchers",
+        label="ארנק השוברים",
+        snapshot_service="bobi_cc_vouchers_snapshot",
+        commit_service="bobi_cc_voucher_commit",
+        operations=VOUCHER_OPERATIONS,
+        destructive=frozenset({"delete"}),
+        id_field="voucher_id",
+        titles={
+            "complete": "סימון כמומש",
+            "reopen": "החזרה לארנק",
+            "delete": "מחיקת שובר",
+        },
+    ),
     "lists": ResourceSpec(
         id="lists",
         label="רשימות הבית",

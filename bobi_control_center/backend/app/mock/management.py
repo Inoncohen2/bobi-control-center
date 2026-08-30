@@ -48,6 +48,48 @@ PRIVATE_CANARY = "MUST-NOT-APPEAR"
 # answers rather than in the normalized shape — so every test that touches a
 # family exercises the normalizer too, and a change there cannot pass unnoticed.
 DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
+    # The wallet, in the shape Bobi already parses a photographed voucher into.
+    # These field names are not invented: they are copied from a real entry
+    # Bobi wrote on 2026-08-30 with `confidence: 100` — provider, item, brand,
+    # expiry_date, expiry_time, code.
+    #
+    # The code is the one field that matters here. Bobi itself redacts it in the
+    # structured block while leaving it in the free text it extracted, so this
+    # double carries the redacted form: a voucher code is money, and the screen
+    # must be built against the shape where it is absent rather than against one
+    # where it happens to be present.
+    "vouchers": {
+        "available": True,
+        "items": [
+            {
+                "id": "voucher_1",
+                "label": "מחבת 20 ס״מ + תרווד מחורץ",
+                "kind": "toggle",
+                "value": False,
+                "controllable": True,
+                "operations": ["complete", "delete"],
+                "provider": "עובדים 360",
+                "brand": "Foodappeal",
+                "expiry_date": "14.10.2026",
+                "expiry_time": "23:59",
+                "code": "[קוד שובר הושמט]",
+                "confidence": 100,
+            },
+            # Already used. A wallet that only ever renders live vouchers has
+            # never been asked what a spent one looks like.
+            {
+                "id": "voucher_2",
+                "label": "קפה וקרואסון",
+                "kind": "toggle",
+                "value": True,
+                "controllable": True,
+                "operations": ["reopen", "delete"],
+                "provider": "ארומה",
+                "expiry_date": "01.08.2026",
+                "code": "[קוד שובר הושמט]",
+            },
+        ],
+    },
     # The household's own lists, in the shape `bobi_cc_lists_snapshot` answers:
     # one group per list, one item per entry. The counts and the mix here are
     # taken from the real house on 2026-08-30 — a shopping list with a single

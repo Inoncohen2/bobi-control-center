@@ -38,6 +38,7 @@ MANAGED_RESOURCES = (
     "tasks",
     "features",
     "lists",
+    "vouchers",
     "settings",
     "users",
     "shabbat",

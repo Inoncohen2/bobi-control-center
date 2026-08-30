@@ -18,6 +18,7 @@ import { DevicesPage } from '@/pages/DevicesPage';
 import { CalendarPage } from '@/pages/CalendarPage';
 import { RulesManagePage } from '@/pages/RulesManagePage';
 import { ListsPage } from '@/pages/ListsPage';
+import { VouchersPage } from '@/pages/VouchersPage';
 import {
   makeConnection,
   makeDevices,
@@ -1129,5 +1130,99 @@ describe('the lists screen', () => {
 
     expect(await screen.findByText('גינה')).toBeInTheDocument();
     expect(screen.getByText('לזרוע בזיליקום')).toBeInTheDocument();
+  });
+});
+
+// --- the voucher wallet -----------------------------------------------------
+describe('the voucher wallet', () => {
+  function voucherRoutes(items: ReturnType<typeof makeManagedItem>[]) {
+    return {
+      ...BASE,
+      '/api/bobi/manage/contract': makeManagementWith('vouchers', { writes_enabled: true }, []),
+      '/api/bobi/manage/vouchers/snapshot': makeResourceSnapshot({ items, groups: [] }),
+    };
+  }
+
+  /** The shape Bobi actually writes, field for field. */
+  const LIVE = makeManagedItem({
+    id: 'v1',
+    label: 'מחבת 20 ס״מ + תרווד מחורץ',
+    kind: 'toggle',
+    value: false,
+    detail: {
+      provider: 'עובדים 360',
+      brand: 'Foodappeal',
+      expiry_date: '14.10.2026',
+      code: 'SECRET-CODE-1234',
+    },
+  });
+
+  it('shows the voucher and who it is from', async () => {
+    stub(voucherRoutes([LIVE]));
+    renderWithProviders(<VouchersPage />);
+
+    expect(await screen.findByText('מחבת 20 ס״מ + תרווד מחורץ')).toBeInTheDocument();
+    expect(screen.getByText('עובדים 360 · Foodappeal')).toBeInTheDocument();
+  });
+
+  it('keeps the redemption code off the screen until it is asked for', async () => {
+    // A voucher code is money, and this is a screen a guest can glance at or
+    // that gets photographed and forwarded. Bobi draws the same line in its own
+    // store: it redacts the code in the structured block it keeps.
+    const user = userEvent.setup();
+    stub(voucherRoutes([LIVE]));
+    renderWithProviders(<VouchersPage />);
+
+    await screen.findByText('מחבת 20 ס״מ + תרווד מחורץ');
+    expect(screen.queryByText('SECRET-CODE-1234')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'הצג קוד מימוש' }));
+    expect(screen.getByText('SECRET-CODE-1234')).toBeInTheDocument();
+  });
+
+  it('never offers the code of a voucher already used', async () => {
+    stub(
+      voucherRoutes([
+        makeManagedItem({
+          id: 'v2',
+          label: 'קפה וקרואסון',
+          kind: 'toggle',
+          value: true,
+          detail: { provider: 'ארומה', code: 'SPENT-CODE-9999' },
+        }),
+      ]),
+    );
+    renderWithProviders(<VouchersPage />);
+
+    expect(await screen.findByText('קפה וקרואסון')).toBeInTheDocument();
+    expect(screen.getByText('מומש')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'הצג קוד מימוש' })).not.toBeInTheDocument();
+  });
+
+  it('warns when a voucher is nearly out of time', async () => {
+    // Bobi writes the expiry day-first — `14.10.2026`. Handing that to `Date`
+    // reads it month-first, so a voucher expiring on the 14th of October would
+    // be read as the 10th of the 14th month: silently wrong, and wrong in the
+    // one field the whole card exists to convey.
+    const soon = new Date();
+    soon.setDate(soon.getDate() + 3);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const dayFirst = `${pad(soon.getDate())}.${pad(soon.getMonth() + 1)}.${soon.getFullYear()}`;
+
+    stub(
+      voucherRoutes([
+        makeManagedItem({ id: 'v3', label: 'שובר', kind: 'toggle', value: false, detail: { expiry_date: dayFirst } }),
+      ]),
+    );
+    renderWithProviders(<VouchersPage />);
+
+    expect(await screen.findByText('עוד 3 ימים')).toBeInTheDocument();
+  });
+
+  it('says the wallet is empty rather than showing nothing', async () => {
+    stub(voucherRoutes([]));
+    renderWithProviders(<VouchersPage />);
+
+    expect(await screen.findByText(/אין כרגע שוברים בארנק/)).toBeInTheDocument();
   });
 });
