@@ -101,11 +101,10 @@ export function SettingsPage() {
                   }
                   help="הטוקן נשמר בשרת של היישום ואינו נחשף לדפדפן."
                 />
-                <Row label="שלב" value={`שלב ${info.phase}`} />
                 <Row
-                  label="מצב כתיבה"
-                  value={info.writes_enabled ? 'מאופשר' : 'חסום'}
-                  help="בשלב זה היישום קורא נתונים בלבד ואינו משנה דבר."
+                  label="כתיבה ישירה"
+                  value={info.unrestricted_writes ? 'מאופשרת' : 'חסומה (כנדרש)'}
+                  help="היישום אינו עוקף את בובי: כל שינוי חייב לעבור דרך גשר ניהול מאומת."
                 />
               </dl>
             </Card>
@@ -153,9 +152,24 @@ export function SettingsPage() {
                 />
               ))}
               <Row
-                label="כתיבה חופשית"
-                value="חסומה"
-                help="היישום אינו מבצע פעולות ב-Home Assistant מחוץ לגשר הניהול."
+                label="כתיבה דרך גשר בובי"
+                value={
+                  management.data.available && management.data.writes_enabled
+                    ? 'מאופשרת'
+                    : 'חסומה'
+                }
+                help={
+                  management.data.available
+                    ? management.data.writes_enabled
+                      ? 'פעילה. כל שינוי עובר תצוגה מקדימה, אישור ואימות לאחר הביצוע.'
+                      : 'הגשר זמין, אך מתג הכתיבה הראשי ב-Home Assistant כבוי.'
+                    : (management.data.reason ?? undefined)
+                }
+              />
+              <Row
+                label="כתיבה מחוץ לגשר"
+                value="חסומה תמיד"
+                help="אין ביישום מסלול שמבצע פעולה ישירה ב-Home Assistant."
               />
             </dl>
           </Card>

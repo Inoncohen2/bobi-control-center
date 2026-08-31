@@ -63,8 +63,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="Bobi Control Center API",
         description=(
-            "ממשק הניהול של בובי. שלב 2 — קריאה בלבד דרך גשר bobi_cc_* "
-            "של Home Assistant."
+            "ממשק הניהול של בובי: קריאה דרך גשרי bobi_cc_* ושינויים רק דרך "
+            "תצוגה מקדימה, אישור וגשר commit מאומת של Home Assistant."
         ),
         version=APP_VERSION,
         lifespan=lifespan,

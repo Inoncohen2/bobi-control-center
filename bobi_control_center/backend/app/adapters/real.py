@@ -291,14 +291,14 @@ class RealHomeAssistantAdapter(HomeAssistantAdapter):
                 adapter=self.name,
                 app_version=APP_VERSION,
                 connected=False,
-                writes_enabled=False,
+                unrestricted_writes=self.unrestricted_writes,
                 detail=exc.message,
             )
         return ConnectionInfo(
             adapter=self.name,
             app_version=APP_VERSION,
             connected=True,
-            writes_enabled=False,
+            unrestricted_writes=self.unrestricted_writes,
             detail="מחובר לגשר של בובי",
         )
 
@@ -307,15 +307,16 @@ class RealHomeAssistantAdapter(HomeAssistantAdapter):
         """Bobi's Phase 3A write bridge.
 
         Returning a bridge does **not** mean writes are on. The bridge reports
-        Home Assistant's master switch, which is off today, and a commit is
-        refused while it is: previews run, commits answer *"ניהול עדיין לא
-        הופעל ב-Home Assistant"*. Nothing in this application can set that
-        switch, and no endpoint tries.
+        Home Assistant's live master switch, and a commit is refused whenever
+        it is off: previews run, commits answer *"ניהול עדיין לא הופעל
+        ב-Home Assistant"*. Nothing in this application can set that switch,
+        and no endpoint tries.
 
-        The bridge can reach exactly five services, all of them
-        `script.bobi_cc_*`. It cannot express a raw Home Assistant service call:
-        `apply()` takes an operation from a closed set, and `ALLOWED_SERVICES`
-        rejects anything else before a request is built.
+        The bridge can reach only the services derived from the published
+        management specifications, all of them `script.bobi_cc_*`. It cannot
+        express a raw Home Assistant service call: `apply()` takes an operation
+        from a closed set, and `ALLOWED_SERVICES` rejects anything else before
+        a request is built.
         """
         return RealManagementBridge(self)
 

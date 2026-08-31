@@ -44,7 +44,7 @@ class MockHomeAssistantAdapter(HomeAssistantAdapter):
             adapter=self.name,
             app_version=APP_VERSION,
             connected=True,
-            writes_enabled=False,
+            unrestricted_writes=self.unrestricted_writes,
             detail="מצב הדגמה — הנתונים מדומים ואין חיבור למערכת אמיתית",
         )
 

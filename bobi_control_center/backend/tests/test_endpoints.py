@@ -40,7 +40,8 @@ def test_connection(client: TestClient) -> None:
     body = client.get("/api/bobi/connection").json()
     assert body["adapter"] == "mock"
     assert body["connected"] is True
-    assert body["writes_enabled"] is False
+    assert "writes_enabled" not in body
+    assert body["unrestricted_writes"] is False
     assert body["phase"] == 2
 
 

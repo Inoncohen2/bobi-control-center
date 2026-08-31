@@ -4,6 +4,19 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.23.1
+
+מצב הכתיבה מוצג עכשיו בלי לערבב בין שני מתגים שונים:
+
+- `GET /api/bobi/connection` מדווח `unrestricted_writes` — האם המתאם יכול
+  לעקוף את גשר בובי — במקום השם המטעה `writes_enabled`.
+- מסך ההגדרות מציג בנפרד שכתיבה ישירה חסומה תמיד, ושכתיבה דרך גשר בובי
+  מאופשרת או חסומה לפי החוזה החי של Home Assistant.
+- תחתית מסך הבית כבר לא טוענת שכל היישום "לקריאה בלבד"; היא מציינת במדויק
+  שכתיבה ישירה חסומה.
+- תיאור ה-API והתיעוד עודכנו לארכיטקטורה הנוכחית: קריאה דרך גשרים ושינוי רק
+  אחרי תצוגה מקדימה, אישור ואימות תוצאה.
+
 ## 3.23.0
 
 The lists and the wallet are actually connected now.
@@ -75,6 +88,12 @@ The store keeps `amount` and `remaining_amount` as separate columns because a
 gift card is spent in pieces, and the screen was rendering neither. A part-spent
 voucher now leads with what is left — *נותרו ₪50 מתוך ₪200* — and a full one
 shows its value once rather than as a balance of itself.
+## 3.22.0
+
+סגירת פערי אינטגרציה ואבטחה: חוזה הגשרים מציג סטייה בין המפרט למערכת החיה,
+כללי המאגר מתעדים את ארכיטקטורת הניהול הנוכחית, ואחסון השוברים קיבל אימות
+קבצים, rollback, קישורים חתומים קצרי-חיים והגנת פרטיות לקוד השובר. פירוט מלא:
+`docs/releases/3.22.0.md`.
 
 ## 3.21.0
 

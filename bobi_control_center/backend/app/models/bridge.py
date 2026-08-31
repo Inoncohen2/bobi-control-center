@@ -532,7 +532,9 @@ class ConnectionInfo(CanonicalModel):
 
     adapter: str
     connected: bool
-    writes_enabled: bool = False
+    #: Whether the adapter can write around Bobi's verified bridge. This is
+    #: deliberately false and is not Home Assistant's management master switch.
+    unrestricted_writes: bool = False
     phase: int = 2
     #: This application's version, so the UI never hard-codes it.
     app_version: str = ""

@@ -19,8 +19,8 @@ export type Extra = Record<string, unknown>;
 export interface ConnectionInfo {
   adapter: string;
   connected: boolean;
-  /** Always false in Phase 2. */
-  writes_enabled: boolean;
+  /** Direct writes that bypass Bobi's verified bridge. Always false. */
+  unrestricted_writes: boolean;
   phase: number;
   /** The running app version, so the UI never hard-codes it. */
   app_version: string;
@@ -540,8 +540,8 @@ export interface ManagementStatus {
   contract_version: string | null;
   resources: ManagementResource[];
   /**
-   * Home Assistant's master write switch, as the bridge reports it. Off today:
-   * previews work, commits are refused. Nothing in this app can turn it on.
+   * Home Assistant's live master write switch, as the bridge reports it. When
+   * off, previews work and commits are refused. This app cannot turn it on.
    */
   writes_enabled: boolean;
   requires_preview: boolean;

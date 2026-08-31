@@ -383,7 +383,7 @@ export function DashboardPage() {
 
           <p className="pt-2 text-center text-xs text-slate-400 dark:text-slate-500">
             {status.data.version ? `גרסה ${status.data.version} · ` : ''}
-            מקור נתונים: {connection.data?.adapter ?? '—'} · קריאה בלבד
+            מקור נתונים: {connection.data?.adapter ?? '—'} · כתיבה ישירה חסומה
           </p>
         </div>
       ) : null}

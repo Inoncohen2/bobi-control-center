@@ -70,7 +70,7 @@ async def commit(svc: ManagementService, preview, resource="tasks", **kwargs):
 
 # --- the master switch ------------------------------------------------------
 async def test_the_master_switch_is_reported_never_set() -> None:
-    """Writes are off today, and this application only reads that."""
+    """The off-state fixture is reported as-is; the application never sets it."""
     status = await service().status()
 
     assert status.available is True

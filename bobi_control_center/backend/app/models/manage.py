@@ -322,9 +322,9 @@ class ManagementStatus(CanonicalModel):
     contract_version: str | None = None
     resources: list[ManagementResource] = Field(default_factory=list)
 
-    #: Home Assistant's master write switch, **as the bridge reports it**. It is
-    #: off today, by design: previews work, commits are refused. Nothing in this
-    #: application can turn it on, and no endpoint tries.
+    #: Home Assistant's live master write switch, **as the bridge reports it**.
+    #: When it is off previews still work and commits are refused. Nothing in
+    #: this application can turn it on, and no endpoint tries.
     writes_enabled: bool = False
     #: The flow the bridge requires. All three are true today, and this app does
     #: all three regardless — it never relaxes a step because the bridge said it

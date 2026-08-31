@@ -2,8 +2,10 @@
 
 Base path: `/api/bobi` · Interactive docs: `/api/docs` · Schema: `/api/openapi.json`
 
-Every response is a typed Pydantic model. **Phase 2 is read-only**: nine GET
-endpoints and one POST, and that POST is a probe.
+Every response is a typed Pydantic model. The original bridge endpoints remain
+read-only (plus the non-executing probe). State changes use the separate
+management API and are accepted only after preview, explicit confirmation and
+Home Assistant read-after-write verification.
 
 ## Conventions
 
@@ -58,18 +60,25 @@ Stack traces never leave the process.
 ### `GET /health`
 
 ```json
-{ "ok": true, "app": "bobi-control-center", "version": "3.0.0",
-  "adapter": "home_assistant", "writes_enabled": false }
+{ "ok": true, "app": "bobi-control-center", "version": "3.23.1",
+  "adapter": "home_assistant", "unrestricted_writes": false }
 ```
+
+`unrestricted_writes` describes this adapter only. It is always `false` because
+the application cannot write around Bobi's verified bridge. It does not report
+Home Assistant's master switch.
 
 ### `GET /api/bobi/connection`
 
 Whether the app is showing real or demo data. Contains no secret.
 
 ```json
-{ "adapter": "home_assistant", "connected": true, "writes_enabled": false,
-  "phase": 2, "app_version": "3.0.0", "detail": "מחובר לגשר של בובי" }
+{ "adapter": "home_assistant", "connected": true, "unrestricted_writes": false,
+  "phase": 2, "app_version": "3.23.1", "detail": "מחובר לגשר של בובי" }
 ```
+
+The household master switch is reported by `GET /api/bobi/manage/contract` as
+`writes_enabled`; this connection response never tries to speak for it.
 
 ---
 
@@ -449,9 +458,10 @@ Five, and only these. `todo.*` and `input_boolean.*` are never called.
 }
 ```
 
-**`writes_enabled` is read, never written.** It is off today, which means
-previews work and commits are refused — a disabled feature, not an error. No
-endpoint in this API can set it; enabling it is a Home Assistant-side decision.
+**`writes_enabled` is read, never written.** When it is off, previews work and
+commits are refused — a disabled feature, not an error. When it is on, the full
+preview/confirm/commit/read-back flow is available. No endpoint in this API can
+set it; changing it is a Home Assistant-side decision.
 
 Task operations are `add`, `edit`, `complete`, `reopen`, `delete`; features
 have `set`. An operation the contract does not name is never offered, and one

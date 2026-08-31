@@ -1,7 +1,9 @@
 # Bobi Control Center — Architecture
 
-> **Phase 2: read-only.** The app calls only Bobi's `script.bobi_cc_*` bridge
-> services. It cannot control a device, change a schedule, or write anything.
+> **Bridge-only access.** Read screens call Bobi's read bridges. A state change
+> can run only through a published management bridge after preview, explicit
+> confirmation and read-after-write verification. The app cannot call a device
+> or Home Assistant entity directly.
 
 ## 1. Purpose
 

@@ -25,7 +25,7 @@ export function makeConnection(overrides: Partial<ConnectionInfo> = {}): Connect
   return {
     adapter: 'home_assistant',
     connected: true,
-    writes_enabled: false,
+    unrestricted_writes: false,
     phase: 2,
     app_version: '3.0.0',
     detail: 'מחובר לגשר של בובי',
@@ -421,12 +421,7 @@ export function makeProbe(overrides: Partial<BridgeProbe> = {}): BridgeProbe {
 }
 
 // --- management (Phase 3A) -------------------------------------------------
-/**
- * Management off — the default, and what the live install reports today.
- *
- * Every screen must be usable in this state, so it is what the shared route
- * table serves unless a test deliberately turns management on.
- */
+/** Management off — a required fail-closed test state, not a claim about live. */
 export function makeManagementOff(
   overrides: Partial<ManagementStatus> = {},
 ): ManagementStatus {
@@ -443,10 +438,7 @@ export function makeManagementOff(
   };
 }
 
-/**
- * The contract as Home Assistant publishes it — bridge available, **master
- * write switch off**, which is the real state today.
- */
+/** Bridge available with the master switch off, for refusal-path tests. */
 export function makeManagementOn(
   overrides: Partial<ManagementStatus> = {},
 ): ManagementStatus {

@@ -7,9 +7,9 @@ mimics the real contract closely enough to be worth trusting: the same operation
 names, the same `expected_*` comparison, the same `stale_preview` and
 `already_in_state` reasons, and the same master switch that defaults to **off**.
 
-That last part matters. `writes_enabled` starts `False` here exactly as it does
-in the live install, so the default test is the safe one and enabling it has to
-be deliberate.
+That last part matters. `writes_enabled` starts `False` here so the default test
+exercises the fail-closed path; tests that need a successful commit enable it
+deliberately. This default is not a claim about the live installation.
 """
 
 from __future__ import annotations

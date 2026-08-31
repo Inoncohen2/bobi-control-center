@@ -190,7 +190,7 @@ async def test_connection_info_reports_a_failure_without_raising(make_real_adapt
     await adapter.aclose()
 
     assert info.connected is False
-    assert info.writes_enabled is False
+    assert info.unrestricted_writes is False
 
 
 # --- safety -----------------------------------------------------------------
