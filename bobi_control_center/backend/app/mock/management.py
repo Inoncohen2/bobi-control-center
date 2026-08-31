@@ -48,45 +48,62 @@ PRIVATE_CANARY = "MUST-NOT-APPEAR"
 # answers rather than in the normalized shape — so every test that touches a
 # family exercises the normalizer too, and a change there cannot pass unnoticed.
 DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
-    # The wallet, in the shape Bobi already parses a photographed voucher into.
-    # These field names are not invented: they are copied from a real entry
-    # Bobi wrote on 2026-08-30 with `confidence: 100` — provider, item, brand,
-    # expiry_date, expiry_time, code.
+    # The wallet, in the shape `bobi_cc_vouchers_snapshot` answers — which is
+    # not Home Assistant's shape at all. The wallet does not live in Home
+    # Assistant: a voucher gets in by being photographed into WhatsApp, and
+    # Bobi writes a row to Supabase that `script.bobi_voucher_router` reads
+    # back. The bridge asks that same store the same question, so the fields
+    # here are the store's columns — merchant, amount, remaining_amount,
+    # currency, expires_at rendered day-first — not invented ones.
     #
-    # The code is the one field that matters here. Bobi itself redacts it in the
-    # structured block while leaving it in the free text it extracted, so this
-    # double carries the redacted form: a voucher code is money, and the screen
-    # must be built against the shape where it is absent rather than against one
-    # where it happens to be present.
+    # Every voucher is **read-only**, and that is the live bridge's answer, not
+    # a simplification. There is no `bobi_cc_voucher_commit`, so the contract
+    # declares no operations for this family and redeeming a voucher is still
+    # something you tell Bobi in WhatsApp. A double that offered `complete`
+    # here would be the only place in the system where that verb exists.
+    #
+    # No item here carries a `code`, and that is the shape the live bridge
+    # answers in rather than an omission for brevity. A redeemable code is
+    # money and a wallet snapshot is fetched on every visit to the screen; if a
+    # code is ever shown it comes from a separate, deliberate read of that one
+    # voucher — the store's `voucher.get` withholds it unless the caller asks —
+    # and never from the list. `image_url` is absent for the same reason: the
+    # media bucket is private and a picture is opened through a short-lived
+    # signed URL, never a permanent one.
     "vouchers": {
         "available": True,
+        "operations": [],
         "items": [
             {
                 "id": "voucher_1",
                 "label": "מחבת 20 ס״מ + תרווד מחורץ",
                 "kind": "toggle",
                 "value": False,
-                "controllable": True,
-                "operations": ["complete", "delete"],
-                "provider": "עובדים 360",
-                "brand": "Foodappeal",
+                "display": "בתוקף",
+                "risk": "read_only",
+                "controllable": False,
+                "operations": [],
+                "provider": "Foodappeal",
                 "expiry_date": "14.10.2026",
-                "expiry_time": "23:59",
-                "code": "[קוד שובר הושמט]",
-                "confidence": 100,
+                "currency": "ILS",
             },
-            # Already used. A wallet that only ever renders live vouchers has
-            # never been asked what a spent one looks like.
+            # Already used, undated, and carrying an amount. A wallet that only
+            # ever renders one live voucher has never been asked what a spent
+            # one looks like, nor what to do with a balance.
             {
                 "id": "voucher_2",
                 "label": "קפה וקרואסון",
                 "kind": "toggle",
                 "value": True,
-                "controllable": True,
-                "operations": ["reopen", "delete"],
+                "display": "מומש",
+                "risk": "read_only",
+                "controllable": False,
+                "operations": [],
                 "provider": "ארומה",
-                "expiry_date": "01.08.2026",
-                "code": "[קוד שובר הושמט]",
+                "expiry_date": "",
+                "currency": "ILS",
+                "amount": 50,
+                "remaining_amount": 20,
             },
         ],
     },
@@ -96,8 +113,15 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
     # item on it, five recipes, two reminders and several empty lists — because
     # a double where every list is full never exercises the empty state, and
     # the empty state is what a family sees most mornings.
+    #
+    # Read-only, like the live bridge: there is no `bobi_cc_list_commit`, so
+    # the contract declares no operations for this family and an item carries
+    # none either. The `detail` block is nested exactly as the bridge nests it,
+    # because that block was silently dropped once and a flat double would
+    # never have caught it.
     "lists": {
         "available": True,
+        "operations": [],
         "groups": [
             {
                 "id": "shopping",
@@ -108,9 +132,11 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                         "label": "חלב",
                         "kind": "toggle",
                         "value": False,
-                        "controllable": True,
-                        "operations": ["complete", "delete"],
-                        "list_id": "shopping",
+                        "display": "פתוח",
+                        "risk": "read_only",
+                        "controllable": False,
+                        "operations": [],
+                        "detail": {"list": "shopping", "due": ""},
                     }
                 ],
             },
@@ -123,18 +149,22 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                         "label": "שקשוקה",
                         "kind": "toggle",
                         "value": False,
-                        "controllable": True,
-                        "operations": ["complete", "delete"],
-                        "list_id": "recipes",
+                        "display": "פתוח",
+                        "risk": "read_only",
+                        "controllable": False,
+                        "operations": [],
+                        "detail": {"list": "recipes", "due": ""},
                     },
                     {
                         "id": "recipe_2",
                         "label": "עוגת שוקולד",
                         "kind": "toggle",
                         "value": True,
-                        "controllable": True,
-                        "operations": ["reopen", "delete"],
-                        "list_id": "recipes",
+                        "display": "בוצע",
+                        "risk": "read_only",
+                        "controllable": False,
+                        "operations": [],
+                        "detail": {"list": "recipes", "due": ""},
                     },
                 ],
             },
@@ -147,10 +177,11 @@ DEFAULT_RESOURCE_PAYLOADS: dict[str, dict[str, Any]] = {
                         "label": "לחדש ביטוח",
                         "kind": "toggle",
                         "value": False,
-                        "controllable": True,
-                        "operations": ["complete", "delete"],
-                        "list_id": "reminders",
-                        "due": "2026-09-15",
+                        "display": "פתוח",
+                        "risk": "read_only",
+                        "controllable": False,
+                        "operations": [],
+                        "detail": {"list": "reminders", "due": "2026-09-15"},
                     }
                 ],
             },

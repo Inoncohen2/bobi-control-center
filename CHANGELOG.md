@@ -4,6 +4,78 @@ The version here is the one in `bobi_control_center/config.yaml`, which is what
 Home Assistant compares to decide whether an update exists. Every change that
 reaches the app image gets a new version and an entry below.
 
+## 3.23.0
+
+The lists and the wallet are actually connected now.
+
+3.20.0 and 3.21.0 built the two screens against a double. Neither had a bridge,
+so both were drawing a family Home Assistant had never heard of: the contract
+did not name `lists` or `vouchers`, and the app correctly answered "this family
+has no bridge" to a screen that existed. Two bridge scripts and two contract
+entries close that.
+
+### `script.bobi_cc_lists_snapshot`
+
+Five household lists — קניות, מתכונים, תזכורות, משימות הבית, משפחה — named one
+by one rather than scanned. This house has eighteen `todo` lists and about half
+are Bobi's own machinery: an activity log of several hundred entries, a
+multimodal context store keyed by chat id, a WhatsApp outbox. "Every list" would
+have put a conversation log on a family screen.
+
+The item's `description` is **not** published, and that is not tidiness. The
+first version of this script published it as a note; on a reminder, the JSON
+Bobi stores there carries `"cid":"972…@c.us"` — a phone number, on its way to a
+browser. The redaction in `resource_normalize.py` matches *key names*, so a chat
+id embedded inside a string value would have sailed straight through it. Fixed
+at the source before anything shipped: only the title, the done flag and the due
+date leave the script. Verified live — 5 lists, 15 items, nothing private.
+
+### `script.bobi_cc_vouchers_snapshot`
+
+The wallet does not live in Home Assistant. A voucher gets in by being
+photographed into WhatsApp, and Bobi writes a row to Supabase — which is where
+`script.bobi_voucher_router` reads it back from. The new bridge asks that same
+store the same question (`voucher.list`, the household's shared profile), so the
+web and WhatsApp show one wallet instead of two copies that drift.
+
+Three fields are never published: `profile_id` identifies the account,
+`source_message_id` points at a WhatsApp message, and `notes` is published only
+when it is plainly a human sentence — Bobi sometimes stores JSON there carrying
+the originating chat id, so a note holding a brace or an at-sign is dropped and
+the merchant's name titles the card instead. Same lesson as the lists bridge,
+applied before it could bite twice.
+
+`expires_at` is rendered day-first (`14.10.2026`), which is the format
+`VouchersPage` already parses — handing an ISO timestamp to `Date` and hoping is
+how the 14th of October becomes the 10th of the 14th month.
+
+The redeemable **code is not in the snapshot**, and neither is `image_url`. The
+first version of this bridge published the code, on the reasoning that a code is
+the point of keeping a voucher. That is the rule 3.22.0 wrote down and it was
+wrong to cross: a wallet snapshot is fetched on every visit to the screen by
+anyone who can open it, so preloading every code puts them all one screenshot
+away. The store already agrees — `voucher.get` withholds the code unless the
+caller asks. Removed before the release, so a code has never left the house
+through this path. The reveal control on `VouchersPage` is kept and simply never
+draws: it is the shape the answer takes when a per-voucher read exists.
+
+### Both families are read-only, and the double now says so
+
+There is no `bobi_cc_list_commit` and no `bobi_cc_voucher_commit`, so both
+contract entries declare no operations at all. The test double had been
+advertising `complete`, `reopen` and `delete` on every item of both — verbs that
+exist in `SPECS` and nowhere in the house. It now mirrors the bridge: family
+declares nothing, no item claims to be controllable, and a new test checks both
+levels, because an item saying `controllable: true` under a family that declares
+no verbs is exactly how a dead control gets drawn.
+
+### The balance a wallet is for
+
+The store keeps `amount` and `remaining_amount` as separate columns because a
+gift card is spent in pieces, and the screen was rendering neither. A part-spent
+voucher now leads with what is left — *נותרו ₪50 מתוך ₪200* — and a full one
+shows its value once rather than as a balance of itself.
+
 ## 3.21.0
 
 ארנק השוברים.

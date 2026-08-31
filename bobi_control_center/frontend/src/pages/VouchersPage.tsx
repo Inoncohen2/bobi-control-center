@@ -2,23 +2,31 @@
  * ארנק השוברים.
  *
  * A voucher gets into this wallet by being photographed into WhatsApp: Bobi
- * reads the provider, the item, the brand, the expiry and the code off the
- * picture and stores them as fields, with a confidence. That is why this screen
- * has no "add" form and the family has no `create` verb — a web form would be a
- * second, worse source of truth for the same object, and a hand-typed expiry
- * date is exactly the field you do not want to be wrong.
+ * reads the merchant, the goods, the amount, the expiry and the code off the
+ * picture and writes a row to the store `script.bobi_voucher_router` reads
+ * back. `script.bobi_cc_vouchers_snapshot` asks that same store the same
+ * question, so this screen and WhatsApp show one wallet rather than two copies
+ * that drift.
+ *
+ * The whole family is read-only, and deliberately so. There is no
+ * `bobi_cc_voucher_commit`, so the contract declares no operations and this
+ * screen offers no control: a web form would be a second, worse source of truth
+ * for the same object, and a hand-typed expiry date is exactly the field you do
+ * not want to be wrong. Redeeming a voucher is still something you tell Bobi.
  *
  * ## The code
  *
- * A voucher code is money. It is also the whole point of keeping the voucher,
- * so hiding it outright would make the wallet decorative.
+ * A voucher code is money, and the snapshot this screen reads does not contain
+ * one. `bobi_cc_vouchers_snapshot` withholds it on purpose: a wallet snapshot
+ * is fetched on every visit by anyone who can open the screen, so preloading
+ * every redeemable code into it puts them all one screenshot away. The store
+ * agrees — its `voucher.get` withholds the code unless the caller asks for it.
  *
- * Bobi already draws this line: it redacts the code in the structured block it
- * stores while leaving it in the free text it extracted. This screen keeps the
- * same posture — the code is never on the card, and revealing one is a
- * deliberate press on that one voucher. A family screen that a guest can glance
- * at, or that gets photographed and sent to someone, should not have redeemable
- * codes sitting on it in plain sight.
+ * The reveal below therefore draws nothing today, and it is kept rather than
+ * deleted because it is the shape the answer has to take when a per-voucher
+ * read exists: never on the card, and revealed by a deliberate press on that
+ * one voucher. A family screen a guest can glance at, or that gets photographed
+ * and forwarded, should not have redeemable codes sitting on it in plain sight.
  */
 
 import { useState } from 'react';
@@ -46,6 +54,45 @@ function daysLeft(expiry: Date): number {
   const midnight = new Date();
   midnight.setHours(0, 0, 0, 0);
   return Math.round((expiry.getTime() - midnight.getTime()) / 86_400_000);
+}
+
+/** `ILS` → `₪`. An unknown code is printed as it came rather than swallowed. */
+const SYMBOLS: Record<string, string> = { ILS: '₪', USD: '$', EUR: '€', GBP: '£' };
+
+function money(amount: unknown, currency: unknown): string | null {
+  if (typeof amount !== 'number' || !Number.isFinite(amount)) return null;
+  const code = typeof currency === 'string' ? currency.toUpperCase() : '';
+  const symbol = SYMBOLS[code];
+  const rounded = Number.isInteger(amount) ? String(amount) : amount.toFixed(2);
+  if (symbol) return `${symbol}${rounded}`;
+  return code ? `${rounded} ${code}` : rounded;
+}
+
+/**
+ * What is left on the voucher, when it is the kind that holds a balance.
+ *
+ * The store keeps `amount` and `remaining_amount` as separate columns because a
+ * gift card is spent in pieces. Showing only the face value of a card with ₪20
+ * left on it is the wallet's one job done wrong, so the remainder leads and the
+ * original follows it as context — and when nothing has been spent there is no
+ * remainder to draw, only the value.
+ */
+function Value({ item }: { item: ManagedItem }) {
+  const face = money(item.detail.amount, item.detail.currency);
+  const left = money(item.detail.remaining_amount, item.detail.currency);
+  if (!face && !left) return null;
+
+  if (left && face && left !== face) {
+    return (
+      <p className="mt-1 text-sm text-warm-700 dark:text-warm-200">
+        נותרו <span className="font-semibold">{left}</span>
+        <span className="text-warm-500 dark:text-warm-400"> מתוך {face}</span>
+      </p>
+    );
+  }
+  return (
+    <p className="mt-1 text-sm font-semibold text-warm-700 dark:text-warm-200">{left ?? face}</p>
+  );
 }
 
 function ExpiryBadge({ raw }: { raw: unknown }) {
@@ -95,6 +142,7 @@ function VoucherCard({ item }: { item: ManagedItem }) {
               {[provider, brand].filter(Boolean).join(' · ')}
             </p>
           ) : null}
+          <Value item={item} />
         </div>
         {used ? <Badge tone="neutral">מומש</Badge> : <ExpiryBadge raw={item.detail.expiry_date} />}
       </div>

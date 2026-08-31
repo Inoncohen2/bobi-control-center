@@ -26,7 +26,7 @@ important one: **every verb this contract names must survive the filter**.
 ## Keeping it true
 
 `LIVE_*` below is transcribed from a real `script.bobi_cc_manage_contract` call
-against the house, on 2026-08-29, contract version 3c. When the bridge changes,
+against the house, on 2026-08-31, contract version 3c. When the bridge changes,
 this changes with it — that is the whole point, and a fixture nobody updates is
 worse than none. `CLAUDE.md` says the same thing in the place people read first.
 """
@@ -73,6 +73,13 @@ LIVE_OPERATIONS: dict[str, tuple[str, ...]] = {
     # Not an oversight: this house has no scenes, and the contract says so
     # rather than advertising verbs with nothing to aim them at.
     "scenes": (),
+    # Nor are these. `lists` and `vouchers` each have a snapshot bridge and no
+    # commit bridge, so the contract publishes them with nothing on offer. The
+    # application knows verbs for both — `LIST_OPERATIONS` and
+    # `VOUCHER_OPERATIONS` are in `SPECS` — and not one of them is reachable,
+    # which is the arrangement working: the contract decides, not the spec.
+    "lists": (),
+    "vouchers": (),
 }
 
 #: The contract's own refusal list. Most of these are not gaps waiting to be
@@ -145,6 +152,65 @@ async def test_the_families_the_house_restricts_come_back_restricted() -> None:
     assert declared["scripts"] == {"run"}
     assert declared["scenes"] == set(), "this house has no scenes"
     assert "rename" not in declared["automations"] | declared["scripts"]
+
+
+@pytest.mark.asyncio
+async def test_a_family_that_can_only_be_read_offers_nothing_to_press() -> None:
+    """`lists` and `vouchers` are read all the way down.
+
+    Both arrived as snapshot-only bridges, and both are the shape where an
+    over-eager double does real damage: the application has a full set of verbs
+    for each — complete, reopen, delete, and for lists a create — so a family
+    payload that stayed silent about its operations would inherit every one of
+    them from `SPECS` and the screens would grow buttons the house cannot
+    honour. There is no `bobi_cc_list_commit` and no `bobi_cc_voucher_commit`.
+
+    So the check runs at both levels, because they fail independently: the
+    family declares nothing, *and* no item claims to be controllable. An item
+    that says `controllable: true` while its family declares no verbs is how a
+    dead control gets drawn.
+    """
+    status = await live_status()
+    declared = {family.id: {op.id for op in family.operations} for family in status.resources}
+
+    assert declared["lists"] == set(), "there is no bobi_cc_list_commit"
+    assert declared["vouchers"] == set(), "there is no bobi_cc_voucher_commit"
+
+    bridge = live_bridge()
+    for resource in ("lists", "vouchers"):
+        snapshot = await bridge.resource_snapshot(resource)
+        assert snapshot.items, f"{resource} must still be read"
+        offered = [item.id for item in snapshot.items if item.controllable or item.operations]
+        assert not offered, f"{resource} items offer verbs no bridge can carry out: {offered}"
+
+
+@pytest.mark.asyncio
+async def test_a_wallet_snapshot_carries_no_redeemable_code_and_no_media_url() -> None:
+    """The rule `CLAUDE.md` states, checked where it would be broken.
+
+    A voucher code is money and a wallet snapshot is fetched on every visit to
+    the screen by anyone who can open it, so a code preloaded into the list puts
+    every code one screenshot away. The store draws the same line: its
+    `voucher.get` withholds the code unless the caller asks for it. If a code is
+    ever shown it comes from a separate, deliberate read of that one voucher.
+
+    The first version of `script.bobi_cc_vouchers_snapshot` published the code,
+    on the reasonable-sounding argument that a code is the point of keeping a
+    voucher. It was removed before release. This test is what makes putting it
+    back a decision rather than an accident, and it checks the media URL beside
+    it because that is the same mistake in the other direction: the bucket is
+    private and a picture is opened through a short-lived signed URL.
+    """
+    snapshot = await live_bridge().resource_snapshot("vouchers")
+    assert snapshot.items, "the wallet must still be read"
+
+    leaked = [
+        f"{item.id}.{key}"
+        for item in snapshot.items
+        for key in item.detail
+        if key in {"code", "voucher_code", "image_url", "media_url", "url"}
+    ]
+    assert not leaked, f"a wallet snapshot must not preload these: {leaked}"
 
 
 @pytest.mark.asyncio
