@@ -14,8 +14,8 @@ the manifest still said `2.0.0`.
 
 So, on any change to what ends up inside the image:
 
-1. Bump `bobi_control_center/config.yaml` — patch for a fix (`2.0.1` → `2.0.2`),
-   minor for a feature. Never reuse or lower a version.
+1. Bump `bobi_control_center/config.yaml` — patch for a fix, minor for a feature.
+   Never reuse or lower a version.
 2. Bump the two copies that must match it:
    `bobi_control_center/backend/app/version.py` and the root `package.json`.
 3. Add a `CHANGELOG.md` entry.
@@ -35,22 +35,22 @@ Two guards enforce this, but do not rely on them to remember for you:
 ## The other rules that outlive a session
 
 **Writes fail closed, and the switch is Home Assistant's.** `ALLOWED_SERVICES`
-holds 33 `bobi_cc_*` names — nine reads, thirteen management reads, fourteen
-management writes — and it is *derived* from `SPECS` in `services/resources.py`
-rather than hand-listed, so a family gains a service by gaining a spec. Anything
-outside the set raises before a request is made. A raw `todo.*` or
-`input_boolean.*` is never called and must never be added: the bridge scripts own
-those entities and this app asks by operation name instead.
+is derived from `SPECS` and the explicit Phase-3A bridges; never document a
+hand-count as an architectural fact because the set changes whenever a family
+gains a bridge. Anything outside the derived set raises before a request is
+made. A raw `todo.*` or `input_boolean.*` is never called and must never be
+added: the bridge scripts own those entities and this app asks by operation
+name instead.
 
-`writes_enabled` is *read* from the contract and never written. It is **on**
-today — the live 3c contract returns `true`, so commits reach Home Assistant.
-That is the household's switch, not ours: no endpoint, setting or control
-anywhere may set it, and when it is off the same commits answer
-*"ניהול עדיין לא הופעל ב-Home Assistant"* with nothing written. Do not confuse it
-with the adapter's `unrestricted_writes`, which is a different claim — "this
-adapter may write without a bridge" — and is `False` for every implementation.
-`would_execute` stays hard-coded `false`, and the only non-GET routes are the
-probe and the managed preview/commit pair.
+`writes_enabled` is *read* from the contract and never written. On the current
+house it is enabled, so commits may reach Home Assistant. That is the
+household's switch, not ours: no endpoint, setting or control anywhere may set
+it, and when it is off the same commits answer *"ניהול עדיין לא הופעל
+ב-Home Assistant"* with nothing written. Do not confuse it with the adapter's
+`unrestricted_writes`, which means "this adapter may write without a bridge"
+and is `False` for every implementation. `would_execute` stays hard-coded
+`false`, and the only state-changing HTTP routes are the managed preview/commit
+flow and the probe remains non-executing.
 
 **Every change is previewed, confirmed, committed and verified.** In that order,
 enforced in `services/manage.py` so no route or screen can skip a step. A
@@ -67,50 +67,58 @@ single use, payload binding and confirmation; Home Assistant owns the master
 switch, whitelists, duplicate checks, expected-state comparison and
 read-after-write.
 
-**The contract decides what exists, and it is not a wish list.** Contract 3c
-covers eleven families. An operation is named there only once a
-`script.bobi_cc_*_commit` implements it *and* that commit has been run against
-the real house and come back `executed` and `verified` — which is why the
-contract carries a Hebrew `detail` line recording that run. What sits in
-`not_supported` is mostly not a gap waiting to be filled: Home Assistant exposes
-exactly two calendar services, so deleting or updating an event is a WebSocket
-command a script cannot reach, and there is no rename service anywhere in Home
-Assistant. Check before you promise one of those again.
+**The live contract decides what exists, and it is not a wish list.** An
+operation is advertised only once its `script.bobi_cc_*_commit` implements it
+and the path has been run against the real house and returned `executed` and
+`verified`. What sits in `not_supported` is not automatically a backlog: Home
+Assistant exposes no script service for updating/deleting calendar events and no
+entity-rename service. Check the live services before promising one of those.
 
-**Normalize in `app/services/normalize.py`, never in React.** It is the only
-module that may know a bridge field name. The frontend receives one canonical
-schema and contains no mapping logic. When the bridge sends something new,
-extend the canonical model — do not let a raw key through.
+**A captured live contract is dated evidence, not current truth forever.**
+`tests/test_live_contract_3c.py` and `tests/test_double_matches_the_house.py`
+exist to stop vocabulary drift, but every fixture must say when it was captured.
+Whenever a live bridge changes, refresh the operation lists and the explanatory
+comments in the same change. Never infer today's `writes_enabled`, script count,
+or supported operation from an old fixture.
+
+**Normalize in `app/services/normalize.py` and
+`app/services/resource_normalize.py`, never in React.** They are the layers that
+may know bridge field names. The frontend receives one canonical schema and
+contains no raw Home Assistant mapping logic. When the bridge sends something
+new, extend the canonical model — do not let a raw key through.
 
 **Nothing is dropped and nothing is duplicated.** A response carries exactly one
-collection per resource; unmapped fields land in a per-item `extra` map. A value
-the contract cannot represent is kept in `extra` rather than silently reported
-as empty.
+collection per resource; unmapped safe fields land in the canonical detail map.
+A value the contract cannot represent is kept as safe detail rather than
+silently reported as empty.
 
-**The app never touches Home Assistant; a bridge change is separate work.**
-Nothing in `backend/` or `frontend/` may reach past the `bobi_cc_*` scripts, and
-the test suite never connects to the real install — it runs against the double in
-`app/mock/`. Editing a `bobi_cc_*` bridge script is a different job, done
-deliberately through the Home Assistant MCP with the household's say-so, and it
-is finished only when the new operation has been run against the real house and
-verified. Everything else in that install is off limits: Bobi's own engine
-scripts, helpers and entities, and anything that restarts, updates, deletes or
-restores. Leave the house as you found it — a device switched on to prove a path
-works gets switched back.
+**Voucher codes and voucher images are secrets.** A normal voucher snapshot must
+never include the redeemable code or a permanent/public image URL. Voucher
+media lives in the private `bobi-vouchers` bucket. A picture is opened through a
+short-lived signed URL requested for that voucher only; a redeemable code, when
+a UI eventually exposes it, must come from a separate deliberate read and must
+not be preloaded into the wallet snapshot. Never make the bucket public to make
+the screen easier to build.
+
+**The app never reaches around Home Assistant.** Nothing in `backend/` or
+`frontend/` may talk directly to Supabase, WAHA, a device, or a Home Assistant
+entity. The Control Center calls only `bobi_cc_*` bridges. Editing a bridge
+script is separate Home Assistant work, done deliberately through the authorized
+HA tooling and finished only after a real read or safe round-trip verifies it.
+Do not restart, update, delete, restore, or start a physical device merely to
+prove a UI path. Leave the house as you found it.
 
 **The double mirrors the live bridge, not the app's ambitions.**
 `app/mock/management.py` is what every test sees, so a double that advertises
-more than Home Assistant does means the "this operation does not exist" paths are
-never exercised. Two files hold the house's own words for that reason, and when
-the bridge changes they change with it: `tests/test_live_contract_3c.py` holds a
-captured contract payload and checks the *normalizer* against it, and
-`tests/test_double_matches_the_house.py` configures the double with the live
-per-family operation lists and checks the *screens*.
+more than Home Assistant does means the "this operation does not exist" paths
+are never exercised. The live fixtures must therefore stay narrower than or
+equal to what the house really publishes.
 
 **Secrets stay in the backend.** `SUPERVISOR_TOKEN` is read from the environment,
 used only in an outgoing `Authorization` header, and never logged, serialised or
-sent to the browser. No long-lived token is ever created. No phone number, LID
-or chat id reaches a response.
+sent to the browser. No long-lived Home Assistant token is created. No phone
+number, LID, chat id, voucher code, private media URL, or storage credential
+belongs in a general API response or log.
 
 **Keep polling modest.** Every fetch is a Home Assistant service call: dashboard
 and devices 20s, diagnostics 60s, everything else on entry, and never while the
@@ -119,4 +127,6 @@ tab is hidden.
 ## Before pushing
 
 `npm run check` (ruff, eslint, tsc, pytest, vitest). For a change to the image,
-also `npm run docker:build` and hit `/health` on the container.
+also `npm run docker:build` and hit `/health` on the container. If a bridge
+changed, run the relevant safe path against the real house and refresh the dated
+live fixture after it verifies.
