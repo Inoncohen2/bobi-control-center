@@ -1,17 +1,10 @@
 /**
- * What each `script.bobi_cc_*` must do, and which ones exist yet.
- *
- * A developer's screen rather than a household one, and it is here rather than
- * in a document because a document goes stale the moment a family is added.
- * This reads the same declarations the calling code reads, so what it shows is
- * what this build actually sends.
- *
- * It carries no household data at all — service names, field names, validation
- * rules and risk ratings.
+ * What each `script.bobi_cc_*` must do, which ones exist, and whether the live
+ * vocabulary still matches what this build understands.
  */
 
 import { useState } from 'react';
-import { CheckCircle2, CircleDashed, Copy } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, CircleDashed, Copy } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 
 import { api } from '@/api/client';
@@ -55,6 +48,16 @@ interface BridgeContract {
   risk_to_role: Record<string, string>;
 }
 
+interface BridgeDrift {
+  ok: boolean;
+  contract_available: boolean;
+  contract_version: string | null;
+  unknown_resources: string[];
+  unknown_operations: string[];
+  missing_services: string[];
+  writes_enabled: boolean;
+}
+
 const RISK_TONES: Record<string, BadgeTone> = {
   read_only: 'muted',
   low: 'neutral',
@@ -70,6 +73,10 @@ export function BridgeContractPage() {
     queryKey: ['bridge-contract'],
     queryFn: () => api.get<BridgeContract>('/api/bobi/manage/bridge-contract'),
   });
+  const drift = useQuery({
+    queryKey: ['bridge-drift'],
+    queryFn: () => api.get<BridgeDrift>('/api/bobi/manage/bridge-drift'),
+  });
   const [filter, setFilter] = useState<Filter>('missing');
   const [copied, setCopied] = useState(false);
 
@@ -77,7 +84,7 @@ export function BridgeContractPage() {
     <div className="space-y-4">
       <PageHeader
         title="חוזה הגשרים"
-        description="מה כל script.bobi_cc_* צריך לקבל, להחזיר ולוודא."
+        description="מה כל script.bobi_cc_* צריך לקבל, להחזיר ולוודא — מול הבית החי."
       />
 
       <QueryBoundary
@@ -103,12 +110,41 @@ export function BridgeContractPage() {
                   <Badge tone={contract.missing.length > 0 ? 'warning' : 'muted'} dot>
                     {contract.missing.length} חסרים
                   </Badge>
+                  {drift.data ? (
+                    <Badge tone={drift.data.ok ? 'ok' : 'error'} dot>
+                      {drift.data.ok ? 'אין drift בשמות/פעולות' : 'נמצא drift בחוזה החי'}
+                    </Badge>
+                  ) : null}
                   <Badge tone="muted">גרסה {contract.app_version}</Badge>
+                  {drift.data?.contract_version ? (
+                    <Badge tone="muted">חוזה HA {drift.data.contract_version}</Badge>
+                  ) : null}
                 </div>
                 <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
-                  "חסר" נקבע מול החוזה החי: משאב שהגשר לא מכריז עליו, או שמכריז עליו בלי
-                  פעולות, מופיע כאן עם שירות ה-commit שלו חסר.
+                  "חסר" נקבע מול החוזה החי. בדיקת ה-drift רצה גם היא מול החוזה החי,
+                  ולכן פעולה חדשה ש-Home Assistant מפרסם אך הבילד לא מבין לא נעלמת בשקט.
                 </p>
+
+                {drift.data && !drift.data.ok ? (
+                  <div
+                    role="alert"
+                    className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-100"
+                  >
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
+                      <div>
+                        <p className="font-medium">החוזה החי מכיל משהו שהבילד לא מכיר</p>
+                        {drift.data.unknown_resources.length > 0 ? (
+                          <p className="mt-1">משאבים: {drift.data.unknown_resources.join(', ')}</p>
+                        ) : null}
+                        {drift.data.unknown_operations.length > 0 ? (
+                          <p className="mt-1">פעולות: {drift.data.unknown_operations.join(', ')}</p>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
                 {contract.missing.length > 0 ? (
                   <Button
                     className="mt-3"
@@ -246,15 +282,6 @@ function ServiceCard({
         </div>
       ) : null}
 
-      {/*
-        The specification, folded away.
-
-        Thirty-three services printed in full made this page forty thousand
-        pixels tall — some fifty screens on a phone — which is not a reference
-        anyone reads, it is a document you scroll past. The header above stays
-        visible so the list can be scanned for the service you want; its
-        contract opens when you ask for it.
-      */}
       <AdvancedDisclosure title="החוזה המלא">
         {service.inputs.length > 0 ? (
           <div>

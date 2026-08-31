@@ -1,9 +1,8 @@
-"""Management endpoints — Phase 3A.
+"""Management endpoints — all writes remain bridge-bound and fail closed.
 
-Four routes per resource shape, and every one of them refuses unless Home
-Assistant has declared a write bridge. There is no route here that can reach a
-Home Assistant service by name: the resource is one of a closed set, the
-operation is one of a closed set, and the bridge decides what either means.
+There is no route here that can reach a Home Assistant service by name: the
+resource is one of a closed set, the operation is one of a closed set, and the
+live bridge decides what either means.
 """
 
 from __future__ import annotations
@@ -13,7 +12,9 @@ from fastapi import APIRouter, Path, Query
 from app.api.deps import ActorDep, ManagementDep
 from app.errors import NotFoundError
 from app.models.manage import (
+    FEATURE_OPERATIONS,
     MANAGED_RESOURCES,
+    TASK_OPERATIONS,
     AuditLog,
     BridgeContract,
     CommitRequest,
@@ -25,6 +26,7 @@ from app.models.manage import (
     TaskSnapshot,
 )
 from app.services.bridge_report import build_bridge_contract
+from app.services.resources import SPECS, canonical_operation
 
 router = APIRouter(prefix="/api/bobi/manage", tags=["manage"])
 
@@ -49,9 +51,62 @@ async def get_management_contract(service: ManagementDep) -> ManagementStatus:
     Read-only, and the only place `writes_enabled` comes from. Nothing in
     configuration can turn management on, and **no endpoint anywhere in this
     application can set Home Assistant's master write switch** — it is reported
-    and never written. Enabling it is a Home Assistant-side decision.
+    and never written.
     """
     return await service.status()
+
+
+@router.get("/bridge-drift", summary="בדיקת התאמה בין החוזה החי לבילד")
+async def get_bridge_drift(service: ManagementDep) -> dict[str, object]:
+    """Compare the live Home Assistant vocabulary with what this build understands.
+
+    This is deliberately a read-only runtime check. A stale copied fixture can
+    still pass CI; the live contract cannot. Unknown resources or verbs are
+    therefore surfaced here instead of being silently dropped by the closed-set
+    filter. Missing snapshot/commit services come from the same live comparison
+    as the bridge-contract screen.
+    """
+    status = await service.status()
+    report = await build_bridge_contract(service)
+
+    unknown_resources: list[str] = []
+    unknown_operations: list[str] = []
+    known_special = {
+        "tasks": set(TASK_OPERATIONS),
+        "features": set(FEATURE_OPERATIONS),
+    }
+
+    for resource in status.resources:
+        if resource.id in SPECS:
+            allowed = set(SPECS[resource.id].operations)
+            for operation in resource.operations:
+                canonical = canonical_operation(resource.id, operation.id)
+                if canonical not in allowed:
+                    unknown_operations.append(f"{resource.id}.{operation.id}")
+            continue
+
+        if resource.id in known_special:
+            allowed = known_special[resource.id]
+            for operation in resource.operations:
+                if operation.id not in allowed:
+                    unknown_operations.append(f"{resource.id}.{operation.id}")
+            continue
+
+        unknown_resources.append(resource.id)
+
+    unknown_resources = sorted(set(unknown_resources))
+    unknown_operations = sorted(set(unknown_operations))
+    missing_services = sorted(set(report.missing))
+
+    return {
+        "ok": not unknown_resources and not unknown_operations,
+        "contract_available": status.available,
+        "contract_version": status.contract_version,
+        "unknown_resources": unknown_resources,
+        "unknown_operations": unknown_operations,
+        "missing_services": missing_services,
+        "writes_enabled": status.writes_enabled,
+    }
 
 
 @router.get(
@@ -78,14 +133,9 @@ async def get_resource_snapshot(
 ) -> ResourceSnapshot:
     """One family's current state, from its own `bobi_cc_*` read service.
 
-    Serves settings, users, Shabbat, rules, the calendar, devices and the
-    system — the same envelope for all of them, because the screens render from
-    what the bridge describes rather than from anything hard-coded here.
-
     A family whose bridge has not shipped answers `available: false` with a
-    Hebrew reason and a 200, not an error: "Home Assistant does not offer this
-    yet" is a fact about the house, and the screen is built to say it. There is
-    no second path to this data, and none may be added.
+    Hebrew reason and a 200, not an error. There is no second path to this data,
+    and none may be added.
 
     `tasks` keeps its own richer endpoint above; asking for it here is refused
     rather than answered in a shape that would lose the open/completed split.
@@ -112,8 +162,7 @@ async def preview_change(
 
     This path performs no write. The response carries a single-use id that the
     matching commit requires, and it is refused outright when the session's role
-    is below what the change's risk needs — so an operation someone may not run
-    never becomes a token that something else could spend.
+    is below what the change's risk needs.
     """
     return await service.preview(_check(resource), request, actor)
 
@@ -125,13 +174,7 @@ async def commit_change(
     request: CommitRequest,
     resource: str = _RESOURCE,
 ) -> CommitResponse:
-    """Apply a change the user previewed and confirmed, then read it back.
-
-    The role is checked again here against the risk stored with the preview.
-    The two requests are independent and nothing guarantees they came from the
-    same session, so checking only at preview time would leave a token a weaker
-    session could spend.
-    """
+    """Apply a change the user previewed and confirmed, then read it back."""
     return await service.commit(_check(resource), request, actor)
 
 
@@ -142,12 +185,6 @@ async def commit_change(
 )
 async def get_bridge_contract(service: ManagementDep) -> BridgeContract:
     """The specification every `script.bobi_cc_*` must satisfy, from this build.
-
-    Read-only, and it carries no household data at all — service names, field
-    names, validation rules and risk ratings. It exists so whoever writes the
-    Home Assistant side works from what this build actually calls rather than
-    from a description of it, and so `missing` names precisely which scripts are
-    still to be written.
 
     `implemented` and `missing` are computed against the **live** contract: a
     family the bridge does not declare, or declares with no operations, shows
