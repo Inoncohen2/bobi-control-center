@@ -1219,6 +1219,47 @@ describe('the voucher wallet', () => {
     expect(await screen.findByText('עוד 3 ימים')).toBeInTheDocument();
   });
 
+  it('leads with what is left on a part-spent voucher, not its face value', async () => {
+    // The store keeps `amount` and `remaining_amount` as separate columns
+    // because a gift card is spent in pieces. Showing ₪200 on a card with ₪50
+    // left is the wallet's one job done wrong.
+    stub(
+      voucherRoutes([
+        makeManagedItem({
+          id: 'v4',
+          label: 'כרטיס מתנה',
+          kind: 'toggle',
+          value: false,
+          detail: { amount: 200, remaining_amount: 50, currency: 'ILS' },
+        }),
+      ]),
+    );
+    renderWithProviders(<VouchersPage />);
+
+    await screen.findByText('כרטיס מתנה');
+    expect(screen.getByText('₪50')).toBeInTheDocument();
+    expect(screen.getByText(/מתוך ₪200/)).toBeInTheDocument();
+  });
+
+  it('shows a full voucher once, not as a balance of itself', async () => {
+    stub(
+      voucherRoutes([
+        makeManagedItem({
+          id: 'v5',
+          label: 'שובר מלא',
+          kind: 'toggle',
+          value: false,
+          detail: { amount: 100, remaining_amount: 100, currency: 'ILS' },
+        }),
+      ]),
+    );
+    renderWithProviders(<VouchersPage />);
+
+    await screen.findByText('שובר מלא');
+    expect(screen.getByText('₪100')).toBeInTheDocument();
+    expect(screen.queryByText(/מתוך/)).not.toBeInTheDocument();
+  });
+
   it('says the wallet is empty rather than showing nothing', async () => {
     stub(voucherRoutes([]));
     renderWithProviders(<VouchersPage />);
