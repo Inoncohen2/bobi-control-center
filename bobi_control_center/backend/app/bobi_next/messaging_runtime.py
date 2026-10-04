@@ -5,9 +5,9 @@ provider-specific inbox/outbox -> reaction/typing -> trusted media -> semantic A
 -> deterministic Bobi engine -> verified reply.
 
 Each messaging provider owns a separate durable queue/worker. Bobi memory,
-request ledger, schedules and approval state are installation-wide so the same
-user can keep context across providers without allowing one provider's transport
-to consume another provider's messages.
+request ledger, schedules, activity and approval state are installation-wide so
+the same user can keep context across providers without allowing one provider's
+transport to consume another provider's messages.
 """
 
 from __future__ import annotations
@@ -21,6 +21,8 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
+from .activity import ActivityLedger
+from .activity_runtime import ActivityRecordingHAClient, UndoRequestStore
 from .ai_providers import AIProviderStore
 from .ai_runtime import AIProviderRuntimeRegistry, AIRuntimeError
 from .authorization import ApprovalStore, UserPolicy
@@ -95,7 +97,6 @@ class BobiNextMessagingRuntime:
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.setup = setup
-        self.ha = ha
         self.list_devices = list_devices
         self.policy_for = policy_for
         self.pending_approvals = pending_approvals
@@ -105,6 +106,13 @@ class BobiNextMessagingRuntime:
 
         self.memory = BobiMemory(self.data_dir / "bobi-next-memory.db")
         self.requests = RequestLedger(self.data_dir / "bobi-next-requests.db")
+        self.activity = ActivityLedger(self.data_dir / "bobi-next-activity.db")
+        self.undo_requests = UndoRequestStore(self.data_dir / "bobi-next-undo-requests.db")
+        self.ha = ActivityRecordingHAClient(
+            ha,
+            activity=self.activity,
+            requests=self.requests,
+        )
         self.schedules = ScheduleStore(self.data_dir / "bobi-next-schedules.db")
         self.approvals = ApprovalStore(self.data_dir / "bobi-next-approvals.db")
         self.ai_store = AIProviderStore(self.data_dir / "bobi-next-ai.db")
@@ -169,6 +177,8 @@ class BobiNextMessagingRuntime:
             schedules=self.schedules,
             conditional_rules=self.conditional_rules,
             media_pipeline=media_pipeline,
+            activity=self.activity,
+            undo_requests=self.undo_requests,
             dry_run=self.dry_run,
         )
         return ProviderBoundary(provider, messages, transport, handler)
@@ -303,6 +313,8 @@ class BobiNextMessagingRuntime:
         self.secrets.close()
         self.approvals.close()
         self.schedules.close()
+        self.undo_requests.close()
+        self.activity.close()
         self.requests.close()
         self.memory.close()
         self._closed = True
