@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     #: never written to the add-on log in normal operation.
     debug_http: bool = False
 
+    #: Bobi Next onboarding remains opt-in until the replacement engine reaches
+    #: the controlled E2E migration gate. The frontend route may exist in the
+    #: bundle, but this switch is what exposes the state-changing setup API.
+    next_setup_enabled: bool = False
+
     #: A dedicated Cloudflare hostname may reach the container directly.  It
     #: is deliberately opt-in: until both this hostname and a password hash are
     #: configured, no external request can reach Bobi's API.

@@ -80,7 +80,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_credentials=False,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "OPTIONS"],
         allow_headers=["Content-Type"],
     )
 
@@ -90,6 +90,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(bobi_router)
     app.include_router(manage_router)
+
+    # Bobi Next is developed inside this image but remains invisible to the
+    # production Control Center until explicitly enabled. This gives the setup
+    # wizard a real HTTP contract for development/E2E without creating a new
+    # write surface in the currently deployed app.
+    if settings.next_setup_enabled:
+        from app.bobi_next.setup_api import create_setup_router
+
+        app.include_router(create_setup_router(settings.data_dir / "bobi-next-setup.db"))
 
     @app.get("/health", tags=["system"], summary="Health check")
     async def health() -> dict[str, object]:

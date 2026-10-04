@@ -14,6 +14,7 @@ import { DevicesPage } from '@/pages/DevicesPage';
 import { DiagnosticsPage } from '@/pages/DiagnosticsPage';
 import { HelpersPage } from '@/pages/HelpersPage';
 import { ListsPage } from '@/pages/ListsPage';
+import { NextSetupPage } from '@/pages/NextSetupPage';
 import { VouchersPage } from '@/pages/VouchersPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { NotificationsPage } from '@/pages/NotificationsPage';
@@ -55,6 +56,9 @@ export function App() {
         <Route path="activity" element={<ActivityPage />} />
         <Route path="diagnostics" element={<DiagnosticsPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        {/* Bobi Next remains opt-in at the backend; this route is intentionally
+            absent from the production navigation until the migration gates pass. */}
+        <Route path="next/setup" element={<NextSetupPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>
