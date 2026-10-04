@@ -7,11 +7,11 @@ always read back from Home Assistant.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import json
+from pathlib import Path
 import sqlite3
 import time
-from collections.abc import Iterable
-from pathlib import Path
 from typing import Any
 
 from .models import DeviceRecord
