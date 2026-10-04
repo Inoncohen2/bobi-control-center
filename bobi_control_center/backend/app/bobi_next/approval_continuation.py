@@ -13,7 +13,7 @@ from .authorization import (
     state_fingerprint,
 )
 from .executor import HAControlClient
-from .pending_approval import PendingApprovalStore
+from .pending_approval import PendingApproval, PendingApprovalStore
 from .secure_execution import execute_authorized_plan
 
 PolicyProvider = Callable[[str], Awaitable[UserPolicy]]
@@ -28,7 +28,8 @@ class ApprovalContinuationResult:
     verified_count: int = 0
 
 
-async def approve_latest_pending(
+async def _approve_claimed_pending(
+    pending: PendingApproval,
     pending_store: PendingApprovalStore,
     approval_store: ApprovalStore,
     client: HAControlClient,
@@ -37,25 +38,26 @@ async def approve_latest_pending(
     policy_for: PolicyProvider,
     owner_token: str,
     now_ts: int,
-    lease_seconds: int = 60,
-    verification_attempts: int = 3,
-    verification_delay: float = 0.35,
+    verification_attempts: int,
+    verification_delay: float,
 ) -> ApprovalContinuationResult:
-    """Approve exactly one latest request without persisting bearer tokens."""
-
-    pending = pending_store.claim_latest(
-        user_key=user_key,
-        owner_token=owner_token,
-        now_ts=now_ts,
-        lease_seconds=lease_seconds,
-    )
-    if pending is None:
-        return ApprovalContinuationResult("no_pending", "no_pending_approval")
-
     request_id = pending.approval_request_id
     executed_count = 0
     verified_count = 0
     try:
+        if pending.user_key != user_key:
+            pending_store.fail(
+                request_id,
+                owner_token=owner_token,
+                error="approval_user_mismatch",
+                now_ts=now_ts,
+            )
+            return ApprovalContinuationResult(
+                "rejected",
+                "approval_user_mismatch",
+                request_id,
+            )
+
         policy = await policy_for(user_key)
         if policy.user_key != user_key:
             pending_store.fail(
@@ -227,6 +229,105 @@ async def approve_latest_pending(
         )
 
 
+async def approve_latest_pending(
+    pending_store: PendingApprovalStore,
+    approval_store: ApprovalStore,
+    client: HAControlClient,
+    *,
+    user_key: str,
+    policy_for: PolicyProvider,
+    owner_token: str,
+    now_ts: int,
+    lease_seconds: int = 60,
+    verification_attempts: int = 3,
+    verification_delay: float = 0.35,
+) -> ApprovalContinuationResult:
+    """Approve exactly one latest request without persisting bearer tokens."""
+
+    pending = pending_store.claim_latest(
+        user_key=user_key,
+        owner_token=owner_token,
+        now_ts=now_ts,
+        lease_seconds=lease_seconds,
+    )
+    if pending is None:
+        return ApprovalContinuationResult("no_pending", "no_pending_approval")
+    return await _approve_claimed_pending(
+        pending,
+        pending_store,
+        approval_store,
+        client,
+        user_key=user_key,
+        policy_for=policy_for,
+        owner_token=owner_token,
+        now_ts=now_ts,
+        verification_attempts=verification_attempts,
+        verification_delay=verification_delay,
+    )
+
+
+async def approve_pending_by_id(
+    pending_store: PendingApprovalStore,
+    approval_store: ApprovalStore,
+    client: HAControlClient,
+    *,
+    approval_request_id: str,
+    user_key: str,
+    policy_for: PolicyProvider,
+    owner_token: str,
+    now_ts: int,
+    lease_seconds: int = 60,
+    verification_attempts: int = 3,
+    verification_delay: float = 0.35,
+) -> ApprovalContinuationResult:
+    """Approve only the exact request bound to an authenticated interaction."""
+
+    pending = pending_store.claim(
+        approval_request_id=approval_request_id,
+        user_key=user_key,
+        owner_token=owner_token,
+        now_ts=now_ts,
+        lease_seconds=lease_seconds,
+    )
+    if pending is None:
+        return ApprovalContinuationResult(
+            "no_pending",
+            "approval_not_available",
+            approval_request_id,
+        )
+    return await _approve_claimed_pending(
+        pending,
+        pending_store,
+        approval_store,
+        client,
+        user_key=user_key,
+        policy_for=policy_for,
+        owner_token=owner_token,
+        now_ts=now_ts,
+        verification_attempts=verification_attempts,
+        verification_delay=verification_delay,
+    )
+
+
+def _reject_claimed_pending(
+    pending: PendingApproval,
+    pending_store: PendingApprovalStore,
+    *,
+    owner_token: str,
+    now_ts: int,
+) -> ApprovalContinuationResult:
+    pending_store.reject(
+        pending.approval_request_id,
+        owner_token=owner_token,
+        now_ts=now_ts,
+    )
+    return ApprovalContinuationResult(
+        "rejected",
+        "rejected_by_user",
+        pending.approval_request_id,
+    )
+
+
 def reject_latest_pending(
     pending_store: PendingApprovalStore,
     *,
@@ -243,13 +344,41 @@ def reject_latest_pending(
     )
     if pending is None:
         return ApprovalContinuationResult("no_pending", "no_pending_approval")
-    pending_store.reject(
-        pending.approval_request_id,
+    return _reject_claimed_pending(
+        pending,
+        pending_store,
         owner_token=owner_token,
         now_ts=now_ts,
     )
-    return ApprovalContinuationResult(
-        "rejected",
-        "rejected_by_user",
-        pending.approval_request_id,
+
+
+def reject_pending_by_id(
+    pending_store: PendingApprovalStore,
+    *,
+    approval_request_id: str,
+    user_key: str,
+    owner_token: str,
+    now_ts: int,
+    lease_seconds: int = 60,
+) -> ApprovalContinuationResult:
+    """Reject only the exact request bound to an authenticated interaction."""
+
+    pending = pending_store.claim(
+        approval_request_id=approval_request_id,
+        user_key=user_key,
+        owner_token=owner_token,
+        now_ts=now_ts,
+        lease_seconds=lease_seconds,
+    )
+    if pending is None:
+        return ApprovalContinuationResult(
+            "no_pending",
+            "approval_not_available",
+            approval_request_id,
+        )
+    return _reject_claimed_pending(
+        pending,
+        pending_store,
+        owner_token=owner_token,
+        now_ts=now_ts,
     )
