@@ -256,7 +256,12 @@ class SetupStore:
             raise RuntimeError("installation_missing")
         return _json_object(str(row["settings_json"]))
 
-    def update_settings(self, values: dict[str, Any], *, now_ts: int | None = None) -> dict[str, Any]:
+    def update_settings(
+        self,
+        values: dict[str, Any],
+        *,
+        now_ts: int | None = None,
+    ) -> dict[str, Any]:
         if not isinstance(values, dict):
             raise TypeError("settings_must_be_object")
         current = self.settings()
