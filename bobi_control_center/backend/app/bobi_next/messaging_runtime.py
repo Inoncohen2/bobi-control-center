@@ -170,7 +170,8 @@ class BobiNextMessagingRuntime:
             raise ValueError("interaction_namespace_invalid")
         if not callable(handler):
             raise TypeError("interaction_handler_not_callable")
-        if self.interaction_task is not None and not self.interaction_task.done():
+        interaction_task = getattr(self, "interaction_task", None)
+        if interaction_task is not None and not interaction_task.done():
             raise RuntimeError("interaction_runtime_started")
         self.interaction_handlers[key] = handler
 
