@@ -329,14 +329,14 @@ def compare_plans(
                 "improved",
                 matches,
                 legacy,
-                domain_note + ("legacy_plan_differs_from_contract",),
+                (*domain_note, "legacy_plan_differs_from_contract"),
             )
         if legacy_expected and not next_expected:
             return ParityReport(
                 "regression",
                 matches,
                 legacy,
-                domain_note + ("next_plan_differs_from_contract",),
+                (*domain_note, "next_plan_differs_from_contract"),
             )
 
     if legacy_matches_next:
