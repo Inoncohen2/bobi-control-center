@@ -10,11 +10,15 @@ live state confirms the expected result.
 from __future__ import annotations
 
 import asyncio
+import inspect
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from .models import ActionPlan
+
+logger = logging.getLogger("bobi.next.executor")
 
 
 class HAControlClient(Protocol):
@@ -74,6 +78,20 @@ def verify_expected(snapshot: dict[str, Any] | None, expected: dict[str, Any]) -
     return abs(actual_number - wanted_number) <= tolerance
 
 
+async def _notify_verified(client: HAControlClient, result: ExecutionResult) -> None:
+    observer = getattr(client, "record_verified_execution", None)
+    if not callable(observer):
+        return
+    try:
+        returned = observer(result)
+        if inspect.isawaitable(returned):
+            await returned
+    except Exception as exc:
+        # The Home Assistant mutation is already verified. Audit persistence
+        # failure must not turn a successful physical action into a false retry.
+        logger.warning("Verified execution observer failed type=%s", type(exc).__name__)
+
+
 async def execute_plan(
     plan: ActionPlan,
     client: HAControlClient,
@@ -104,7 +122,9 @@ async def execute_plan(
     for attempt in range(attempts):
         after = await client.get_state(plan.entity_id)
         if verify_expected(after, plan.expected):
-            return ExecutionResult(True, True, "verified", plan, before=before, after=after)
+            result = ExecutionResult(True, True, "verified", plan, before=before, after=after)
+            await _notify_verified(client, result)
+            return result
         if attempt + 1 < attempts:
             await asyncio.sleep(max(0.0, verification_delay))
 
