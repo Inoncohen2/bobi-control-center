@@ -21,7 +21,7 @@ import hashlib
 import json
 import sqlite3
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -104,7 +104,8 @@ def _dispatch_id(provider: str, interaction_id: str) -> str:
 def _context_namespace(context_key: str) -> str:
     namespace, _, _ = context_key.strip().partition(":")
     normalized = namespace.casefold().strip()
-    if not normalized or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for ch in normalized):
+    allowed = "abcdefghijklmnopqrstuvwxyz0123456789_-"
+    if not normalized or any(ch not in allowed for ch in normalized):
         return ""
     return normalized
 
