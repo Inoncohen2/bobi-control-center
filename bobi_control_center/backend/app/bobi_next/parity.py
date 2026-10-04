@@ -176,7 +176,9 @@ def compare_semantics(
             legacy.operation == current.canonical_operation if legacy.operation else None
         ),
         "family": legacy.family == current.family if legacy.family else None,
-        "scheduled": legacy.scheduled == current.scheduled if legacy.scheduled is not None else None,
+        "scheduled": (
+            legacy.scheduled == current.scheduled if legacy.scheduled is not None else None
+        ),
         "conditional": (
             legacy.conditional == current.conditional if legacy.conditional is not None else None
         ),
@@ -213,14 +215,29 @@ def compare_semantics(
             expected=expected,
         )
         if next_expected and not legacy_expected:
-            return ParityReport("improved", matches, legacy, ("legacy_behavior_differs_from_contract",))
+            return ParityReport(
+                "improved",
+                matches,
+                legacy,
+                ("legacy_behavior_differs_from_contract",),
+            )
         if legacy_expected and not next_expected:
-            return ParityReport("regression", matches, legacy, ("next_behavior_differs_from_contract",))
+            return ParityReport(
+                "regression",
+                matches,
+                legacy,
+                ("next_behavior_differs_from_contract",),
+            )
 
     if legacy_matches_next:
         return ParityReport("match", matches, legacy)
     if not known:
-        return ParityReport("inconclusive", matches, legacy, ("legacy_has_no_comparable_semantics",))
+        return ParityReport(
+            "inconclusive",
+            matches,
+            legacy,
+            ("legacy_has_no_comparable_semantics",),
+        )
     return ParityReport("mismatch", matches, legacy)
 
 
@@ -242,7 +259,9 @@ def compare_plans(
             legacy.operation == next_operation if legacy.operation and next_operation else None
         ),
         "targets": (
-            set(legacy.target_ids) == set(next_targets) if legacy.target_ids or next_targets else None
+            set(legacy.target_ids) == set(next_targets)
+            if legacy.target_ids or next_targets
+            else None
         ),
         "value": legacy.value == next_value if legacy.value is not None else None,
     }
@@ -269,9 +288,19 @@ def compare_plans(
             expected=expected,
         )
         if next_expected and not legacy_expected:
-            return ParityReport("improved", matches, legacy, ("legacy_plan_differs_from_contract",))
+            return ParityReport(
+                "improved",
+                matches,
+                legacy,
+                ("legacy_plan_differs_from_contract",),
+            )
         if legacy_expected and not next_expected:
-            return ParityReport("regression", matches, legacy, ("next_plan_differs_from_contract",))
+            return ParityReport(
+                "regression",
+                matches,
+                legacy,
+                ("next_plan_differs_from_contract",),
+            )
 
     if legacy_matches_next:
         return ParityReport("match", matches, legacy)
