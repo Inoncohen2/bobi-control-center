@@ -1,13 +1,13 @@
 """Capability-driven, side-effect-free action planning.
 
 The planner translates a resolved semantic device into native HA service data.
-It never sends the service call.  Validation and read-after-write expectations
+It never sends the service call. Validation and read-after-write expectations
 are part of the plan so execution can remain fail-closed and verifiable.
 """
 
 from __future__ import annotations
 
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from .models import ActionPlan, DeviceRecord
@@ -66,9 +66,19 @@ def build_plan(
             target = float(current) + float(delta or 0)
         else:
             target = float(value)
-        minimum = float(entity.limits.get("min_temp", entity.attributes.get("min_temp", 7)))
-        maximum = float(entity.limits.get("max_temp", entity.attributes.get("max_temp", 35)))
-        step = float(entity.limits.get("temp_step", entity.attributes.get("target_temp_step", 0.5)) or 0.5)
+        minimum = float(
+            entity.limits.get("min_temp", entity.attributes.get("min_temp", 7))
+        )
+        maximum = float(
+            entity.limits.get("max_temp", entity.attributes.get("max_temp", 35))
+        )
+        step = float(
+            entity.limits.get(
+                "temp_step",
+                entity.attributes.get("target_temp_step", 0.5),
+            )
+            or 0.5
+        )
         target = _quantize(target, minimum, step)
         if target < minimum or target > maximum:
             raise PlanError("temperature_out_of_range")
@@ -93,7 +103,13 @@ def build_plan(
         action = "turn_on" if target > 0 else "turn_off"
         if target > 0:
             data["brightness_pct"] = round(target)
-            expected.update({"attribute": "brightness_pct", "value": round(target), "tolerance": 2})
+            expected.update(
+                {
+                    "attribute": "brightness_pct",
+                    "value": round(target),
+                    "tolerance": 2,
+                }
+            )
         else:
             expected["state"] = "off"
 
@@ -103,15 +119,29 @@ def build_plan(
             raise PlanError("position_out_of_range")
         action = "set_cover_position"
         data["position"] = round(target)
-        expected.update({"attribute": "current_position", "value": round(target), "tolerance": 2})
+        expected.update(
+            {
+                "attribute": "current_position",
+                "value": round(target),
+                "tolerance": 2,
+            }
+        )
 
     elif capability in {"open", "close", "stop"} and domain == "cover":
-        action = {"open": "open_cover", "close": "close_cover", "stop": "stop_cover"}[capability]
+        action = {
+            "open": "open_cover",
+            "close": "close_cover",
+            "stop": "stop_cover",
+        }[capability]
         if capability in {"open", "close"}:
             expected["state"] = "open" if capability == "open" else "closed"
 
     elif capability in {"start", "stop", "return_home"} and domain == "vacuum":
-        action = {"start": "start", "stop": "stop", "return_home": "return_to_base"}[capability]
+        action = {
+            "start": "start",
+            "stop": "stop",
+            "return_home": "return_to_base",
+        }[capability]
         if capability == "start":
             expected["state_any"] = ["cleaning"]
         elif capability == "return_home":
