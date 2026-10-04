@@ -4,7 +4,9 @@ import pytest
 
 from app.bobi_next.approval_continuation import (
     approve_latest_pending,
+    approve_pending_by_id,
     reject_latest_pending,
+    reject_pending_by_id,
 )
 from app.bobi_next.authorization import (
     ApprovalStore,
@@ -53,17 +55,27 @@ async def _policy(user_key: str) -> UserPolicy:
     return UserPolicy(user_key)
 
 
-def _create_pending(store: PendingApprovalStore, *, now_ts: int = 100):
-    plan = _unlock_plan()
+def _create_pending(
+    store: PendingApprovalStore,
+    *,
+    approval_request_id: str = "approve-lock",
+    source_request_id: str = "source-lock",
+    plan_request_id: str = "req-lock",
+    user_key: str = "u1",
+    now_ts: int = 100,
+    ttl_seconds: int = 300,
+):
+    plan = _unlock_plan(plan_request_id)
     guard = approval_state_guard(plan, {"state": "locked", "attributes": {}})
     return store.create(
-        approval_request_id="approve-lock",
-        source_request_id="source-lock",
-        user_key="u1",
+        approval_request_id=approval_request_id,
+        source_request_id=source_request_id,
+        user_key=user_key,
         plans=(plan,),
         provenance=_provenance(),
         state_guards=(guard,),
         summary="unlock front door",
+        ttl_seconds=ttl_seconds,
         now_ts=now_ts,
     )
 
@@ -117,6 +129,77 @@ def test_pending_approval_survives_store_restart_and_reclaims_expired_lease(tmp_
         reopened.close()
 
 
+def test_exact_claim_is_bound_to_approval_id_and_user(tmp_path):
+    pending = PendingApprovalStore(tmp_path / "pending.db")
+    try:
+        _create_pending(
+            pending,
+            approval_request_id="approval-a",
+            source_request_id="source-a",
+            plan_request_id="request-a",
+            now_ts=100,
+        )
+        _create_pending(
+            pending,
+            approval_request_id="approval-b",
+            source_request_id="source-b",
+            plan_request_id="request-b",
+            now_ts=101,
+        )
+
+        assert pending.claim(
+            approval_request_id="approval-a",
+            user_key="u2",
+            owner_token="wrong-user",
+            now_ts=102,
+        ) is None
+        assert pending.get("approval-a").state == "pending"
+
+        claimed = pending.claim(
+            approval_request_id="approval-a",
+            user_key="u1",
+            owner_token="exact-worker",
+            now_ts=102,
+        )
+        assert claimed is not None
+        assert claimed.approval_request_id == "approval-a"
+        assert claimed.owner_token == "exact-worker"
+        assert pending.get("approval-b").state == "pending"
+    finally:
+        pending.close()
+
+
+def test_exact_claim_expires_only_bound_request(tmp_path):
+    pending = PendingApprovalStore(tmp_path / "pending.db")
+    try:
+        _create_pending(
+            pending,
+            approval_request_id="approval-expired",
+            source_request_id="source-expired",
+            plan_request_id="request-expired",
+            now_ts=100,
+            ttl_seconds=15,
+        )
+        _create_pending(
+            pending,
+            approval_request_id="approval-fresh",
+            source_request_id="source-fresh",
+            plan_request_id="request-fresh",
+            now_ts=110,
+        )
+
+        assert pending.claim(
+            approval_request_id="approval-expired",
+            user_key="u1",
+            owner_token="worker",
+            now_ts=116,
+        ) is None
+        assert pending.get("approval-expired").state == "expired"
+        assert pending.get("approval-fresh").state == "pending"
+    finally:
+        pending.close()
+
+
 @pytest.mark.asyncio
 async def test_restart_safe_yes_executes_exact_pending_plan_once(tmp_path):
     pending_path = tmp_path / "pending.db"
@@ -158,6 +241,76 @@ async def test_restart_safe_yes_executes_exact_pending_plan_once(tmp_path):
         )
         assert duplicate.outcome == "no_pending"
         assert len(ha.calls) == 1
+    finally:
+        approvals.close()
+        pending.close()
+
+
+@pytest.mark.asyncio
+async def test_exact_approval_does_not_switch_to_newer_pending_request(tmp_path):
+    pending = PendingApprovalStore(tmp_path / "pending.db")
+    approvals = ApprovalStore(tmp_path / "ephemeral-approvals.db")
+    ha = FakeHA("locked")
+    try:
+        _create_pending(
+            pending,
+            approval_request_id="approval-a",
+            source_request_id="source-a",
+            plan_request_id="request-a",
+            now_ts=100,
+        )
+        _create_pending(
+            pending,
+            approval_request_id="approval-b",
+            source_request_id="source-b",
+            plan_request_id="request-b",
+            now_ts=101,
+        )
+
+        result = await approve_pending_by_id(
+            pending,
+            approvals,
+            ha,
+            approval_request_id="approval-a",
+            user_key="u1",
+            policy_for=_policy,
+            owner_token="poll:a",
+            now_ts=102,
+            verification_delay=0,
+        )
+
+        assert result.outcome == "completed"
+        assert result.approval_request_id == "approval-a"
+        assert pending.get("approval-a").state == "completed"
+        assert pending.get("approval-b").state == "pending"
+        assert ha.calls == [("lock", "unlock", {"entity_id": "lock.front"})]
+    finally:
+        approvals.close()
+        pending.close()
+
+
+@pytest.mark.asyncio
+async def test_exact_approval_keeps_state_drift_guard(tmp_path):
+    pending = PendingApprovalStore(tmp_path / "pending.db")
+    approvals = ApprovalStore(tmp_path / "ephemeral-approvals.db")
+    try:
+        _create_pending(pending)
+        ha = FakeHA("unlocked")
+        result = await approve_pending_by_id(
+            pending,
+            approvals,
+            ha,
+            approval_request_id="approve-lock",
+            user_key="u1",
+            policy_for=_policy,
+            owner_token="poll:approve-lock",
+            now_ts=101,
+            verification_delay=0,
+        )
+        assert result.outcome == "rejected"
+        assert result.reason == "approval_state_changed"
+        assert ha.calls == []
+        assert pending.get("approve-lock").state == "failed"
     finally:
         approvals.close()
         pending.close()
@@ -209,6 +362,38 @@ def test_no_rejects_latest_pending_without_side_effect(tmp_path):
             now_ts=102,
         )
         assert again.outcome == "no_pending"
+    finally:
+        pending.close()
+
+
+def test_exact_reject_only_rejects_bound_request(tmp_path):
+    pending = PendingApprovalStore(tmp_path / "pending.db")
+    try:
+        _create_pending(
+            pending,
+            approval_request_id="approval-a",
+            source_request_id="source-a",
+            plan_request_id="request-a",
+            now_ts=100,
+        )
+        _create_pending(
+            pending,
+            approval_request_id="approval-b",
+            source_request_id="source-b",
+            plan_request_id="request-b",
+            now_ts=101,
+        )
+        result = reject_pending_by_id(
+            pending,
+            approval_request_id="approval-a",
+            user_key="u1",
+            owner_token="poll:a",
+            now_ts=102,
+        )
+        assert result.outcome == "rejected"
+        assert result.approval_request_id == "approval-a"
+        assert pending.get("approval-a").state == "rejected"
+        assert pending.get("approval-b").state == "pending"
     finally:
         pending.close()
 
