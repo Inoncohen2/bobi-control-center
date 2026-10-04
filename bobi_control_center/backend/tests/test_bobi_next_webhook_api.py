@@ -8,8 +8,8 @@ from fastapi.testclient import TestClient
 
 from app.bobi_next.secret_vault import EncryptedSecretVault
 from app.bobi_next.setup_store import SetupStore
-from app.bobi_next.webhook_api import create_messaging_webhook_router
 from app.bobi_next.waha_ingest import IngestResult
+from app.bobi_next.webhook_api import create_messaging_webhook_router
 
 
 def _signature(body: bytes, secret: str) -> str:
