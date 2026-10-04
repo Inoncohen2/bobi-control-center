@@ -8,6 +8,7 @@ avoid duplicate replies across retries or worker crashes.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import sqlite3
 import time
@@ -436,7 +437,5 @@ async def process_next_message(
         return store.get_inbound(message.provider, message.message_id)
     finally:
         if typing_started:
-            try:
+            with contextlib.suppress(Exception):
                 await transport.set_typing(message.chat_id, False)
-            except Exception:
-                pass
