@@ -65,6 +65,7 @@ class SemanticIntent:
     confidence: float = 0.0
     schedule_kind: str = ""
     schedule_payload: dict[str, Any] = field(default_factory=dict)
+    condition_payload: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
