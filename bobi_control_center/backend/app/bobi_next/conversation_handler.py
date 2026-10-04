@@ -1,10 +1,10 @@
 """Provider-neutral conversation handler for Bobi Next messaging workers.
 
-Approval replies are consumed before any AI/understanding provider sees them.
-All other messages enter the generic engine. Media is converted to trusted
-text/context before understanding; raw provider URLs never reach the brain.
-The handler returns only a safe user-facing response; durable delivery remains
-owned by ``messaging.process_next_message``.
+Approval replies and explicit undo commands are consumed before any
+AI/understanding provider sees them. All other messages enter the generic
+engine. Media is converted to trusted text/context before understanding; raw
+provider URLs never reach the brain. Durable delivery remains owned by
+``messaging.process_next_message``.
 """
 
 from __future__ import annotations
@@ -12,6 +12,8 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
+from .activity import ActivityLedger
+from .activity_runtime import UndoRequestStore, undo_once
 from .approval_continuation import approve_latest_pending, reject_latest_pending
 from .authorization import ApprovalStore
 from .conditional import ConditionalRuleStore
@@ -56,6 +58,18 @@ _NEGATIVE_APPROVALS = frozenset(
         "no",
         "cancel",
         "reject",
+    }
+)
+_UNDO_COMMANDS = frozenset(
+    {
+        "בטל את הפעולה האחרונה",
+        "בטלי את הפעולה האחרונה",
+        "תחזיר את הפעולה האחרונה",
+        "תחזירי את הפעולה האחרונה",
+        "ביטול פעולה אחרונה",
+        "undo",
+        "undo last action",
+        "undo the last action",
     }
 )
 
@@ -123,6 +137,20 @@ def _engine_response(result: EngineResult, requests: RequestLedger) -> MessageRe
     return MessageResponse("הפעולה לא הושלמה בבטחה.")
 
 
+def _undo_response(outcome: str, reason: str) -> str:
+    if outcome == "completed":
+        return "✅ ביטלתי את הפעולה האחרונה."
+    if outcome == "approval_required":
+        return "ביטול הפעולה האחרונה דורש אישור. להשיב כן או לא."
+    if outcome == "nothing_to_undo":
+        return "אין פעולה אחרונה שניתן לבטל בבטחה."
+    if reason == "state_changed_since_action":
+        return "לא ביטלתי: מצב המכשיר השתנה מאז הפעולה האחרונה."
+    if reason == "target_unavailable":
+        return "לא ניתן לבטל כרגע כי המכשיר לא זמין."
+    return "לא ניתן לבטל את הפעולה האחרונה בבטחה."
+
+
 def build_conversation_handler(
     *,
     understanding: UnderstandingProvider,
@@ -136,6 +164,8 @@ def build_conversation_handler(
     schedules: ScheduleStore | None = None,
     conditional_rules: ConditionalRuleStore | None = None,
     media_pipeline: MediaPipeline | None = None,
+    activity: ActivityLedger | None = None,
+    undo_requests: UndoRequestStore | None = None,
     dry_run: bool = False,
     clock: Clock | None = None,
     verification_attempts: int = 3,
@@ -146,8 +176,8 @@ def build_conversation_handler(
     now_fn = clock or (lambda: int(time.time()))
 
     async def handler(message: InboundMessage) -> MessageResponse:
-        # Only a plain text message may continue a pending approval. A caption
-        # extracted from media must never be able to approve a sensitive action.
+        # Only a plain text message may continue a pending approval or request
+        # undo. Media-derived text must never authorize or roll back a mutation.
         normalized = _normalize_confirmation(message.text) if message.kind == "text" else ""
         now = int(now_fn())
         approval_owner = f"approval:{message.provider}:{message.message_id}"
@@ -173,6 +203,11 @@ def build_conversation_handler(
                     created_ts=now,
                 )
                 if continuation.outcome == "completed":
+                    if activity is not None:
+                        activity.mark_approval_completed(
+                            continuation.approval_request_id,
+                            now_ts=now,
+                        )
                     text = "✅ אושר ובוצע."
                 elif continuation.outcome == "retryable":
                     raise RuntimeError(continuation.reason)
@@ -211,6 +246,41 @@ def build_conversation_handler(
                     created_ts=now,
                 )
                 return MessageResponse(text)
+
+        if (
+            normalized in _UNDO_COMMANDS
+            and activity is not None
+            and undo_requests is not None
+        ):
+            policy = await policy_for(message.user_key)
+            result = await undo_once(
+                undo_requests,
+                activity,
+                ha,
+                request_id=f"undo:{message.provider}:{message.message_id}",
+                user_key=message.user_key,
+                policy=policy,
+                pending_approvals=pending_approvals,
+                now_ts=now,
+                verification_attempts=verification_attempts,
+                verification_delay=verification_delay,
+            )
+            memory.store_turn(
+                message.user_key,
+                message.text,
+                direction="inbound",
+                message_id=message.message_id,
+                created_ts=now,
+            )
+            text = _undo_response(result.outcome, result.reason)
+            memory.store_turn(
+                message.user_key,
+                text,
+                direction="outbound",
+                message_id=f"reply:{message.message_id}",
+                created_ts=now,
+            )
+            return MessageResponse(text)
 
         request_text = message.text
         if message.kind != "text":
