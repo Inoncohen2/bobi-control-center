@@ -2,7 +2,7 @@
 
 This client intentionally bypasses `script.bobi_cc_*`: states come from HA's
 REST API and entity/device/area registries come from the authenticated HA
-WebSocket API.  No write command is implemented in this module.
+WebSocket API. No write command is implemented in this module.
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ from urllib.parse import urlparse, urlunparse
 import httpx
 import websockets
 
-from .registry import build_registry
 from .models import DeviceRecord
+from .registry import build_registry
 
 
 class DiscoveryError(RuntimeError):
@@ -73,7 +73,10 @@ class HomeAssistantDiscoveryClient:
         if self._http is None:
             self._http = httpx.AsyncClient(timeout=self._timeout)
         try:
-            response = await self._http.get(f"{self.api_base_url}/states", headers=self._headers())
+            response = await self._http.get(
+                f"{self.api_base_url}/states",
+                headers=self._headers(),
+            )
             response.raise_for_status()
             payload = response.json()
         except (httpx.HTTPError, ValueError) as exc:
@@ -82,7 +85,13 @@ class HomeAssistantDiscoveryClient:
             raise DiscoveryError("home_assistant_states_invalid_shape")
         return [row for row in payload if isinstance(row, dict)]
 
-    async def _registries(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    async def _registries(
+        self,
+    ) -> tuple[
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+    ]:
         try:
             async with websockets.connect(
                 self.ws_url,
@@ -124,4 +133,9 @@ class HomeAssistantDiscoveryClient:
     async def snapshot(self) -> DiscoverySnapshot:
         states = await self._states()
         entities, devices, areas = await self._registries()
-        return DiscoverySnapshot(states=states, entities=entities, devices=devices, areas=areas)
+        return DiscoverySnapshot(
+            states=states,
+            entities=entities,
+            devices=devices,
+            areas=areas,
+        )
