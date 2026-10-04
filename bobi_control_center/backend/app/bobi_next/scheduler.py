@@ -8,11 +8,11 @@ re-evaluated when the job actually runs.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
-from pathlib import Path
 import sqlite3
 import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -154,7 +154,7 @@ class ScheduleStore:
             WHERE user_key=? {terminal}
             ORDER BY run_at_ts, created_ts
             LIMIT ?
-            """,  # noqa: S608 - terminal is an internal constant, never user input
+            """,
             (user_key, max(1, min(int(limit), 500))),
         ).fetchall()
         return tuple(job for row in rows if (job := self._row(row)) is not None)
