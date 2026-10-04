@@ -3,7 +3,8 @@
 The router is intentionally not registered by the production Control Center
 unless Bobi Next setup is explicitly enabled. Each request opens short-lived
 SQLite connections, avoiding cross-thread sharing while WAL serializes writers.
-Credentials are referenced, never stored in the setup databases themselves.
+Credentials entered in the wizard are encrypted immediately; configuration
+stores contain only opaque secret references.
 """
 
 from __future__ import annotations
@@ -13,10 +14,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from .ai_providers import AIProviderConfig, AIProviderStore
 from .authorization import RiskLevel, UserPolicy
+from .secret_vault import EncryptedSecretVault, SecretVaultError
 from .setup_store import BobiUser, MessagingProvider, SetupStore, policy_to_dict
 
 
@@ -29,6 +31,7 @@ class ProviderInput(BaseModel):
     session: str = Field(default="", max_length=128)
     engine: str = Field(default="", max_length=64)
     secret_ref: str = Field(default="", max_length=512)
+    secret_value: SecretStr | None = None
     config: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -42,6 +45,7 @@ class AIProviderInput(BaseModel):
     endpoint: str = Field(default="", max_length=1000)
     model: str = Field(default="", max_length=256)
     secret_ref: str = Field(default="", max_length=512)
+    secret_value: SecretStr | None = None
     enabled: bool = True
     capabilities: list[AICapability] = Field(default_factory=lambda: ["intent"])
     config: dict[str, Any] = Field(default_factory=dict)
@@ -122,6 +126,15 @@ def _ai_store(database_path: Path):
         store.close()
 
 
+@contextmanager
+def _secret_vault(database_path: Path, key_path: Path):
+    vault = EncryptedSecretVault(database_path, key_path)
+    try:
+        yield vault
+    finally:
+        vault.close()
+
+
 def _combined_snapshot(setup: SetupStore, ai: AIProviderStore) -> dict[str, Any]:
     snapshot = setup.safe_snapshot()
     ai_snapshot = ai.safe_snapshot()
@@ -136,9 +149,28 @@ def _combined_snapshot(setup: SetupStore, ai: AIProviderStore) -> dict[str, Any]
     return snapshot
 
 
+def _store_secret_if_supplied(
+    *,
+    secret_value: SecretStr | None,
+    current_ref: str,
+    scope: str,
+    vault_database_path: Path,
+    vault_key_path: Path,
+) -> str:
+    if secret_value is None:
+        return current_ref
+    value = secret_value.get_secret_value()
+    if not value:
+        raise ValueError("secret_value_required")
+    with _secret_vault(vault_database_path, vault_key_path) as vault:
+        return vault.put(scope, value)
+
+
 def create_setup_router(database_path: str | Path) -> APIRouter:
     path = Path(database_path)
     ai_path = path.with_name("bobi-next-ai.db")
+    vault_path = path.with_name("bobi-next-secrets.db")
+    vault_key_path = path.with_name("bobi-next-secrets.key")
     router = APIRouter(prefix="/api/next/setup", tags=["bobi-next-setup"])
 
     @router.get("/status")
@@ -148,23 +180,42 @@ def create_setup_router(database_path: str | Path) -> APIRouter:
 
     @router.post("/providers")
     async def upsert_provider(body: ProviderInput) -> dict[str, Any]:
-        with _request_store(path) as store:
-            try:
-                provider = store.upsert_provider(**body.model_dump())
-            except (TypeError, ValueError) as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            return _provider_view(provider)
+        values = body.model_dump(exclude={"secret_value"})
+        try:
+            values["secret_ref"] = _store_secret_if_supplied(
+                secret_value=body.secret_value,
+                current_ref=str(values["secret_ref"]),
+                scope=f"messaging:{body.provider_key}",
+                vault_database_path=vault_path,
+                vault_key_path=vault_key_path,
+            )
+            with _request_store(path) as store:
+                provider = store.upsert_provider(**values)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except SecretVaultError as exc:
+            raise HTTPException(status_code=500, detail="secret_vault_unavailable") from exc
+        return _provider_view(provider)
 
     @router.post("/ai/providers")
     async def upsert_ai_provider(body: AIProviderInput) -> dict[str, Any]:
-        values = body.model_dump()
+        values = body.model_dump(exclude={"secret_value"})
         values["capabilities"] = frozenset(values["capabilities"])
-        with _ai_store(ai_path) as ai:
-            try:
+        try:
+            values["secret_ref"] = _store_secret_if_supplied(
+                secret_value=body.secret_value,
+                current_ref=str(values["secret_ref"]),
+                scope=f"ai:{body.provider_key}",
+                vault_database_path=vault_path,
+                vault_key_path=vault_key_path,
+            )
+            with _ai_store(ai_path) as ai:
                 provider = ai.upsert(**values)
-            except (TypeError, ValueError) as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            return _ai_provider_view(provider)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except SecretVaultError as exc:
+            raise HTTPException(status_code=500, detail="secret_vault_unavailable") from exc
+        return _ai_provider_view(provider)
 
     @router.post("/ai/providers/{provider_key}/select")
     async def select_ai_provider(provider_key: str) -> dict[str, Any]:
