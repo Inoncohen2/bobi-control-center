@@ -59,7 +59,10 @@ _NEGATIVE_APPROVALS = frozenset(
 
 def _normalize_confirmation(text: str) -> str:
     value = " ".join(text.casefold().strip().split())
-    return value.rstrip(".!?,?؛،")
+    punctuation = {".", "!", "?", ",", "؛", "،"}
+    while value and value[-1] in punctuation:
+        value = value[:-1]
+    return value
 
 
 def _approval_prompt(result: EngineResult) -> str:
