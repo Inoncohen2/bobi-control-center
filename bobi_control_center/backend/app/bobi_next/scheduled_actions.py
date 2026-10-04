@@ -8,8 +8,9 @@ live state. This is essential for relative commands such as "+0.5 degree".
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
-from typing import Any, Iterable
+from typing import Any
 
 from .models import ActionPlan, DeviceRecord, TargetResolution
 from .planner import build_plan
@@ -41,7 +42,10 @@ class ScheduledDeviceAction:
         if int(payload.get("schema_version", 0)) != 1:
             raise ValueError("unsupported_scheduled_schema")
         device_ids = payload.get("device_ids")
-        if not isinstance(device_ids, list) or not all(isinstance(item, str) for item in device_ids):
+        valid_ids = isinstance(device_ids, list) and all(
+            isinstance(item, str) for item in device_ids
+        )
+        if not valid_ids:
             raise ValueError("invalid_scheduled_device_ids")
         if not device_ids:
             raise ValueError("scheduled_target_required")
