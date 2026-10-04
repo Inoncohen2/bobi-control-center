@@ -46,9 +46,7 @@ def archive_write_allowed(policy: UserPolicy, *, user_key: str) -> bool:
         return False
     if "*" not in policy.allowed_domains and "archive" not in policy.allowed_domains:
         return False
-    if "archive.save" in policy.denied_actions:
-        return False
-    return True
+    return "archive.save" not in policy.denied_actions
 
 
 def infer_archive_kind(caption: str, media: LoadedMedia) -> str:
