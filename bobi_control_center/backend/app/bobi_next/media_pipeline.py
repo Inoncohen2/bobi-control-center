@@ -61,6 +61,7 @@ class MediaAnalysis:
 class EnrichedMessage:
     text: str
     media: MediaAnalysis | None = None
+    loaded_media: LoadedMedia | None = None
 
 
 class TrustedMediaLoader(Protocol):
@@ -142,4 +143,4 @@ class MediaPipeline:
             text = f"{caption}\n\n[Media content]\n{derived}"
         else:
             text = caption or derived
-        return EnrichedMessage(text=text, media=analysis)
+        return EnrichedMessage(text=text, media=analysis, loaded_media=loaded)

@@ -83,6 +83,8 @@ async def test_pipeline_combines_caption_and_analyzed_media() -> None:
 
     assert result.text == "please do this\n\n[Media content]\nturn the room switch off"
     assert result.media is not None
+    assert result.loaded_media is analyzer.seen[0]
+    assert result.loaded_media.content == b"voice-bytes"
     assert len(loader.seen) == 1
     assert analyzer.seen[0].sha256
 
