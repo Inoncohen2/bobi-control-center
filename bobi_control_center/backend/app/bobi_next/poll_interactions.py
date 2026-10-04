@@ -192,6 +192,12 @@ class PollInteractionStore:
             raise ValueError("poll_option_keys_not_unique")
         created = int(now_ts or time.time())
         identifier = interaction_id.strip() or str(uuid.uuid4())
+        encoded_options = json.dumps(
+            normalized,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         with self._db:
             self._db.execute(
                 """
@@ -199,7 +205,7 @@ class PollInteractionStore:
                     interaction_id,provider,poll_message_id,chat_id,user_key,question,
                     option_keys_json,multiple_answers,context_key,state,
                     latest_vote_timestamp,selected_keys_json,failure_count,created_ts,expires_ts
-                ) VALUES(?,?,?,?,?,?,?, ?,?,'open',0,'[]',0,?,?)
+                ) VALUES(?,?,?,?,?,?,?,?,?,'open',0,'[]',0,?,?)
                 """,
                 (
                     identifier,
@@ -208,7 +214,7 @@ class PollInteractionStore:
                     chat_id,
                     user_key,
                     question.strip()[:1000],
-                    json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                    encoded_options,
                     int(bool(multiple_answers)),
                     context_key.strip()[:512],
                     created,
@@ -235,6 +241,11 @@ class PollInteractionStore:
         outcome: str,
         now_ts: int,
     ) -> bool:
+        selected_json = json.dumps(
+            list(event.selected_options),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
         try:
             self._db.execute(
                 """
@@ -249,7 +260,7 @@ class PollInteractionStore:
                     event.poll_message_id,
                     user_key,
                     int(event.provider_timestamp),
-                    json.dumps(list(event.selected_options), ensure_ascii=False, separators=(",", ":")),
+                    selected_json,
                     outcome,
                     now_ts,
                 ),
@@ -288,7 +299,11 @@ class PollInteractionStore:
                 )
                 if inserted:
                     self._db.execute(
-                        "UPDATE poll_interactions SET failure_count=failure_count+1 WHERE interaction_id=?",
+                        """
+                        UPDATE poll_interactions
+                        SET failure_count=failure_count+1
+                        WHERE interaction_id=?
+                        """,
                         (interaction.interaction_id,),
                     )
                 self._db.commit()
@@ -300,6 +315,7 @@ class PollInteractionStore:
                     needs_resend=inserted,
                 )
 
+            max_selections = len(interaction.option_keys) if interaction.multiple_answers else 1
             if interaction.state != "open":
                 outcome = "interaction_closed"
             elif interaction.expires_ts and now > interaction.expires_ts:
@@ -308,9 +324,12 @@ class PollInteractionStore:
                 outcome = "interaction_user_mismatch"
             elif event.provider_timestamp < interaction.latest_vote_timestamp:
                 outcome = "stale_vote"
-            elif len(event.selected_options) > (len(interaction.option_keys) if interaction.multiple_answers else 1):
+            elif len(event.selected_options) > max_selections:
                 outcome = "invalid_selection_count"
-            elif any(option not in interaction.option_keys for option in event.selected_options):
+            elif any(
+                option not in interaction.option_keys
+                for option in event.selected_options
+            ):
                 outcome = "unknown_option"
             else:
                 outcome = "accepted"
