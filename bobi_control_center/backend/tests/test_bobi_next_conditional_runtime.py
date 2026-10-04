@@ -7,8 +7,8 @@ import pytest
 
 from app.bobi_next.authorization import UserPolicy
 from app.bobi_next.conditional import ConditionalRuleStore, StateChangeEvent
-from app.bobi_next.conditional_runtime import ConditionalEventRuntime
 from app.bobi_next.conditional_runner import ConditionalRunResult
+from app.bobi_next.conditional_runtime import ConditionalEventRuntime
 
 
 class FakeStream:
