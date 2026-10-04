@@ -119,7 +119,7 @@ async def run_due_jobs(
                         reason="policy_user_mismatch",
                         now_ts=now_ts,
                         retry_delay_seconds=retry_delay_seconds,
-                        max_attempts=max_attempts,
+                        max_attempts=1,
                         any_side_effect=False,
                     )
                 )
@@ -150,7 +150,7 @@ async def run_due_jobs(
                             reason=blocking.reason,
                             now_ts=now_ts,
                             retry_delay_seconds=retry_delay_seconds,
-                            max_attempts=max_attempts,
+                            max_attempts=1,
                             any_side_effect=False,
                         )
                     )
