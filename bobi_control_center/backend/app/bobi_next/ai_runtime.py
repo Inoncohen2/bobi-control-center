@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import base64
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -160,6 +160,7 @@ class OpenAICompatibleProvider:
     secrets: SecretResolver
     client: httpx.AsyncClient | None = None
     timeout_seconds: float = 30.0
+    base_url: str = field(init=False)
 
     def __post_init__(self) -> None:
         self.base_url = _base_url(self.config.endpoint)
