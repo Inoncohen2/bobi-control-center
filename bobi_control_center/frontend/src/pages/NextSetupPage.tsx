@@ -300,7 +300,7 @@ export function NextSetupPage() {
                   className={inputClass}
                   value={externalId}
                   onChange={(event) => setExternalId(event.target.value)}
-                  placeholder="9725… או …@c.us"
+                  placeholder="מספר בינלאומי או מזהה WhatsApp"
                   required
                 />
               </label>
