@@ -10,8 +10,9 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .models import DeviceRecord
 
@@ -103,7 +104,11 @@ class BobiMemory:
         )
         self._db.commit()
 
-    def sync_devices(self, devices: Iterable[DeviceRecord], now_ts: int | None = None) -> None:
+    def sync_devices(
+        self,
+        devices: Iterable[DeviceRecord],
+        now_ts: int | None = None,
+    ) -> None:
         now = int(now_ts or time.time())
         with self._db:
             for device in devices:
@@ -143,7 +148,14 @@ class BobiMemory:
                         (device.bobi_id, alias, "discovery", 1.0, now),
                     )
 
-    def add_alias(self, bobi_id: str, alias: str, *, source: str = "learned", weight: float = 1.2) -> None:
+    def add_alias(
+        self,
+        bobi_id: str,
+        alias: str,
+        *,
+        source: str = "learned",
+        weight: float = 1.2,
+    ) -> None:
         alias = alias.strip()
         if not alias:
             return
@@ -192,7 +204,11 @@ class BobiMemory:
                 ),
             )
 
-    def recent_turns(self, user_key: str, limit: int = 12) -> tuple[dict[str, Any], ...]:
+    def recent_turns(
+        self,
+        user_key: str,
+        limit: int = 12,
+    ) -> tuple[dict[str, Any], ...]:
         rows = self._db.execute(
             """
             SELECT message_id,direction,text,semantic_json,created_ts
@@ -249,15 +265,23 @@ class BobiMemory:
                 ),
             )
 
-    def get_active_context(self, user_key: str, now_ts: int | None = None) -> dict[str, Any] | None:
+    def get_active_context(
+        self,
+        user_key: str,
+        now_ts: int | None = None,
+    ) -> dict[str, Any] | None:
         now = int(now_ts or time.time())
         row = self._db.execute(
-            "SELECT * FROM active_context WHERE user_key=?", (user_key,)
+            "SELECT * FROM active_context WHERE user_key=?",
+            (user_key,),
         ).fetchone()
         if not row or int(row["expires_ts"]) < now:
             if row:
                 with self._db:
-                    self._db.execute("DELETE FROM active_context WHERE user_key=?", (user_key,))
+                    self._db.execute(
+                        "DELETE FROM active_context WHERE user_key=?",
+                        (user_key,),
+                    )
             return None
         return {
             "bobi_device_id": row["bobi_device_id"],
