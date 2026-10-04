@@ -283,6 +283,43 @@ class ScheduleStore:
             raise RuntimeError("job_disappeared")
         return updated
 
+    def claim_awaiting_approval(
+        self,
+        job_id: str,
+        *,
+        owner_token: str,
+        now_ts: int | None = None,
+        lease_seconds: int = 60,
+    ) -> ScheduledJob:
+        """Atomically claim one approval-held job for an explicit user approval."""
+
+        if not owner_token.strip():
+            raise ValueError("owner_token_required")
+        now = int(now_ts or time.time())
+        lease_until = now + max(5, int(lease_seconds))
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            updated = self._db.execute(
+                """
+                UPDATE scheduled_jobs
+                SET state='running', owner_token=?, lease_until_ts=?, updated_ts=?
+                WHERE job_id=? AND state='awaiting_approval'
+                """,
+                (owner_token, lease_until, now, job_id),
+            )
+            if updated.rowcount != 1:
+                self._db.rollback()
+                raise RuntimeError("job_not_awaiting_approval")
+            self._db.commit()
+        except Exception:
+            if self._db.in_transaction:
+                self._db.rollback()
+            raise
+        job = self.get(job_id)
+        if job is None or job.owner_token != owner_token:
+            raise RuntimeError("approval_job_claim_failed")
+        return job
+
     def resume_after_approval(
         self,
         job_id: str,
