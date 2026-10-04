@@ -18,6 +18,9 @@ from .messaging import InboundMessage, MessageTransport
 
 _WA_DIRECT_SUFFIX = "@" + "c.us"
 _WA_INTERNAL_SUFFIX = "@" + "s.whatsapp.net"
+_MAX_POLL_OPTIONS = 32
+_MAX_POLL_OPTION_TEXT = 256
+_MAX_POLL_QUESTION = 1000
 
 
 class WahaWebhookError(ValueError):
@@ -140,6 +143,17 @@ def _extract_provider_message_id(data: Any, fallback: str) -> str:
     return fallback
 
 
+def _normalize_poll_options(options: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    normalized = tuple(str(option).strip() for option in options)
+    if not 1 <= len(normalized) <= _MAX_POLL_OPTIONS:
+        raise ValueError("waha_poll_options_invalid")
+    if any(not option or len(option) > _MAX_POLL_OPTION_TEXT for option in normalized):
+        raise ValueError("waha_poll_options_invalid")
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("waha_poll_options_not_unique")
+    return normalized
+
+
 class WahaTransport(MessageTransport):
     """HTTP implementation of the Bobi Next MessageTransport contract."""
 
@@ -225,6 +239,47 @@ class WahaTransport(MessageTransport):
             body["id"] = custom_id
         data = await self._request("POST", "/api/sendText", body)
         return _extract_provider_message_id(data, custom_id)
+
+    async def send_poll(
+        self,
+        chat_id: str,
+        question: str,
+        options: tuple[str, ...] | list[str],
+        *,
+        multiple_answers: bool = False,
+    ) -> str:
+        """Send a poll and return WAHA's real provider message id.
+
+        Unlike ``send_text``, the documented WAHA poll API does not expose a
+        caller-defined message id. Bobi therefore never invents one: a missing
+        provider id is a hard failure and no interaction may be registered.
+        """
+
+        normalized_chat = chat_id.strip()
+        normalized_question = question.strip()
+        normalized_options = _normalize_poll_options(options)
+        if not normalized_chat:
+            raise ValueError("waha_poll_chat_required")
+        if not normalized_question or len(normalized_question) > _MAX_POLL_QUESTION:
+            raise ValueError("waha_poll_question_invalid")
+
+        data = await self._request(
+            "POST",
+            "/api/sendPoll",
+            {
+                "session": self.session,
+                "chatId": normalized_chat,
+                "poll": {
+                    "name": normalized_question,
+                    "options": list(normalized_options),
+                    "multipleAnswers": bool(multiple_answers),
+                },
+            },
+        )
+        provider_id = _extract_provider_message_id(data, "").strip()
+        if not provider_id:
+            raise RuntimeError("waha_poll_message_id_missing")
+        return provider_id
 
 
 class WahaMediaLoader:
