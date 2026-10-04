@@ -49,7 +49,7 @@ class ArchiveCaptureRequest:
 
 
 def _idempotency_key(owner_key: str, digest: str) -> str:
-    raw = f"{owner_key}\0{digest}".encode("utf-8")
+    raw = f"{owner_key}\0{digest}".encode()
     return hashlib.sha256(raw).hexdigest()
 
 
