@@ -1,12 +1,15 @@
 """HTTP contract for the Bobi Next setup wizard.
 
-The router is built explicitly around a supplied SetupStore and is not
-registered by the production Control Center yet.  That keeps Bobi Next isolated
-while the setup flow and its tests mature.
+The router is intentionally not registered by the production Control Center
+yet. Each request opens its own short-lived SetupStore connection against the
+same local SQLite file, avoiding cross-thread connection sharing while SQLite
+WAL serializes concurrent writers.
 """
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
@@ -73,28 +76,41 @@ def _user_view(user: BobiUser) -> dict[str, Any]:
     }
 
 
-def create_setup_router(store: SetupStore) -> APIRouter:
+@contextmanager
+def _request_store(database_path: Path):
+    store = SetupStore(database_path)
+    try:
+        yield store
+    finally:
+        store.close()
+
+
+def create_setup_router(database_path: str | Path) -> APIRouter:
+    path = Path(database_path)
     router = APIRouter(prefix="/api/next/setup", tags=["bobi-next-setup"])
 
     @router.get("/status")
     async def status() -> dict[str, Any]:
-        return store.safe_snapshot()
+        with _request_store(path) as store:
+            return store.safe_snapshot()
 
     @router.post("/providers")
     async def upsert_provider(body: ProviderInput) -> dict[str, Any]:
-        try:
-            provider = store.upsert_provider(**body.model_dump())
-        except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return _provider_view(provider)
+        with _request_store(path) as store:
+            try:
+                provider = store.upsert_provider(**body.model_dump())
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return _provider_view(provider)
 
     @router.post("/users")
     async def create_user(body: UserInput) -> dict[str, Any]:
-        try:
-            user = store.create_user(**body.model_dump())
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return _user_view(user)
+        with _request_store(path) as store:
+            try:
+                user = store.create_user(**body.model_dump())
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            return _user_view(user)
 
     @router.put("/users/{user_key}/policy")
     async def update_policy(user_key: str, body: PolicyInput) -> dict[str, Any]:
@@ -107,32 +123,35 @@ def create_setup_router(store: SetupStore) -> APIRouter:
             max_without_approval=RiskLevel(body.max_without_approval),
             can_approve=body.can_approve,
         )
-        try:
-            user = store.update_user_policy(user_key, policy)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="user_not_found") from exc
-        return _user_view(user)
+        with _request_store(path) as store:
+            try:
+                user = store.update_user_policy(user_key, policy)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail="user_not_found") from exc
+            return _user_view(user)
 
     @router.post("/identities")
     async def link_identity(body: IdentityInput) -> dict[str, Any]:
-        try:
-            link = store.link_identity(**body.model_dump())
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return {
-            "provider_key": link.provider_key,
-            "user_key": link.user_key,
-            "identity_label": link.identity_label,
-        }
+        with _request_store(path) as store:
+            try:
+                link = store.link_identity(**body.model_dump())
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            return {
+                "provider_key": link.provider_key,
+                "user_key": link.user_key,
+                "identity_label": link.identity_label,
+            }
 
     @router.post("/complete")
     async def complete() -> dict[str, Any]:
-        try:
-            store.mark_completed()
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return store.safe_snapshot()
+        with _request_store(path) as store:
+            try:
+                store.mark_completed()
+            except RuntimeError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            return store.safe_snapshot()
 
     return router
