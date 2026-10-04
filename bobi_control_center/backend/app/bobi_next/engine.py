@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from .authorization import (
-    ApprovalStore,
     RequestProvenance,
     UserPolicy,
     approval_state_guard,
@@ -24,6 +23,7 @@ from .executor import HAControlClient
 from .intent import SemanticIntent
 from .memory import BobiMemory
 from .models import ActionPlan, DeviceRecord, TargetResolution
+from .pending_approval import PendingApprovalStore
 from .planner import PlanError, build_plan
 from .request_ledger import RequestLedger
 from .resolver import resolve_target
@@ -73,7 +73,7 @@ class EngineResult:
     executed_count: int = 0
     verified_count: int = 0
     scheduled_job_id: str = ""
-    approval_tokens: tuple[str, ...] = ()
+    approval_request_id: str = ""
     metadata: dict = field(default_factory=dict)
 
 
@@ -140,7 +140,7 @@ async def process_request(
     memory: BobiMemory,
     requests: RequestLedger,
     schedules: ScheduleStore | None = None,
-    approvals: ApprovalStore | None = None,
+    pending_approvals: PendingApprovalStore | None = None,
     dry_run: bool = False,
     context_ttl_seconds: int = 300,
     verification_attempts: int = 3,
@@ -326,9 +326,8 @@ async def process_request(
                 plans=plans,
             )
 
-        approval_tokens: list[str] = []
         if any(decision.requires_approval for decision in initial_decisions):
-            if approvals is None:
+            if pending_approvals is None:
                 requests.complete(
                     request.request_id,
                     owner_token=request.owner_token,
@@ -338,21 +337,48 @@ async def process_request(
                 return EngineResult(
                     request.request_id,
                     "approval_required",
-                    "approval_store_not_configured",
+                    "pending_approval_store_not_configured",
                     resolution=resolution,
                     plans=plans,
                 )
+
+            state_guards: list[dict] = []
             for plan, decision in zip(plans, initial_decisions, strict=True):
                 if not decision.requires_approval:
+                    state_guards.append({})
                     continue
                 snapshot = await ha.get_state(plan.entity_id)
-                grant = approvals.issue(
-                    user_key=request.user_key,
-                    plan=plan,
-                    state_guard=approval_state_guard(plan, snapshot),
-                    summary=f"{plan.domain}.{plan.action}:{plan.entity_id}",
-                )
-                approval_tokens.append(grant.token)
+                if snapshot is None or str(snapshot.get("state", "")) in {
+                    "unknown",
+                    "unavailable",
+                }:
+                    requests.fail_terminal(
+                        request.request_id,
+                        owner_token=request.owner_token,
+                        error="target_unavailable",
+                        terminal_kind="approval_target_unavailable",
+                        now_ts=now,
+                    )
+                    return EngineResult(
+                        request.request_id,
+                        "failed",
+                        "target_unavailable",
+                        resolution=resolution,
+                        plans=plans,
+                    )
+                state_guards.append(approval_state_guard(plan, snapshot))
+
+            approval_request_id = f"approve-{request.request_id}"
+            pending_approvals.create(
+                approval_request_id=approval_request_id,
+                source_request_id=request.request_id,
+                user_key=request.user_key,
+                plans=plans,
+                provenance=provenance,
+                state_guards=tuple(state_guards),
+                summary=request.text,
+                now_ts=now,
+            )
             requests.complete(
                 request.request_id,
                 owner_token=request.owner_token,
@@ -365,7 +391,7 @@ async def process_request(
                 "approval_required",
                 resolution=resolution,
                 plans=plans,
-                approval_tokens=tuple(approval_tokens),
+                approval_request_id=approval_request_id,
             )
 
         executed = 0

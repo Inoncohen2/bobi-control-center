@@ -4,11 +4,12 @@ from dataclasses import dataclass
 
 import pytest
 
-from app.bobi_next.authorization import ApprovalStore, UserPolicy
+from app.bobi_next.authorization import UserPolicy
 from app.bobi_next.engine import EngineRequest, UnderstandingContext, process_request
 from app.bobi_next.intent import SemanticIntent
 from app.bobi_next.memory import BobiMemory
 from app.bobi_next.models import DeviceRecord, EntityRecord
+from app.bobi_next.pending_approval import PendingApprovalStore
 from app.bobi_next.request_ledger import RequestLedger
 from app.bobi_next.scheduler import ScheduleStore
 
@@ -58,65 +59,80 @@ class StaticUnderstanding:
         return self.intents[text]
 
 
-def _switch() -> DeviceRecord:
+def _device(
+    *,
+    bobi_id: str,
+    entity_id: str,
+    domain: str,
+    name: str,
+    state: str,
+    capabilities: set[str],
+    attributes: dict | None = None,
+    limits: dict | None = None,
+    area_id: str = "",
+    area_name: str = "",
+) -> DeviceRecord:
     entity = EntityRecord(
-        entity_id="switch.room",
-        domain="switch",
-        name="Room switch",
-        state="on",
-        capabilities=frozenset({"power"}),
+        entity_id=entity_id,
+        domain=domain,
+        name=name,
+        state=state,
+        attributes=attributes or {},
+        capabilities=frozenset(capabilities),
+        limits=limits or {},
     )
     return DeviceRecord(
-        bobi_id="dev-switch",
-        stable_key="device:switch",
-        name="Room switch",
-        area_id="room",
-        area_name="Room",
+        bobi_id=bobi_id,
+        stable_key=f"device:{bobi_id}",
+        name=name,
+        area_id=area_id,
+        area_name=area_name,
         entities=(entity,),
         capabilities=entity.capabilities,
     )
 
 
+def _switch() -> DeviceRecord:
+    return _device(
+        bobi_id="dev-switch",
+        entity_id="switch.room",
+        domain="switch",
+        name="Room switch",
+        state="on",
+        capabilities={"power"},
+        area_id="room",
+        area_name="Room",
+    )
+
+
 def _climate(target: float = 25.0) -> DeviceRecord:
-    entity = EntityRecord(
+    return _device(
+        bobi_id="dev-ac",
         entity_id="climate.bedroom",
         domain="climate",
         name="Bedroom AC",
         state="cool",
+        capabilities={"power", "temperature"},
         attributes={
             "temperature": target,
             "min_temp": 16,
             "max_temp": 30,
             "target_temp_step": 0.5,
         },
-        capabilities=frozenset({"power", "temperature"}),
         limits={"min_temp": 16, "max_temp": 30, "temp_step": 0.5},
-    )
-    return DeviceRecord(
-        bobi_id="dev-ac",
-        stable_key="device:ac",
-        name="Bedroom AC",
         area_id="bedroom",
         area_name="Bedroom",
-        entities=(entity,),
-        capabilities=entity.capabilities,
     )
 
 
 def _lock() -> DeviceRecord:
-    entity = EntityRecord(
+    return _device(
+        bobi_id="dev-lock",
         entity_id="lock.front",
         domain="lock",
         name="Front door",
         state="locked",
-        capabilities=frozenset({"lock", "unlock"}),
-    )
-    return DeviceRecord(
-        bobi_id="dev-lock",
-        stable_key="device:lock",
-        name="Front door",
-        entities=(entity,),
-        capabilities=entity.capabilities,
+        capabilities={"lock", "unlock"},
     )
 
 
@@ -197,10 +213,8 @@ async def test_immediate_device_command_executes_verifies_and_sets_context(tmp_p
             requests=stores.requests,
             verification_delay=0,
         )
-
         assert result.outcome == "executed"
-        assert result.executed_count == 1
-        assert result.verified_count == 1
+        assert result.executed_count == result.verified_count == 1
         assert ha.calls == [("switch", "turn_off", {"entity_id": "switch.room"})]
         assert stores.requests.get("r1").state == "completed"
         assert stores.memory.get_active_context("u1", now_ts=100)["bobi_device_id"] == "dev-switch"
@@ -213,14 +227,7 @@ async def test_terminal_duplicate_request_never_executes_twice(tmp_path):
     stores = EngineStores(tmp_path)
     try:
         understanding = StaticUnderstanding(
-            {
-                "off": _intent(
-                    "off",
-                    domain="switch",
-                    operation="off",
-                    target="Room switch",
-                )
-            }
+            {"off": _intent("off", domain="switch", operation="off", target="Room switch")}
         )
         ha = FakeHA({"switch.room": {"state": "on", "attributes": {}}})
 
@@ -237,14 +244,11 @@ async def test_terminal_duplicate_request_never_executes_twice(tmp_path):
             "verification_delay": 0,
         }
         first = await process_request(
-            EngineRequest("same", "u1", "off", "worker-a", now_ts=100),
-            **kwargs,
+            EngineRequest("same", "u1", "off", "worker-a", now_ts=100), **kwargs
         )
         second = await process_request(
-            EngineRequest("same", "u1", "off", "worker-b", now_ts=101),
-            **kwargs,
+            EngineRequest("same", "u1", "off", "worker-b", now_ts=101), **kwargs
         )
-
         assert first.outcome == "executed"
         assert second.outcome == "duplicate"
         assert second.reason == "request_terminal"
@@ -274,7 +278,7 @@ async def test_half_degree_delta_uses_live_device_target(tmp_path):
         )
 
         async def devices():
-            return (_climate(25.0),)
+            return (_climate(),)
 
         result = await process_request(
             EngineRequest("temp", "u1", "raise half", "worker", now_ts=100),
@@ -286,7 +290,6 @@ async def test_half_degree_delta_uses_live_device_target(tmp_path):
             requests=stores.requests,
             verification_delay=0,
         )
-
         assert result.outcome == "executed"
         assert ha.calls == [
             (
@@ -306,10 +309,7 @@ async def test_followup_reference_uses_active_device_context(tmp_path):
         understanding = StaticUnderstanding(
             {
                 "turn room off": _intent(
-                    "turn room off",
-                    domain="switch",
-                    operation="off",
-                    target="Room switch",
+                    "turn room off", domain="switch", operation="off", target="Room switch"
                 ),
                 "turn it on": _intent(
                     "turn it on",
@@ -335,16 +335,12 @@ async def test_followup_reference_uses_active_device_context(tmp_path):
             "requests": stores.requests,
             "verification_delay": 0,
         }
-        first = await process_request(
-            EngineRequest("r1", "u1", "turn room off", "worker-a", now_ts=100),
-            **kwargs,
+        await process_request(
+            EngineRequest("r1", "u1", "turn room off", "worker-a", now_ts=100), **kwargs
         )
         second = await process_request(
-            EngineRequest("r2", "u1", "turn it on", "worker-b", now_ts=101),
-            **kwargs,
+            EngineRequest("r2", "u1", "turn it on", "worker-b", now_ts=101), **kwargs
         )
-
-        assert first.outcome == "executed"
         assert second.outcome == "executed"
         assert second.resolution.resolution_kind == "context"
         assert ha.calls[-1] == ("switch", "turn_on", {"entity_id": "switch.room"})
@@ -385,10 +381,9 @@ async def test_scheduled_command_persists_semantic_job_without_calling_ha(tmp_pa
             requests=stores.requests,
             schedules=schedules,
         )
-
+        job = schedules.get("req-sched")
         assert result.outcome == "scheduled"
         assert result.scheduled_job_id == "req-sched"
-        job = schedules.get("req-sched")
         assert job.run_at_ts == 220
         assert job.payload["device_ids"] == ["dev-switch"]
         assert ha.calls == []
@@ -398,7 +393,7 @@ async def test_scheduled_command_persists_semantic_job_without_calling_ha(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_negated_mutation_is_ignored_before_resolution_or_execution(tmp_path):
+async def test_negated_mutation_is_ignored_before_discovery_or_execution(tmp_path):
     stores = EngineStores(tmp_path)
     try:
         understanding = StaticUnderstanding(
@@ -413,11 +408,11 @@ async def test_negated_mutation_is_ignored_before_resolution_or_execution(tmp_pa
             }
         )
         ha = FakeHA({"switch.room": {"state": "on", "attributes": {}}})
-        device_calls = 0
+        calls = 0
 
         async def devices():
-            nonlocal device_calls
-            device_calls += 1
+            nonlocal calls
+            calls += 1
             return (_switch(),)
 
         result = await process_request(
@@ -429,10 +424,9 @@ async def test_negated_mutation_is_ignored_before_resolution_or_execution(tmp_pa
             memory=stores.memory,
             requests=stores.requests,
         )
-
         assert result.outcome == "ignored"
         assert result.reason == "source_negated"
-        assert device_calls == 0
+        assert calls == 0
         assert ha.calls == []
     finally:
         stores.close()
@@ -466,7 +460,6 @@ async def test_unresolved_target_returns_clarification_without_side_effect(tmp_p
             memory=stores.memory,
             requests=stores.requests,
         )
-
         assert result.outcome == "clarification"
         assert result.reason == "no_target_match"
         assert ha.calls == []
@@ -475,19 +468,12 @@ async def test_unresolved_target_returns_clarification_without_side_effect(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_critical_unlock_stops_at_approval_and_has_no_side_effect(tmp_path):
+async def test_critical_unlock_persists_restart_safe_approval_without_secret(tmp_path):
     stores = EngineStores(tmp_path)
-    approvals = ApprovalStore(tmp_path / "approvals.db")
+    pending = PendingApprovalStore(tmp_path / "pending.db")
     try:
         understanding = StaticUnderstanding(
-            {
-                "unlock": _intent(
-                    "unlock",
-                    domain="lock",
-                    operation="unlock",
-                    target="Front door",
-                )
-            }
+            {"unlock": _intent("unlock", domain="lock", operation="unlock", target="Front door")}
         )
         ha = FakeHA({"lock.front": {"state": "locked", "attributes": {}}})
 
@@ -502,14 +488,20 @@ async def test_critical_unlock_stops_at_approval_and_has_no_side_effect(tmp_path
             ha=ha,
             memory=stores.memory,
             requests=stores.requests,
-            approvals=approvals,
+            pending_approvals=pending,
         )
-
+        saved = pending.get("approve-unlock")
         assert result.outcome == "approval_required"
-        assert len(result.approval_tokens) == 1
+        assert result.approval_request_id == "approve-unlock"
+        assert saved is not None
+        assert saved.state == "pending"
+        assert saved.user_key == "u1"
+        assert saved.plans[0].domain == "lock"
+        assert saved.plans[0].action == "unlock"
+        assert saved.state_guards[0]["state"] == "locked"
         assert ha.calls == []
     finally:
-        approvals.close()
+        pending.close()
         stores.close()
 
 
@@ -518,14 +510,7 @@ async def test_shadow_mode_builds_and_validates_plan_without_mutation(tmp_path):
     stores = EngineStores(tmp_path)
     try:
         understanding = StaticUnderstanding(
-            {
-                "off": _intent(
-                    "off",
-                    domain="switch",
-                    operation="off",
-                    target="Room switch",
-                )
-            }
+            {"off": _intent("off", domain="switch", operation="off", target="Room switch")}
         )
         ha = FakeHA({"switch.room": {"state": "on", "attributes": {}}})
 
@@ -543,7 +528,6 @@ async def test_shadow_mode_builds_and_validates_plan_without_mutation(tmp_path):
             dry_run=True,
             verification_delay=0,
         )
-
         assert result.outcome == "shadow"
         assert result.plans[0].action == "turn_off"
         assert ha.calls == []
