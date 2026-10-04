@@ -17,11 +17,12 @@ import hashlib
 import logging
 import time
 from collections.abc import Awaitable, Callable, Iterable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
 from .ai_providers import AIProviderStore
-from .ai_runtime import AIRuntimeError, AIProviderRuntimeRegistry
+from .ai_runtime import AIProviderRuntimeRegistry, AIRuntimeError
 from .authorization import ApprovalStore, UserPolicy
 from .conditional import ConditionalRuleStore
 from .conversation_handler import build_conversation_handler
@@ -120,14 +121,10 @@ class BobiNextMessagingRuntime:
     def _optional_media_registry(self) -> MediaAnalyzerRegistry:
         audio = None
         image = None
-        try:
+        with suppress(AIRuntimeError):
             audio = AudioAnalyzer(self.ai.audio_provider())
-        except AIRuntimeError:
-            pass
-        try:
+        with suppress(AIRuntimeError):
             image = ImageAnalyzer(self.ai.vision_provider())
-        except AIRuntimeError:
-            pass
         return MediaAnalyzerRegistry(audio=audio, image=image)
 
     def _waha_boundary(
@@ -237,10 +234,8 @@ class BobiNextMessagingRuntime:
         )
 
     async def _idle(self, stop_event: asyncio.Event) -> None:
-        try:
+        with suppress(TimeoutError):
             await asyncio.wait_for(stop_event.wait(), timeout=self.poll_interval_seconds)
-        except TimeoutError:
-            pass
 
     async def _worker(
         self,
