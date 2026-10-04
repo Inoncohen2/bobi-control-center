@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -207,8 +208,6 @@ class HomeAssistantEventStream:
                     "HA event stream disconnected (%s); reconnecting",
                     type(exc).__name__,
                 )
-                try:
+                with suppress(TimeoutError):
                     await asyncio.wait_for(stop_event.wait(), timeout=delay)
-                except TimeoutError:
-                    pass
                 delay = min(self._reconnect_max, delay * 2)
