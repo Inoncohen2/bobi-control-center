@@ -227,15 +227,15 @@ async def test_terminal_duplicate_request_never_executes_twice(tmp_path):
         async def devices():
             return (_switch(),)
 
-        kwargs = dict(
-            understanding=understanding,
-            list_devices=devices,
-            policy_for=_policy,
-            ha=ha,
-            memory=stores.memory,
-            requests=stores.requests,
-            verification_delay=0,
-        )
+        kwargs = {
+            "understanding": understanding,
+            "list_devices": devices,
+            "policy_for": _policy,
+            "ha": ha,
+            "memory": stores.memory,
+            "requests": stores.requests,
+            "verification_delay": 0,
+        }
         first = await process_request(
             EngineRequest("same", "u1", "off", "worker-a", now_ts=100),
             **kwargs,
@@ -326,15 +326,15 @@ async def test_followup_reference_uses_active_device_context(tmp_path):
         async def devices():
             return (_switch(),)
 
-        kwargs = dict(
-            understanding=understanding,
-            list_devices=devices,
-            policy_for=_policy,
-            ha=ha,
-            memory=stores.memory,
-            requests=stores.requests,
-            verification_delay=0,
-        )
+        kwargs = {
+            "understanding": understanding,
+            "list_devices": devices,
+            "policy_for": _policy,
+            "ha": ha,
+            "memory": stores.memory,
+            "requests": stores.requests,
+            "verification_delay": 0,
+        }
         first = await process_request(
             EngineRequest("r1", "u1", "turn room off", "worker-a", now_ts=100),
             **kwargs,
