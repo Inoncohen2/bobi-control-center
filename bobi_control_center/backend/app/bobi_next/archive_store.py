@@ -254,7 +254,12 @@ class ArchiveStore:
                     str(source_message_id or "").strip()[:512],
                     str(text_excerpt or "").strip()[:_MAX_TEXT],
                     json.dumps(list(normalized_tags), ensure_ascii=False, separators=(",", ":")),
-                    json.dumps(safe_metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                    json.dumps(
+                        safe_metadata,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
                     now,
                     now,
                 ),
@@ -362,7 +367,10 @@ class ArchiveStore:
         now = int(now_ts or time.time())
         with self._db:
             result = self._db.execute(
-                "UPDATE archive_objects SET status=?, updated_ts=? WHERE object_id=? AND owner_key=?",
+                (
+                    "UPDATE archive_objects SET status=?, updated_ts=? "
+                    "WHERE object_id=? AND owner_key=?"
+                ),
                 (status, now, object_id, owner_key),
             )
         if result.rowcount != 1:
