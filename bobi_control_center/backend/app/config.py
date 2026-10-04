@@ -45,10 +45,18 @@ class Settings(BaseSettings):
     #: bundle, but this switch is what exposes the state-changing setup API.
     next_setup_enabled: bool = False
 
-    #: The Bobi Next background runtime is a separate opt-in from exposing its
-    #: setup API. Keeping this false guarantees that development code cannot
-    #: subscribe to live HA events or execute Next rules in existing installs.
+    #: The Bobi Next background HA/event runtime is opt-in independently from
+    #: setup. Keeping this false guarantees development code cannot subscribe to
+    #: live HA events or execute Next rules in an existing installation.
     next_runtime_enabled: bool = False
+
+    #: WhatsApp/messaging is an even narrower gate. It must never become active
+    #: merely because HA event testing was enabled.
+    next_messaging_enabled: bool = False
+
+    #: First live messaging trials are shadow-only by default. A deliberate
+    #: cutover must turn this off before Bobi Next may mutate the home.
+    next_messaging_dry_run: bool = True
 
     #: A dedicated Cloudflare hostname may reach the container directly.  It
     #: is deliberately opt-in: until both this hostname and a password hash are
