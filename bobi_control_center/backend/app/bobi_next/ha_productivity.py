@@ -1,7 +1,7 @@
 """Safe native Home Assistant adapters for calendar and to-do capabilities.
 
 These adapters expose fixed product operations instead of a generic HA action
-surface.  The understanding layer can request calendar/to-do semantics, while
+surface. The understanding layer can request calendar/to-do semantics, while
 only deterministic code chooses the concrete Home Assistant action and fields.
 """
 
@@ -14,6 +14,7 @@ from typing import Any, Protocol
 _ENTITY_ID = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
 _TODO_STATUSES = {"needs_action", "completed"}
 _DURATION_KEYS = {"days", "hours", "minutes", "seconds"}
+_IN_OFFSET_KEYS = {"days", "weeks"}
 
 
 class ProductivityHAClient(Protocol):
@@ -48,20 +49,44 @@ def _required_text(value: str, field: str, *, limit: int = 1000) -> str:
     return text
 
 
-def _duration(value: Mapping[str, int] | None) -> dict[str, int] | None:
+def _positive_period(
+    value: Mapping[str, int] | None,
+    *,
+    allowed_keys: set[str],
+    invalid_key_error: str,
+    invalid_value_error: str,
+) -> dict[str, int] | None:
     if value is None:
         return None
     result: dict[str, int] = {}
     for key, raw in value.items():
-        if key not in _DURATION_KEYS:
-            raise ValueError("invalid_calendar_duration_key")
+        if key not in allowed_keys:
+            raise ValueError(invalid_key_error)
         amount = int(raw)
         if amount < 0:
-            raise ValueError("invalid_calendar_duration")
+            raise ValueError(invalid_value_error)
         result[key] = amount
     if not result or not any(result.values()):
-        raise ValueError("calendar_duration_required")
+        raise ValueError(invalid_value_error)
     return result
+
+
+def _duration(value: Mapping[str, int] | None) -> dict[str, int] | None:
+    return _positive_period(
+        value,
+        allowed_keys=_DURATION_KEYS,
+        invalid_key_error="invalid_calendar_duration_key",
+        invalid_value_error="invalid_calendar_duration",
+    )
+
+
+def _in_offset(value: Mapping[str, int] | None) -> dict[str, int] | None:
+    return _positive_period(
+        value,
+        allowed_keys=_IN_OFFSET_KEYS,
+        invalid_key_error="invalid_calendar_in_offset_key",
+        invalid_value_error="invalid_calendar_in_offset",
+    )
 
 
 class CalendarAdapter:
@@ -140,8 +165,8 @@ class CalendarAdapter:
             data["start_date"] = start_date.strip()
             data["end_date"] = end_date.strip()
         else:
-            offset = _duration(in_offset)
-            if offset is None or set(offset).difference({"days"}):
+            offset = _in_offset(in_offset)
+            if offset is None:
                 raise ValueError("invalid_calendar_in_offset")
             data["in"] = offset
 
