@@ -16,6 +16,13 @@ from collections.abc import Callable
 from .activity import ActivityLedger
 from .activity_runtime import UndoRequestStore, undo_once
 from .approval_continuation import approve_latest_pending, reject_latest_pending
+from .archive_capture import ArchiveCaptureRequest, ArchiveCaptureService
+from .archive_commands import (
+    archive_write_allowed,
+    default_archive_title,
+    explicit_archive_save,
+    infer_archive_kind,
+)
 from .authorization import ApprovalStore
 from .conditional import ConditionalRuleStore
 from .engine import (
@@ -153,6 +160,32 @@ def _undo_response(outcome: str, reason: str) -> str:
     return "לא ניתן לבטל את הפעולה האחרונה בבטחה."
 
 
+def _direct_response(
+    memory: BobiMemory,
+    message: InboundMessage,
+    text: str,
+    *,
+    now_ts: int,
+) -> MessageResponse:
+    """Persist a deterministic non-engine reply without media-derived authority."""
+
+    memory.store_turn(
+        message.user_key,
+        message.text,
+        direction="inbound",
+        message_id=message.message_id,
+        created_ts=now_ts,
+    )
+    memory.store_turn(
+        message.user_key,
+        text,
+        direction="outbound",
+        message_id=f"reply:{message.message_id}",
+        created_ts=now_ts,
+    )
+    return MessageResponse(text)
+
+
 def build_conversation_handler(
     *,
     understanding: UnderstandingProvider,
@@ -166,6 +199,7 @@ def build_conversation_handler(
     schedules: ScheduleStore | None = None,
     conditional_rules: ConditionalRuleStore | None = None,
     media_pipeline: MediaPipeline | None = None,
+    archive_capture: ArchiveCaptureService | None = None,
     activity: ActivityLedger | None = None,
     undo_requests: UndoRequestStore | None = None,
     dry_run: bool = False,
@@ -292,6 +326,57 @@ def build_conversation_handler(
                 enriched = await media_pipeline.enrich(message)
             except MediaPipelineError:
                 return MessageResponse("לא הצלחתי לעבד את הקובץ בצורה בטוחה.")
+
+            # Archive side effects require authority from the user's original
+            # caption only. OCR/transcription/analyzer output never authorizes save.
+            if explicit_archive_save(message.text):
+                policy = await policy_for(message.user_key)
+                if not archive_write_allowed(policy, user_key=message.user_key):
+                    return _direct_response(
+                        memory,
+                        message,
+                        "אין הרשאה לשמור את הקובץ.",
+                        now_ts=now,
+                    )
+                if archive_capture is None:
+                    return _direct_response(
+                        memory,
+                        message,
+                        "שמירת מסמכים עדיין לא מוגדרת ב-Bobi Next.",
+                        now_ts=now,
+                    )
+                if enriched.loaded_media is None:
+                    return _direct_response(
+                        memory,
+                        message,
+                        "לא הצלחתי לטעון את הקובץ בצורה בטוחה לשמירה.",
+                        now_ts=now,
+                    )
+
+                kind = infer_archive_kind(message.text, enriched.loaded_media)
+                title = default_archive_title(enriched.loaded_media, kind=kind)
+                excerpt = ""
+                if enriched.media is not None:
+                    excerpt = str(enriched.media.text or enriched.media.summary or "").strip()
+                await archive_capture.capture(
+                    ArchiveCaptureRequest(
+                        owner_key=message.user_key,
+                        kind=kind,
+                        title=title,
+                        source_message_id=message.message_id,
+                        text_excerpt=excerpt,
+                    ),
+                    media=enriched.loaded_media,
+                    analysis=enriched.media,
+                    now_ts=now,
+                )
+                return _direct_response(
+                    memory,
+                    message,
+                    "✅ שמרתי את הקובץ.",
+                    now_ts=now,
+                )
+
             request_text = enriched.text
 
         request_understanding: UnderstandingProvider = understanding
