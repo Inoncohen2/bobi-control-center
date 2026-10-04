@@ -25,8 +25,6 @@ def _provider(secret_ref: str) -> MessagingProvider:
         engine="GOWS",
         secret_ref="",
         config={WEBHOOK_HMAC_REF_KEY: secret_ref},
-        created_ts=1,
-        updated_ts=1,
     )
 
 
