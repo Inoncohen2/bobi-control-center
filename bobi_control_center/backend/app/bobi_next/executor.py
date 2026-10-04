@@ -1,7 +1,7 @@
 """Guarded Home Assistant execution with read-after-write verification.
 
-This module has no transport-specific knowledge.  Production wiring must supply
-an HA client that can call a native service and read one entity state.  The
+This module has no transport-specific knowledge. Production wiring must supply
+an HA client that can call a native service and read one entity state. The
 executor fails closed on unavailable targets, low-confidence plans and missing
 confirmation, and never treats an accepted service call as success until HA's
 live state confirms the expected result.
@@ -43,26 +43,34 @@ def verify_expected(snapshot: dict[str, Any] | None, expected: dict[str, Any]) -
         return False
     if "state_any" in expected and state not in {str(v) for v in expected["state_any"]}:
         return False
+    if "state_not" in expected and state in {str(v) for v in expected["state_not"]}:
+        return False
     if "attribute" not in expected:
         return True
 
     attribute = str(expected["attribute"])
-    wanted = float(expected["value"])
+    wanted = expected.get("value")
     tolerance = float(expected.get("tolerance", 0.0))
     if attribute == "brightness_pct":
         raw = attrs.get("brightness")
         if raw is None:
             return False
-        actual = float(raw) / 255.0 * 100.0
-    else:
-        raw = attrs.get(attribute)
-        if raw is None:
-            return False
         try:
-            actual = float(raw)
+            actual = float(raw) / 255.0 * 100.0
+            target = float(wanted)
         except (TypeError, ValueError):
-            return str(raw) == str(expected["value"])
-    return abs(actual - wanted) <= tolerance
+            return False
+        return abs(actual - target) <= tolerance
+
+    raw = attrs.get(attribute)
+    if raw is None:
+        return False
+    try:
+        actual_number = float(raw)
+        wanted_number = float(wanted)
+    except (TypeError, ValueError):
+        return str(raw) == str(wanted)
+    return abs(actual_number - wanted_number) <= tolerance
 
 
 async def execute_plan(
