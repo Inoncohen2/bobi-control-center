@@ -41,13 +41,14 @@ def test_ai_provider_round_trip_and_selection_survive_restart(tmp_path: Path) ->
         reopened.close()
 
 
-def test_safe_snapshot_never_exposes_secret_reference(tmp_path: Path) -> None:
+def test_safe_snapshot_never_exposes_secret_reference_or_private_endpoint(tmp_path: Path) -> None:
     store = AIProviderStore(tmp_path / "ai.db")
     try:
         store.upsert(
             provider_key="p1",
             provider_type="provider",
             display_name="Provider",
+            endpoint="http://private-ai.internal/v1",
             secret_ref="secret://do-not-expose",
             capabilities=frozenset({"intent"}),
         )
@@ -55,6 +56,7 @@ def test_safe_snapshot_never_exposes_secret_reference(tmp_path: Path) -> None:
         snapshot = store.safe_snapshot()
         serialized = repr(snapshot)
         assert "secret://do-not-expose" not in serialized
+        assert "private-ai.internal" not in serialized
         assert snapshot["providers"][0]["has_secret_ref"] is True
     finally:
         store.close()
@@ -83,6 +85,27 @@ def test_store_persists_secret_reference_not_secret_value(tmp_path: Path) -> Non
         assert "api_key" not in row[1]
     finally:
         db.close()
+
+
+def test_plaintext_secrets_are_rejected_even_when_nested(tmp_path: Path) -> None:
+    store = AIProviderStore(tmp_path / "ai.db")
+    try:
+        with pytest.raises(ValueError, match="plaintext_secret_not_allowed"):
+            store.upsert(
+                provider_key="p1",
+                provider_type="provider",
+                display_name="Provider",
+                config={"transport": {"api_key": "plain-secret"}},
+            )
+        with pytest.raises(ValueError, match="plaintext_secret_not_allowed"):
+            store.upsert(
+                provider_key="p2",
+                provider_type="provider",
+                display_name="Provider 2",
+                config={"headers": [{"authorization": "Bearer plain-secret"}]},
+            )
+    finally:
+        store.close()
 
 
 def test_invalid_capability_is_rejected(tmp_path: Path) -> None:
