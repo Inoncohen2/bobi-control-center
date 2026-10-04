@@ -1,6 +1,6 @@
 """Runtime bridge from HA state events into Bobi Next conditional execution.
 
-This object owns no policy and performs no direct service call.  It wires the
+This object owns no policy and performs no direct service call. It wires the
 read-only Home Assistant event stream to the existing conditional runner, which
 re-discovers devices and re-enters authorization + secure execution for every
 matched rule.
@@ -26,6 +26,7 @@ logger = logging.getLogger("bobi.next.conditional-runtime")
 DeviceProvider = Callable[[], Awaitable[Iterable[DeviceRecord]]]
 PolicyProvider = Callable[[str], Awaitable[UserPolicy]]
 ResultHandler = Callable[[tuple[ConditionalRunResult, ...]], Awaitable[None]]
+EventObserver = Callable[[StateChangeEvent], Awaitable[None]]
 
 
 @dataclass(slots=True)
@@ -48,6 +49,7 @@ class ConditionalEventRuntime:
         policy_for: PolicyProvider,
         pending_approvals: PendingApprovalStore | None = None,
         result_handler: ResultHandler | None = None,
+        event_observer: EventObserver | None = None,
         verification_attempts: int = 3,
         verification_delay: float = 0.35,
     ) -> None:
@@ -58,6 +60,7 @@ class ConditionalEventRuntime:
         self.policy_for = policy_for
         self.pending_approvals = pending_approvals
         self.result_handler = result_handler
+        self.event_observer = event_observer
         self.verification_attempts = max(1, int(verification_attempts))
         self.verification_delay = max(0.0, float(verification_delay))
         self.stats = ConditionalRuntimeStats()
@@ -67,6 +70,8 @@ class ConditionalEventRuntime:
         event: StateChangeEvent,
     ) -> tuple[ConditionalRunResult, ...]:
         self.stats.events_seen += 1
+        if self.event_observer is not None:
+            await self.event_observer(event)
         results = await run_conditional_event(
             self.store,
             self.client,
