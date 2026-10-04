@@ -19,6 +19,8 @@ from .authorization import (
     approval_state_guard,
     authorize_plan,
 )
+from .conditional import ConditionalRuleStore
+from .conditional_capture import persist_conditional_rule
 from .executor import HAControlClient
 from .intent import SemanticIntent
 from .memory import BobiMemory
@@ -140,6 +142,7 @@ async def process_request(
     memory: BobiMemory,
     requests: RequestLedger,
     schedules: ScheduleStore | None = None,
+    conditional_rules: ConditionalRuleStore | None = None,
     pending_approvals: PendingApprovalStore | None = None,
     dry_run: bool = False,
     context_ttl_seconds: int = 300,
@@ -238,17 +241,32 @@ async def process_request(
 
         if routed.defer_execution:
             if routed.defer_reason == "conditional":
+                if conditional_rules is None:
+                    raise RuntimeError("conditional_store_not_configured")
+                rule = persist_conditional_rule(
+                    conditional_rules,
+                    request_id=request.request_id,
+                    user_key=request.user_key,
+                    source_text=request.text,
+                    intent=intent,
+                    routed=routed,
+                    action_resolution=resolution,
+                    provenance=provenance,
+                    devices=devices,
+                    now_ts=now,
+                )
                 requests.complete(
                     request.request_id,
                     owner_token=request.owner_token,
-                    terminal_kind="conditional_pending",
+                    terminal_kind="conditional_created",
                     now_ts=now,
                 )
                 return EngineResult(
                     request.request_id,
-                    "unsupported",
-                    "conditional_engine_not_connected",
+                    "conditional_created",
+                    "conditional_created",
                     resolution=resolution,
+                    metadata={"rule_id": rule.rule_id},
                 )
             if schedules is None:
                 raise RuntimeError("scheduler_not_configured")
