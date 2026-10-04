@@ -11,10 +11,12 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from .ha_discovery import DiscoverySnapshot
+from .intent import SemanticIntent
 from .memory import BobiMemory
 from .models import ActionPlan, TargetResolution
 from .planner import PlanError, build_plan
 from .resolver import resolve_target
+from .routing import route_intent
 
 
 class DiscoveryClient(Protocol):
@@ -130,3 +132,42 @@ async def run_shadow(
             "resolution_kind": resolution.resolution_kind,
         },
     )
+
+
+async def run_intent_shadow(
+    *,
+    request_id: str,
+    user_key: str,
+    intent: SemanticIntent,
+    discovery: DiscoveryClient,
+    memory: BobiMemory,
+) -> ShadowResult:
+    """Route a semantic intent into the side-effect-free shadow pipeline."""
+
+    routed = route_intent(intent)
+    result = await run_shadow(
+        ShadowRequest(
+            request_id=request_id,
+            user_key=user_key,
+            text=intent.target_text or intent.raw_text,
+            domain_hint=routed.domain_hint,
+            capability=routed.capability,
+            operation=routed.operation,
+            value=routed.value,
+            delta=routed.delta,
+            allow_group=routed.allow_group,
+        ),
+        discovery=discovery,
+        memory=memory,
+    )
+    result.metadata.update(
+        {
+            "semantic_domain": intent.canonical_domain,
+            "semantic_operation": intent.canonical_operation,
+            "scheduled": intent.scheduled,
+            "conditional": intent.conditional,
+            "defer_execution": routed.defer_execution,
+            "defer_reason": routed.defer_reason,
+        }
+    )
+    return result
