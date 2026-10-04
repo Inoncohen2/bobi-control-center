@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     #: bundle, but this switch is what exposes the state-changing setup API.
     next_setup_enabled: bool = False
 
+    #: The Bobi Next background runtime is a separate opt-in from exposing its
+    #: setup API. Keeping this false guarantees that development code cannot
+    #: subscribe to live HA events or execute Next rules in existing installs.
+    next_runtime_enabled: bool = False
+
     #: A dedicated Cloudflare hostname may reach the container directly.  It
     #: is deliberately opt-in: until both this hostname and a password hash are
     #: configured, no external request can reach Bobi's API.
