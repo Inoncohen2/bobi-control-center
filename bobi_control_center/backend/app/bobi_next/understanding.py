@@ -51,9 +51,12 @@ def _needs_rescue(intent: SemanticIntent, policy: RescuePolicy) -> str:
     confidence = float(intent.confidence or 0.0)
     if confidence < policy.minimum_confidence:
         return "low_confidence"
-    if policy.rescue_device_control_missing_contract and intent.family == "device_control":
-        if not intent.canonical_domain or not intent.canonical_operation:
-            return "missing_device_contract"
+    if (
+        policy.rescue_device_control_missing_contract
+        and intent.family == "device_control"
+        and (not intent.canonical_domain or not intent.canonical_operation)
+    ):
+        return "missing_device_contract"
     return ""
 
 
