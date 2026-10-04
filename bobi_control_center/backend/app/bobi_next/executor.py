@@ -10,6 +10,7 @@ live state confirms the expected result.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -81,6 +82,7 @@ async def execute_plan(
     dry_run: bool = False,
     verification_attempts: int = 3,
     verification_delay: float = 0.35,
+    before_validator: Callable[[dict[str, Any] | None], bool] | None = None,
 ) -> ExecutionResult:
     if plan.confidence < 0.90:
         return ExecutionResult(False, False, "low_confidence", plan)
@@ -90,6 +92,8 @@ async def execute_plan(
     before = await client.get_state(plan.entity_id)
     if before is None or str(before.get("state", "")) in {"unknown", "unavailable"}:
         return ExecutionResult(False, False, "target_unavailable", plan, before=before)
+    if before_validator is not None and not before_validator(before):
+        return ExecutionResult(False, False, "precondition_changed", plan, before=before)
     if dry_run:
         return ExecutionResult(False, False, "dry_run", plan, before=before)
 
