@@ -7,7 +7,8 @@ provider-specific inbox/outbox -> reaction/typing -> trusted media -> semantic A
 Interactive provider events are routed separately from free-form messages. Poll
 votes are matched to Bobi-owned poll ids and linked users and are never passed to
 AI as command text. Outbound polls are registered only after WAHA returns its
-canonical poll message id.
+canonical poll message id. Contextual poll selections are reconciled from their
+durable vote ledger into a separate exactly-once interaction worker.
 
 Each messaging provider owns a separate durable queue/worker. Bobi memory,
 request ledger, schedules, activity and approval state are installation-wide so
@@ -21,7 +22,7 @@ import asyncio
 import hashlib
 import logging
 import time
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,12 +35,18 @@ from .authorization import ApprovalStore, UserPolicy
 from .conditional import ConditionalRuleStore
 from .conversation_handler import build_conversation_handler
 from .executor import HAControlClient
+from .interaction_dispatch import (
+    InteractionDispatchStore,
+    InteractionHandler,
+    process_next_interaction,
+)
 from .media_analyzers import AudioAnalyzer, ImageAnalyzer, MediaAnalyzerRegistry
 from .media_pipeline import MediaPipeline
 from .memory import BobiMemory
 from .messaging import InboundMessage, MessageStore, MessageTransport, process_next_message
 from .models import DeviceRecord
 from .pending_approval import PendingApprovalStore
+from .poll_dispatch_bridge import reconcile_poll_dispatches
 from .poll_interactions import PollInteraction, PollInteractionStore
 from .poll_outbound import send_registered_poll
 from .request_ledger import RequestLedger
@@ -49,7 +56,7 @@ from .setup_store import MessagingProvider, SetupStore
 from .understanding import ResilientUnderstandingProvider
 from .waha_adapter import WahaMediaLoader, WahaTransport
 from .waha_ingest import IngestResult, ingest_waha_event
-from .waha_interactions import ingest_waha_poll_vote
+from .waha_interactions import ingest_waha_poll_vote, parse_waha_poll_vote
 
 logger = logging.getLogger("bobi.next.messaging-runtime")
 
@@ -76,6 +83,14 @@ def _provider_storage_key(provider_key: str) -> str:
     return hashlib.sha256(provider_key.encode("utf-8")).hexdigest()[:20]
 
 
+def _interaction_namespace(value: str) -> str:
+    key = value.casefold().strip()
+    allowed = "abcdefghijklmnopqrstuvwxyz0123456789_-"
+    if not key or ":" in key or any(ch not in allowed for ch in key):
+        return ""
+    return key
+
+
 def _reaction_for(message: InboundMessage) -> str:
     """Immediate transport acknowledgement before the expensive brain path."""
 
@@ -99,6 +114,7 @@ class BobiNextMessagingRuntime:
         policy_for: PolicyProvider,
         pending_approvals: PendingApprovalStore,
         conditional_rules: ConditionalRuleStore | None = None,
+        interaction_handlers: Mapping[str, InteractionHandler] | None = None,
         dry_run: bool = False,
         poll_interval_seconds: float = 0.25,
     ) -> None:
@@ -124,6 +140,12 @@ class BobiNextMessagingRuntime:
         self.schedules = ScheduleStore(self.data_dir / "bobi-next-schedules.db")
         self.approvals = ApprovalStore(self.data_dir / "bobi-next-approvals.db")
         self.interactions = PollInteractionStore(self.data_dir / "bobi-next-interactions.db")
+        self.interaction_dispatches = InteractionDispatchStore(
+            self.data_dir / "bobi-next-interaction-dispatch.db"
+        )
+        self.interaction_handlers: dict[str, InteractionHandler] = {}
+        for namespace, handler in dict(interaction_handlers or {}).items():
+            self.register_interaction_handler(namespace, handler)
         self.ai_store = AIProviderStore(self.data_dir / "bobi-next-ai.db")
         self.secrets = EncryptedSecretVault(
             self.data_dir / "bobi-next-secrets.db",
@@ -133,7 +155,24 @@ class BobiNextMessagingRuntime:
         self.boundaries: dict[str, ProviderBoundary] = {}
         self.stop_event: asyncio.Event | None = None
         self.tasks: dict[str, asyncio.Task[None]] = {}
+        self.interaction_task: asyncio.Task[None] | None = None
         self._closed = False
+
+    def register_interaction_handler(
+        self,
+        namespace: str,
+        handler: InteractionHandler,
+    ) -> None:
+        """Register one deterministic interaction namespace before runtime start."""
+
+        key = _interaction_namespace(namespace)
+        if not key:
+            raise ValueError("interaction_namespace_invalid")
+        if not callable(handler):
+            raise TypeError("interaction_handler_not_callable")
+        if self.interaction_task is not None and not self.interaction_task.done():
+            raise RuntimeError("interaction_runtime_started")
+        self.interaction_handlers[key] = handler
 
     def _optional_media_registry(self) -> MediaAnalyzerRegistry:
         audio = None
@@ -292,14 +331,25 @@ class BobiNextMessagingRuntime:
 
         event_name = str(event.get("event") or "")
         if event_name in {"poll.vote", "poll.vote.failed"}:
+            parsed = parse_waha_poll_vote(event)
             vote = ingest_waha_poll_vote(
                 event,
                 provider_key=provider_key,
                 setup=self.setup,
                 interactions=self.interactions,
             )
-            if vote is None:
+            if vote is None or parsed is None:
                 return IngestResult(False, "ignored_event")
+            # Reconcile even for a duplicate/invalid current event. A previous
+            # accepted vote may have been committed immediately before a crash
+            # and still need its deterministic continuation queued.
+            reconcile_poll_dispatches(
+                self.interactions,
+                self.interaction_dispatches,
+                provider=provider_key,
+                poll_message_id=parsed.poll_message_id,
+                now_ts=int(time.time()),
+            )
             return IngestResult(
                 vote.accepted,
                 vote.reason,
@@ -316,6 +366,34 @@ class BobiNextMessagingRuntime:
     async def _idle(self, stop_event: asyncio.Event) -> None:
         with suppress(TimeoutError):
             await asyncio.wait_for(stop_event.wait(), timeout=self.poll_interval_seconds)
+
+    def _transport_for(self, provider_key: str) -> MessageTransport:
+        boundary = self.boundaries.get(provider_key)
+        if boundary is None:
+            raise KeyError("provider_not_runtime_enabled")
+        return boundary.transport
+
+    async def _interaction_worker(self, stop_event: asyncio.Event) -> None:
+        owner_token = "bobi-next-interaction-worker"
+        while not stop_event.is_set():
+            try:
+                result = await process_next_interaction(
+                    self.interaction_dispatches,
+                    self.interaction_handlers,
+                    self._transport_for,
+                    owner_token=owner_token,
+                    now_ts=int(time.time()),
+                )
+            except Exception as exc:
+                # Do not log option content or user identifiers.
+                logger.warning(
+                    "Bobi Next interaction worker error type=%s",
+                    type(exc).__name__,
+                )
+                await self._idle(stop_event)
+                continue
+            if result is None:
+                await self._idle(stop_event)
 
     async def _worker(
         self,
@@ -348,11 +426,35 @@ class BobiNextMessagingRuntime:
                 await self._idle(stop_event)
 
     async def start(self) -> MessagingRuntimeStatus:
-        if self.tasks and any(not task.done() for task in self.tasks.values()):
+        provider_running = any(not task.done() for task in self.tasks.values())
+        interaction_running = (
+            self.interaction_task is not None and not self.interaction_task.done()
+        )
+        if provider_running or interaction_running:
             return MessagingRuntimeStatus(True, "already_running", tuple(sorted(self.tasks)))
         status = self.prepare()
         if not status.ready:
             return status
+
+        try:
+            recovered = reconcile_poll_dispatches(
+                self.interactions,
+                self.interaction_dispatches,
+                now_ts=int(time.time()),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Bobi Next interaction recovery failed type=%s",
+                type(exc).__name__,
+            )
+            return MessagingRuntimeStatus(
+                False,
+                f"interaction_recovery_failed:{type(exc).__name__}",
+                status.providers,
+            )
+        if recovered:
+            logger.info("Bobi Next recovered interaction dispatches count=%d", recovered)
+
         self.stop_event = asyncio.Event()
         self.tasks = {
             provider_key: asyncio.create_task(
@@ -361,6 +463,10 @@ class BobiNextMessagingRuntime:
             )
             for provider_key, boundary in self.boundaries.items()
         }
+        self.interaction_task = asyncio.create_task(
+            self._interaction_worker(self.stop_event),
+            name="bobi-next-interactions",
+        )
         return MessagingRuntimeStatus(True, "started", tuple(sorted(self.tasks)))
 
     async def aclose(self) -> None:
@@ -368,17 +474,23 @@ class BobiNextMessagingRuntime:
             return
         if self.stop_event is not None:
             self.stop_event.set()
-        for task in self.tasks.values():
+
+        all_tasks = list(self.tasks.values())
+        if self.interaction_task is not None:
+            all_tasks.append(self.interaction_task)
+        for task in all_tasks:
             if not task.done():
                 task.cancel()
-        if self.tasks:
-            await asyncio.gather(*self.tasks.values(), return_exceptions=True)
+        if all_tasks:
+            await asyncio.gather(*all_tasks, return_exceptions=True)
         self.tasks.clear()
+        self.interaction_task = None
         self.stop_event = None
 
         for boundary in self.boundaries.values():
             boundary.messages.close()
         self.boundaries.clear()
+        self.interaction_dispatches.close()
         self.interactions.close()
         self.ai_store.close()
         self.secrets.close()
