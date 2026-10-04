@@ -15,7 +15,7 @@ from .authorization import RequestProvenance, UserPolicy, authorize_plan
 from .executor import HAControlClient
 from .models import DeviceRecord
 from .scheduled_actions import ScheduledDeviceAction, build_due_plans
-from .scheduler import ScheduleStore, ScheduledJob
+from .scheduler import ScheduledJob, ScheduleStore
 from .secure_execution import execute_authorized_plan
 
 DeviceProvider = Callable[[], Awaitable[Iterable[DeviceRecord]]]
