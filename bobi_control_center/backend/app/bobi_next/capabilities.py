@@ -1,6 +1,6 @@
 """Generic Home Assistant capability inference.
 
-No entity id, room name or vendor is special-cased here.  Capabilities are
+No entity id, room name or vendor is special-cased here. Capabilities are
 inferred from HA domains plus live attributes exposed by the integration.
 """
 
@@ -13,7 +13,10 @@ def _seq(value: Any) -> list[Any]:
     return list(value) if isinstance(value, (list, tuple, set)) else []
 
 
-def infer_capabilities(domain: str, attributes: dict[str, Any]) -> tuple[frozenset[str], dict[str, Any]]:
+def infer_capabilities(
+    domain: str,
+    attributes: dict[str, Any],
+) -> tuple[frozenset[str], dict[str, Any]]:
     domain = domain.lower().strip()
     caps: set[str] = set()
     limits: dict[str, Any] = {}
