@@ -8,8 +8,8 @@ import pytest
 
 from app.bobi_next.ai_providers import AIProviderConfig, AIProviderStore
 from app.bobi_next.ai_runtime import (
-    AIRuntimeError,
     AIProviderRuntimeRegistry,
+    AIRuntimeError,
     OpenAICompatibleProvider,
     semantic_intent_from_json,
 )
