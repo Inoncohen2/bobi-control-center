@@ -4,6 +4,10 @@ This module composes existing safe boundaries without exposing a new HTTP route:
 provider-specific inbox/outbox -> reaction/typing -> trusted media -> semantic AI
 -> deterministic Bobi engine -> verified reply.
 
+Interactive provider events are routed separately from free-form messages. Poll
+votes are matched to Bobi-owned poll ids and linked users and are never passed to
+AI as command text.
+
 Each messaging provider owns a separate durable queue/worker. Bobi memory,
 request ledger, schedules, activity and approval state are installation-wide so
 the same user can keep context across providers without allowing one provider's
@@ -35,6 +39,7 @@ from .memory import BobiMemory
 from .messaging import InboundMessage, MessageStore, MessageTransport, process_next_message
 from .models import DeviceRecord
 from .pending_approval import PendingApprovalStore
+from .poll_interactions import PollInteractionStore
 from .request_ledger import RequestLedger
 from .scheduler import ScheduleStore
 from .secret_vault import EncryptedSecretVault, SecretVaultError
@@ -42,6 +47,7 @@ from .setup_store import MessagingProvider, SetupStore
 from .understanding import ResilientUnderstandingProvider
 from .waha_adapter import WahaMediaLoader, WahaTransport
 from .waha_ingest import IngestResult, ingest_waha_event
+from .waha_interactions import ingest_waha_poll_vote
 
 logger = logging.getLogger("bobi.next.messaging-runtime")
 
@@ -115,6 +121,7 @@ class BobiNextMessagingRuntime:
         )
         self.schedules = ScheduleStore(self.data_dir / "bobi-next-schedules.db")
         self.approvals = ApprovalStore(self.data_dir / "bobi-next-approvals.db")
+        self.interactions = PollInteractionStore(self.data_dir / "bobi-next-interactions.db")
         self.ai_store = AIProviderStore(self.data_dir / "bobi-next-ai.db")
         self.secrets = EncryptedSecretVault(
             self.data_dir / "bobi-next-secrets.db",
@@ -236,6 +243,23 @@ class BobiNextMessagingRuntime:
         boundary = self.boundaries.get(provider_key)
         if boundary is None:
             return IngestResult(False, "provider_not_runtime_enabled")
+
+        event_name = str(event.get("event") or "")
+        if event_name in {"poll.vote", "poll.vote.failed"}:
+            vote = ingest_waha_poll_vote(
+                event,
+                provider_key=provider_key,
+                setup=self.setup,
+                interactions=self.interactions,
+            )
+            if vote is None:
+                return IngestResult(False, "ignored_event")
+            return IngestResult(
+                vote.accepted,
+                vote.reason,
+                duplicate=vote.duplicate,
+            )
+
         return ingest_waha_event(
             event,
             provider_key=provider_key,
@@ -309,6 +333,7 @@ class BobiNextMessagingRuntime:
         for boundary in self.boundaries.values():
             boundary.messages.close()
         self.boundaries.clear()
+        self.interactions.close()
         self.ai_store.close()
         self.secrets.close()
         self.approvals.close()
