@@ -50,13 +50,32 @@ def _climate_device(target: float) -> DeviceRecord:
 
 def _switch_action(*, requires_confirmation: bool = False) -> ScheduledDeviceAction:
     return ScheduledDeviceAction(
-        schema_version=1,
+        schema_version=2,
         source_text="turn it off later",
         device_ids=("dev-switch",),
         domain_hint="switch",
         capability="power",
         operation="off",
         requires_confirmation=requires_confirmation,
+        provenance_source_kind="direct",
+        provenance_same_text=True,
+        provenance_explicit_device_ids=("dev-switch",),
+        provenance_reference_only=False,
+    )
+
+
+def _context_switch_action(*, authorized: bool) -> ScheduledDeviceAction:
+    return ScheduledDeviceAction(
+        schema_version=2,
+        source_text="turn it off later",
+        device_ids=("dev-switch",),
+        domain_hint="switch",
+        capability="power",
+        operation="off",
+        provenance_source_kind="context",
+        provenance_same_text=False,
+        provenance_allowed_device_ids=("dev-switch",) if authorized else (),
+        provenance_reference_only=True,
     )
 
 
@@ -88,6 +107,10 @@ async def _policy(user_key: str) -> UserPolicy:
     return UserPolicy(user_key)
 
 
+async def _switch_devices():
+    return (_switch_device(),)
+
+
 @pytest.mark.asyncio
 async def test_due_low_risk_job_executes_verifies_and_completes(tmp_path):
     store = ScheduleStore(tmp_path / "schedule.db")
@@ -101,13 +124,10 @@ async def test_due_low_risk_job_executes_verifies_and_completes(tmp_path):
         )
         ha = FakeHA({"state": "on", "attributes": {}})
 
-        async def devices():
-            return (_switch_device(),)
-
         results = await run_due_jobs(
             store,
             ha,
-            list_devices=devices,
+            list_devices=_switch_devices,
             policy_for=_policy,
             owner_token="worker-1",
             now_ts=100,
@@ -124,17 +144,119 @@ async def test_due_low_risk_job_executes_verifies_and_completes(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_context_schedule_preserves_authority_and_executes(tmp_path):
+    store = ScheduleStore(tmp_path / "schedule.db")
+    try:
+        store.create(
+            job_id="job-context",
+            user_key="u1",
+            run_at_ts=100,
+            payload=_context_switch_action(authorized=True).to_payload(),
+            now_ts=1,
+        )
+        ha = FakeHA({"state": "on", "attributes": {}})
+
+        results = await run_due_jobs(
+            store,
+            ha,
+            list_devices=_switch_devices,
+            policy_for=_policy,
+            owner_token="worker-1",
+            now_ts=100,
+            verification_delay=0,
+        )
+
+        assert results[0].outcome == "completed"
+        assert ha.calls == [("switch", "turn_off", {"entity_id": "switch.room"})]
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_context_schedule_without_saved_authority_is_held_for_approval(tmp_path):
+    store = ScheduleStore(tmp_path / "schedule.db")
+    try:
+        store.create(
+            job_id="job-context-unsafe",
+            user_key="u1",
+            run_at_ts=100,
+            payload=_context_switch_action(authorized=False).to_payload(),
+            now_ts=1,
+        )
+        ha = FakeHA({"state": "on", "attributes": {}})
+
+        results = await run_due_jobs(
+            store,
+            ha,
+            list_devices=_switch_devices,
+            policy_for=_policy,
+            owner_token="worker-1",
+            now_ts=100,
+            verification_delay=0,
+        )
+
+        assert results[0].outcome == "awaiting_approval"
+        assert results[0].reason == "context_target_not_authorized"
+        assert store.get("job-context-unsafe").state == "awaiting_approval"
+        assert ha.calls == []
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_schema_v1_job_cannot_gain_invented_direct_authority(tmp_path):
+    store = ScheduleStore(tmp_path / "schedule.db")
+    try:
+        legacy = ScheduledDeviceAction(
+            schema_version=1,
+            source_text="legacy later",
+            device_ids=("dev-switch",),
+            domain_hint="switch",
+            capability="power",
+            operation="off",
+        )
+        store.create(
+            job_id="job-v1",
+            user_key="u1",
+            run_at_ts=100,
+            payload=legacy.to_payload(),
+            now_ts=1,
+        )
+        ha = FakeHA({"state": "on", "attributes": {}})
+
+        results = await run_due_jobs(
+            store,
+            ha,
+            list_devices=_switch_devices,
+            policy_for=_policy,
+            owner_token="worker-1",
+            now_ts=100,
+            verification_delay=0,
+        )
+
+        assert results[0].outcome == "awaiting_approval"
+        assert results[0].reason == "reference_without_context_provenance"
+        assert ha.calls == []
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
 async def test_due_job_rebuilds_relative_temperature_from_live_snapshot(tmp_path):
     store = ScheduleStore(tmp_path / "schedule.db")
     try:
         action = ScheduledDeviceAction(
-            schema_version=1,
+            schema_version=2,
             source_text="raise half a degree later",
             device_ids=("dev-climate",),
             domain_hint="climate",
             capability="temperature",
             operation="set",
             delta=0.5,
+            provenance_source_kind="direct",
+            provenance_same_text=True,
+            provenance_explicit_device_ids=("dev-climate",),
+            provenance_reference_only=False,
         )
         store.create(
             job_id="job-temp",
@@ -183,13 +305,10 @@ async def test_confirmation_required_job_is_held_before_any_side_effect(tmp_path
         )
         ha = FakeHA({"state": "on", "attributes": {}})
 
-        async def devices():
-            return (_switch_device(),)
-
         results = await run_due_jobs(
             store,
             ha,
-            list_devices=devices,
+            list_devices=_switch_devices,
             policy_for=_policy,
             owner_token="worker-1",
             now_ts=100,
@@ -216,16 +335,13 @@ async def test_policy_denial_is_terminal_and_never_calls_home_assistant(tmp_path
         )
         ha = FakeHA({"state": "on", "attributes": {}})
 
-        async def devices():
-            return (_switch_device(),)
-
         async def denied_policy(user_key: str):
             return UserPolicy(user_key, denied_capabilities=frozenset({"power"}))
 
         results = await run_due_jobs(
             store,
             ha,
-            list_devices=devices,
+            list_devices=_switch_devices,
             policy_for=denied_policy,
             owner_token="worker-1",
             now_ts=100,
@@ -253,13 +369,10 @@ async def test_unverified_side_effect_is_not_automatically_retried(tmp_path):
         )
         ha = FakeHA({"state": "on", "attributes": {}}, apply_mutations=False)
 
-        async def devices():
-            return (_switch_device(),)
-
         results = await run_due_jobs(
             store,
             ha,
-            list_devices=devices,
+            list_devices=_switch_devices,
             policy_for=_policy,
             owner_token="worker-1",
             now_ts=100,

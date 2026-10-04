@@ -1,9 +1,10 @@
 """Secure runtime for due Bobi Next scheduled device actions.
 
-The scheduler stores semantic intent only.  When a job becomes due this module
-rediscovers devices, rebuilds plans from live capabilities/state, re-evaluates
-the authenticated user's policy and only then enters the guarded HA executor.
-Approval-requiring jobs are held before any side effect occurs.
+The scheduler stores semantic intent and source authority only. When a job
+becomes due this module rediscovers devices, rebuilds plans from live
+capabilities/state, re-evaluates the authenticated user's policy and only then
+enters the guarded HA executor. Approval-requiring jobs are held before any
+side effect occurs.
 """
 
 from __future__ import annotations
@@ -32,10 +33,28 @@ class ScheduledRunResult:
 
 
 def _provenance_for(action: ScheduledDeviceAction) -> RequestProvenance:
+    """Restore the authority captured when the delayed command was created.
+
+    Development-era schema-v1 jobs intentionally deserialize with legacy,
+    fail-closed provenance. They therefore need fresh approval instead of
+    receiving invented direct-command authority at execution time.
+    """
+
+    if action.schema_version == 1:
+        return RequestProvenance(
+            source_kind="legacy",
+            same_text=False,
+            reference_only=True,
+        )
     return RequestProvenance(
-        source_kind="direct",
-        same_text=True,
-        explicit_target_ids=frozenset(action.device_ids),
+        source_kind=action.provenance_source_kind,
+        same_text=action.provenance_same_text,
+        explicit_target_ids=frozenset(action.provenance_explicit_device_ids),
+        allowed_target_ids=frozenset(action.provenance_allowed_device_ids),
+        negated=action.provenance_negated,
+        question=action.provenance_question,
+        literal_name=action.provenance_literal_name,
+        reference_only=action.provenance_reference_only,
     )
 
 
@@ -54,7 +73,7 @@ def _finalize_failure(
 
     Retrying after an unverified mutation is unsafe for relative commands such
     as "+0.5 degree", because rebuilding from live state could apply the delta
-    twice.  Those failures are terminal and must be surfaced for inspection.
+    twice. Those failures are terminal and must be surfaced for inspection.
     """
 
     may_retry = not any_side_effect and job.attempts < max(1, int(max_attempts))

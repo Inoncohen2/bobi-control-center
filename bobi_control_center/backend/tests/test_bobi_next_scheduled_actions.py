@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.bobi_next.authorization import RequestProvenance
 from app.bobi_next.models import DeviceRecord, EntityRecord, TargetResolution
 from app.bobi_next.routing import RoutedIntent
 from app.bobi_next.scheduled_actions import (
@@ -45,16 +46,47 @@ def _routed(delta: float = 0.5) -> RoutedIntent:
     )
 
 
-def test_scheduled_action_round_trip_keeps_stable_device_identity():
+def _direct_provenance() -> RequestProvenance:
+    return RequestProvenance(
+        source_kind="direct",
+        same_text=True,
+        explicit_target_ids=frozenset({"climate.bedroom"}),
+    )
+
+
+def test_scheduled_action_round_trip_keeps_stable_device_identity_and_authority():
     action = capture_scheduled_action(
         source_text="raise it later",
         routed=_routed(),
         resolution=TargetResolution(ok=True, devices=(_climate(23),), confidence=0.99),
+        provenance=_direct_provenance(),
     )
     restored = ScheduledDeviceAction.from_payload(action.to_payload())
+    assert restored.schema_version == 2
     assert restored.device_ids == ("dev-stable-ac",)
     assert restored.delta == 0.5
     assert restored.capability == "temperature"
+    assert restored.provenance_source_kind == "direct"
+    assert restored.provenance_same_text is True
+    assert restored.provenance_explicit_device_ids == ("dev-stable-ac",)
+
+
+def test_context_authority_is_normalized_to_stable_device_id():
+    action = capture_scheduled_action(
+        source_text="raise it later",
+        routed=_routed(),
+        resolution=TargetResolution(ok=True, devices=(_climate(23),), confidence=0.99),
+        provenance=RequestProvenance(
+            source_kind="context",
+            same_text=False,
+            allowed_target_ids=frozenset({"climate.bedroom"}),
+            reference_only=True,
+        ),
+    )
+    restored = ScheduledDeviceAction.from_payload(action.to_payload())
+    assert restored.provenance_source_kind == "context"
+    assert restored.provenance_allowed_device_ids == ("dev-stable-ac",)
+    assert restored.provenance_reference_only is True
 
 
 def test_relative_temperature_is_computed_from_live_state_at_execution_time():
@@ -62,6 +94,7 @@ def test_relative_temperature_is_computed_from_live_state_at_execution_time():
         source_text="in 20 minutes raise by half a degree",
         routed=_routed(),
         resolution=TargetResolution(ok=True, devices=(_climate(23),), confidence=0.99),
+        provenance=_direct_provenance(),
     )
 
     # The AC changed to 25 before the schedule fired. The due plan must become
@@ -76,6 +109,7 @@ def test_scheduled_action_fails_closed_if_stable_device_disappears():
         source_text="later",
         routed=_routed(),
         resolution=TargetResolution(ok=True, devices=(_climate(23),), confidence=0.99),
+        provenance=_direct_provenance(),
     )
     with pytest.raises(ValueError, match="scheduled_device_missing"):
         build_due_plans(action, (), request_id="job:2")
@@ -86,6 +120,7 @@ def test_scheduled_action_rechecks_capability_at_execution_time():
         source_text="later",
         routed=_routed(),
         resolution=TargetResolution(ok=True, devices=(_climate(23),), confidence=0.99),
+        provenance=_direct_provenance(),
     )
     entity = EntityRecord(
         entity_id="climate.bedroom",
@@ -109,7 +144,50 @@ def test_sensitive_scheduled_action_keeps_confirmation_requirement():
         source_text="later",
         routed=_routed(),
         resolution=TargetResolution(ok=True, devices=(_climate(23),), confidence=0.99),
+        provenance=_direct_provenance(),
         requires_confirmation=True,
     )
     plan = build_due_plans(action, (_climate(23),), request_id="job:4")[0]
     assert plan.requires_confirmation is True
+
+
+def test_capture_rejects_authority_for_a_different_target():
+    with pytest.raises(ValueError, match="scheduled_provenance_target_mismatch"):
+        capture_scheduled_action(
+            source_text="later",
+            routed=_routed(),
+            resolution=TargetResolution(ok=True, devices=(_climate(23),), confidence=0.99),
+            provenance=RequestProvenance(
+                source_kind="direct",
+                explicit_target_ids=frozenset({"climate.some_other_room"}),
+            ),
+        )
+
+
+def test_capture_rejects_negated_source():
+    with pytest.raises(ValueError, match="scheduled_source_negated"):
+        capture_scheduled_action(
+            source_text="do not raise it later",
+            routed=_routed(),
+            resolution=TargetResolution(ok=True, devices=(_climate(23),), confidence=0.99),
+            provenance=RequestProvenance(negated=True),
+        )
+
+
+def test_schema_v1_deserializes_with_fail_closed_legacy_provenance():
+    restored = ScheduledDeviceAction.from_payload(
+        {
+            "type": "device_action",
+            "schema_version": 1,
+            "source_text": "legacy delayed action",
+            "device_ids": ["dev-stable-ac"],
+            "domain_hint": "climate",
+            "capability": "temperature",
+            "operation": "set",
+            "delta": 0.5,
+        }
+    )
+    assert restored.schema_version == 1
+    assert restored.provenance_source_kind == "legacy"
+    assert restored.provenance_same_text is False
+    assert restored.provenance_reference_only is True
