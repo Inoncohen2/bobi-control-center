@@ -9,6 +9,7 @@ stores contain only opaque secret references.
 
 from __future__ import annotations
 
+import secrets
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal
@@ -20,6 +21,8 @@ from .ai_providers import AIProviderConfig, AIProviderStore
 from .authorization import RiskLevel, UserPolicy
 from .secret_vault import EncryptedSecretVault, SecretVaultError
 from .setup_store import BobiUser, MessagingProvider, SetupStore, policy_to_dict
+
+_WEBHOOK_HMAC_REF_KEY = "webhook_hmac_ref"
 
 
 class ProviderInput(BaseModel):
@@ -83,6 +86,7 @@ def _provider_view(provider: MessagingProvider) -> dict[str, Any]:
         "session": provider.session,
         "engine": provider.engine,
         "has_secret_ref": bool(provider.secret_ref),
+        "webhook_hmac_ready": bool(provider.config.get(_WEBHOOK_HMAC_REF_KEY)),
     }
 
 
@@ -166,6 +170,37 @@ def _store_secret_if_supplied(
         return vault.put(scope, value)
 
 
+def _ensure_waha_webhook_hmac(
+    *,
+    provider_key: str,
+    provider_type: str,
+    requested_config: dict[str, Any],
+    existing: MessagingProvider | None,
+    vault_database_path: Path,
+    vault_key_path: Path,
+) -> dict[str, Any]:
+    config = dict(requested_config)
+    # The client may never choose a vault reference. Preserve Bobi's existing
+    # reference or mint a fresh independent HMAC secret server-side.
+    config.pop(_WEBHOOK_HMAC_REF_KEY, None)
+    if provider_type != "waha":
+        return config
+
+    existing_ref = ""
+    if existing is not None and existing.provider_type == "waha":
+        existing_ref = str(existing.config.get(_WEBHOOK_HMAC_REF_KEY) or "")
+    if existing_ref:
+        config[_WEBHOOK_HMAC_REF_KEY] = existing_ref
+        return config
+
+    with _secret_vault(vault_database_path, vault_key_path) as vault:
+        config[_WEBHOOK_HMAC_REF_KEY] = vault.put(
+            f"webhook-hmac:{provider_key}",
+            secrets.token_urlsafe(48),
+        )
+    return config
+
+
 def create_setup_router(database_path: str | Path) -> APIRouter:
     path = Path(database_path)
     ai_path = path.with_name("bobi-next-ai.db")
@@ -190,6 +225,15 @@ def create_setup_router(database_path: str | Path) -> APIRouter:
                 vault_key_path=vault_key_path,
             )
             with _request_store(path) as store:
+                existing = store.get_provider(body.provider_key)
+                values["config"] = _ensure_waha_webhook_hmac(
+                    provider_key=body.provider_key,
+                    provider_type=body.provider_type,
+                    requested_config=values["config"],
+                    existing=existing,
+                    vault_database_path=vault_path,
+                    vault_key_path=vault_key_path,
+                )
                 provider = store.upsert_provider(**values)
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
