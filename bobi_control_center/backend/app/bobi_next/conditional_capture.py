@@ -1,4 +1,4 @@
-"""Capture a conditional trigger from semantic intent against live HA discovery.
+"""Capture conditional rules from semantic intent against live HA discovery.
 
 The understanding layer describes the trigger in human-semantic fields.  This
 module is the authority that binds that description to one currently discovered
@@ -9,9 +9,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from .conditional import TriggerSpec, trigger_ref
-from .models import DeviceRecord, EntityRecord
+from .authorization import RequestProvenance
+from .conditional import ConditionalRule, ConditionalRuleStore, TriggerSpec, trigger_ref
+from .intent import SemanticIntent
+from .models import DeviceRecord, EntityRecord, TargetResolution
 from .resolver import resolve_target
+from .routing import RoutedIntent
+from .scheduled_actions import capture_scheduled_action
 
 
 def _synthetic_devices(devices: tuple[DeviceRecord, ...]) -> tuple[DeviceRecord, ...]:
@@ -82,9 +86,8 @@ def capture_trigger(
         below = float(below) if below is not None else None
         if above is not None and below is not None and below >= above:
             raise ValueError("numeric_trigger_invalid_window")
-    else:
-        if above is not None or below is not None:
-            raise ValueError("threshold_only_valid_for_numeric_trigger")
+    elif above is not None or below is not None:
+        raise ValueError("threshold_only_valid_for_numeric_trigger")
 
     if kind == "availability" and to_state not in {"available", "unavailable", None}:
         raise ValueError("invalid_availability_target")
@@ -98,4 +101,40 @@ def capture_trigger(
         above=above,
         below=below,
         for_seconds=for_seconds,
+    )
+
+
+def persist_conditional_rule(
+    store: ConditionalRuleStore,
+    *,
+    request_id: str,
+    user_key: str,
+    source_text: str,
+    intent: SemanticIntent,
+    routed: RoutedIntent,
+    action_resolution: TargetResolution,
+    provenance: RequestProvenance,
+    devices: tuple[DeviceRecord, ...],
+    now_ts: int,
+) -> ConditionalRule:
+    if not intent.conditional or routed.defer_reason != "conditional":
+        raise ValueError("intent_is_not_conditional")
+
+    trigger = capture_trigger(intent.condition_payload, devices)
+    action = capture_scheduled_action(
+        source_text=source_text,
+        routed=routed,
+        resolution=action_resolution,
+        provenance=provenance,
+    )
+    payload = intent.condition_payload
+    return store.create(
+        rule_id=f"req-{request_id}",
+        user_key=user_key,
+        source_text=source_text,
+        trigger=trigger,
+        action_payload=action.to_payload(),
+        cooldown_seconds=max(0, int(payload.get("cooldown_seconds", 0) or 0)),
+        once=bool(payload.get("once", False)),
+        now_ts=now_ts,
     )
