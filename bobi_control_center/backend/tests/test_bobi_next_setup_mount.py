@@ -27,4 +27,5 @@ def test_next_setup_api_can_be_enabled_without_touching_production_routes(tmp_pa
         "messaging_provider",
         "user",
         "user_identity",
+        "ai_provider",
     ]
