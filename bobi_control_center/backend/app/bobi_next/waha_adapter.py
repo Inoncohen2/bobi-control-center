@@ -1,17 +1,19 @@
 """WAHA provider adapter for the Bobi Next messaging boundary.
 
 The adapter deliberately contains no brain, Home Assistant or authorization
-logic.  It only normalizes WAHA webhooks and implements the provider-neutral
-MessageTransport contract used by Bobi Next.
+logic. It normalizes WAHA webhooks, implements the provider-neutral transport,
+and exposes a bounded media loader that only reads WAHA's own /api/files path.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Protocol
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 import httpx
 
+from .media_pipeline import MediaDescriptor, MediaPipelineError
 from .messaging import InboundMessage, MessageTransport
 
 _WA_DIRECT_SUFFIX = "@" + "c.us"
@@ -223,3 +225,70 @@ class WahaTransport(MessageTransport):
             body["id"] = custom_id
         data = await self._request("POST", "/api/sendText", body)
         return _extract_provider_message_id(data, custom_id)
+
+
+class WahaMediaLoader:
+    """Download only WAHA-owned /api/files objects with a hard byte ceiling."""
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str = "",
+        client: httpx.AsyncClient | None = None,
+        timeout: float = 30.0,
+    ) -> None:
+        parsed = urlsplit(base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("invalid_waha_base_url")
+        self._scheme = parsed.scheme
+        self._netloc = parsed.netloc
+        self.api_key = api_key
+        self._client = client
+        self.timeout = timeout
+
+    def _trusted_url(self, provider_ref: str) -> str:
+        parsed = urlsplit(provider_ref)
+        decoded_path = unquote(parsed.path)
+        parts = [part for part in decoded_path.split("/") if part]
+        if len(parts) < 3 or parts[:2] != ["api", "files"]:
+            raise MediaPipelineError("waha_media_path_not_allowed")
+        if any(part in {".", ".."} for part in parts):
+            raise MediaPipelineError("waha_media_path_not_allowed")
+        return urlunsplit((self._scheme, self._netloc, parsed.path, parsed.query, ""))
+
+    async def load(self, descriptor: MediaDescriptor, *, max_bytes: int) -> bytes:
+        if not descriptor.provider_ref:
+            raise MediaPipelineError("waha_media_not_downloaded")
+        url = self._trusted_url(descriptor.provider_ref)
+        headers = {"Accept": "*/*"}
+        if self.api_key:
+            headers["X-Api-Key"] = self.api_key
+
+        owns_client = self._client is None
+        client = self._client or httpx.AsyncClient(timeout=self.timeout)
+        content = bytearray()
+        try:
+            async with client.stream("GET", url, headers=headers) as response:
+                response.raise_for_status()
+                content_length = response.headers.get("content-length")
+                if content_length:
+                    try:
+                        if int(content_length) > max_bytes:
+                            raise MediaPipelineError("media_too_large")
+                    except ValueError:
+                        pass
+                async for chunk in response.aiter_bytes():
+                    content.extend(chunk)
+                    if len(content) > max_bytes:
+                        raise MediaPipelineError("media_too_large")
+        except MediaPipelineError:
+            raise
+        except httpx.TimeoutException as exc:
+            raise MediaPipelineError("waha_media_timeout") from exc
+        except httpx.HTTPError as exc:
+            raise MediaPipelineError("waha_media_download_failed") from exc
+        finally:
+            if owns_client:
+                await client.aclose()
+        return bytes(content)
