@@ -1,0 +1,149 @@
+"""Capability-driven, side-effect-free action planning.
+
+The planner translates a resolved semantic device into native HA service data.
+It never sends the service call.  Validation and read-after-write expectations
+are part of the plan so execution can remain fail-closed and verifiable.
+"""
+
+from __future__ import annotations
+
+from decimal import Decimal, ROUND_HALF_UP
+from typing import Any
+
+from .models import ActionPlan, DeviceRecord
+
+
+class PlanError(ValueError):
+    pass
+
+
+def _quantize(value: float, minimum: float, step: float) -> float:
+    if step <= 0:
+        return float(value)
+    units = (Decimal(str(value)) - Decimal(str(minimum))) / Decimal(str(step))
+    units = units.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return float(Decimal(str(minimum)) + units * Decimal(str(step)))
+
+
+def _entity(device: DeviceRecord, capability: str):
+    entity = device.primary_for(capability)
+    if not entity:
+        raise PlanError(f"capability_not_supported:{capability}")
+    if not entity.available:
+        raise PlanError("target_unavailable")
+    return entity
+
+
+def build_plan(
+    *,
+    request_id: str,
+    device: DeviceRecord,
+    capability: str,
+    operation: str,
+    value: Any = None,
+    delta: float | None = None,
+    source: str = "direct",
+    confidence: float = 1.0,
+) -> ActionPlan:
+    entity = _entity(device, capability)
+    domain = entity.domain
+    data: dict[str, Any] = {"entity_id": entity.entity_id}
+    expected: dict[str, Any] = {}
+
+    if capability == "power":
+        if operation not in {"on", "off"}:
+            raise PlanError("invalid_power_operation")
+        action = "turn_on" if operation == "on" else "turn_off"
+        expected["state"] = operation
+
+    elif capability == "temperature" and domain == "climate":
+        current = entity.attributes.get("temperature")
+        if value is None and delta is None:
+            raise PlanError("temperature_value_missing")
+        if value is None:
+            if current is None:
+                raise PlanError("current_target_temperature_unknown")
+            target = float(current) + float(delta or 0)
+        else:
+            target = float(value)
+        minimum = float(entity.limits.get("min_temp", entity.attributes.get("min_temp", 7)))
+        maximum = float(entity.limits.get("max_temp", entity.attributes.get("max_temp", 35)))
+        step = float(entity.limits.get("temp_step", entity.attributes.get("target_temp_step", 0.5)) or 0.5)
+        target = _quantize(target, minimum, step)
+        if target < minimum or target > maximum:
+            raise PlanError("temperature_out_of_range")
+        action = "set_temperature"
+        data["temperature"] = target
+        expected["attribute"] = "temperature"
+        expected["value"] = target
+        expected["tolerance"] = max(0.01, step / 2)
+
+    elif capability == "brightness" and domain == "light":
+        if value is None and delta is None:
+            raise PlanError("brightness_value_missing")
+        if value is None:
+            current_raw = entity.attributes.get("brightness")
+            if current_raw is None:
+                raise PlanError("current_brightness_unknown")
+            current_pct = float(current_raw) / 255.0 * 100.0
+            target = current_pct + float(delta or 0)
+        else:
+            target = float(value)
+        target = max(0.0, min(100.0, target))
+        action = "turn_on" if target > 0 else "turn_off"
+        if target > 0:
+            data["brightness_pct"] = round(target)
+            expected.update({"attribute": "brightness_pct", "value": round(target), "tolerance": 2})
+        else:
+            expected["state"] = "off"
+
+    elif capability == "position" and domain == "cover":
+        target = float(value)
+        if not 0 <= target <= 100:
+            raise PlanError("position_out_of_range")
+        action = "set_cover_position"
+        data["position"] = round(target)
+        expected.update({"attribute": "current_position", "value": round(target), "tolerance": 2})
+
+    elif capability in {"open", "close", "stop"} and domain == "cover":
+        action = {"open": "open_cover", "close": "close_cover", "stop": "stop_cover"}[capability]
+        if capability in {"open", "close"}:
+            expected["state"] = "open" if capability == "open" else "closed"
+
+    elif capability in {"start", "stop", "return_home"} and domain == "vacuum":
+        action = {"start": "start", "stop": "stop", "return_home": "return_to_base"}[capability]
+        if capability == "start":
+            expected["state_any"] = ["cleaning"]
+        elif capability == "return_home":
+            expected["state_any"] = ["returning", "docked"]
+
+    elif capability == "lock" and domain == "lock":
+        action = "lock"
+        expected["state"] = "locked"
+    elif capability == "unlock" and domain == "lock":
+        action = "unlock"
+        expected["state"] = "unlocked"
+    elif capability == "press" and domain == "button":
+        action = "press"
+    elif capability == "select_option" and domain == "select":
+        options = entity.limits.get("options", [])
+        if value not in options:
+            raise PlanError("option_not_supported")
+        action = "select_option"
+        data["option"] = value
+        expected.update({"state": value})
+    else:
+        raise PlanError(f"unsupported_plan:{domain}:{capability}")
+
+    return ActionPlan(
+        request_id=request_id,
+        device_id=device.bobi_id,
+        entity_id=entity.entity_id,
+        domain=domain,
+        action=action,
+        capability=capability,
+        data=data,
+        expected=expected,
+        source=source,  # type: ignore[arg-type]
+        confidence=float(confidence),
+    )
