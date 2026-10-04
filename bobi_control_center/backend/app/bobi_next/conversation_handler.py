@@ -14,6 +14,7 @@ from collections.abc import Callable
 
 from .approval_continuation import approve_latest_pending, reject_latest_pending
 from .authorization import ApprovalStore
+from .conditional import ConditionalRuleStore
 from .engine import (
     DeviceProvider,
     EngineRequest,
@@ -84,6 +85,7 @@ def _terminal_recovery_message(terminal_kind: str) -> str:
         "executed": "✅ בוצע.",
         "shadow": "הפקודה נבדקה במצב Shadow ולא בוצעה בפועל.",
         "scheduled": "✅ הפעולה כבר תוזמנה.",
+        "conditional_created": "✅ הכלל כבר נשמר.",
         "approval_required": "הפעולה כבר ממתינה לאישור. להשיב כן או לא.",
         "blocked": "הפעולה נחסמה לפי מדיניות הבטיחות.",
         "clarification": "צריך הבהרה לפני שאפשר לבצע את הפעולה.",
@@ -99,6 +101,8 @@ def _engine_response(result: EngineResult, requests: RequestLedger) -> MessageRe
         return MessageResponse("הפקודה נבדקה במצב Shadow ולא בוצעה בפועל.")
     if result.outcome == "scheduled":
         return MessageResponse("✅ הפעולה תוזמנה.")
+    if result.outcome == "conditional_created":
+        return MessageResponse("✅ הכלל נשמר ויפעל כשהתנאי יתקיים.")
     if result.outcome == "approval_required":
         return MessageResponse(_approval_prompt(result))
     if result.outcome == "clarification":
@@ -130,6 +134,7 @@ def build_conversation_handler(
     pending_approvals: PendingApprovalStore,
     approval_tokens: ApprovalStore,
     schedules: ScheduleStore | None = None,
+    conditional_rules: ConditionalRuleStore | None = None,
     media_pipeline: MediaPipeline | None = None,
     dry_run: bool = False,
     clock: Clock | None = None,
@@ -234,6 +239,7 @@ def build_conversation_handler(
             memory=memory,
             requests=requests,
             schedules=schedules,
+            conditional_rules=conditional_rules,
             pending_approvals=pending_approvals,
             dry_run=dry_run,
             verification_attempts=verification_attempts,
