@@ -1,6 +1,6 @@
 """Build Bobi's semantic device registry from Home Assistant data.
 
-Inputs mirror HA's state/entity/device/area registries.  The builder is pure and
+Inputs mirror HA's state/entity/device/area registries. The builder is pure and
 side-effect free, which makes it suitable for shadow-mode parity tests.
 """
 
@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import hashlib
 from collections import defaultdict
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from .capabilities import infer_capabilities
 from .models import DeviceRecord, EntityRecord
@@ -46,9 +47,21 @@ def build_registry(
     key for entities that HA itself cannot identify more stably.
     """
 
-    er_by_id = {e.get("entity_id"): e for e in entity_registry if e.get("entity_id")}
-    dr_by_id = {d.get("id"): d for d in device_registry if d.get("id")}
-    ar_by_id = {a.get("area_id") or a.get("id"): a for a in area_registry if a.get("area_id") or a.get("id")}
+    er_by_id = {
+        entity.get("entity_id"): entity
+        for entity in entity_registry
+        if entity.get("entity_id")
+    }
+    dr_by_id = {
+        device.get("id"): device
+        for device in device_registry
+        if device.get("id")
+    }
+    ar_by_id = {
+        area.get("area_id") or area.get("id"): area
+        for area in area_registry
+        if area.get("area_id") or area.get("id")
+    }
 
     groups: dict[str, list[EntityRecord]] = defaultdict(list)
     meta: dict[str, dict[str, str]] = {}
@@ -58,7 +71,8 @@ def build_registry(
         if "." not in entity_id:
             continue
         domain = entity_id.split(".", 1)[0]
-        attributes = state_row.get("attributes") if isinstance(state_row.get("attributes"), dict) else {}
+        raw_attributes = state_row.get("attributes")
+        attributes = raw_attributes if isinstance(raw_attributes, dict) else {}
         er = er_by_id.get(entity_id, {})
         device_id = _text(er.get("device_id"))
         device = dr_by_id.get(device_id, {}) if device_id else {}
@@ -78,7 +92,12 @@ def build_registry(
             else f"entity-id:{entity_id}"
         )
         capabilities, limits = infer_capabilities(domain, attributes)
-        name = _text(er.get("name")) or _text(attributes.get("friendly_name")) or _text(er.get("original_name")) or entity_id
+        name = (
+            _text(er.get("name"))
+            or _text(attributes.get("friendly_name"))
+            or _text(er.get("original_name"))
+            or entity_id
+        )
         entity_aliases = _aliases(er.get("aliases", []), name, er.get("original_name"))
         available = _text(state_row.get("state")) not in {"unavailable", "unknown"}
 
@@ -101,7 +120,11 @@ def build_registry(
             )
         )
         if stable_key not in meta:
-            device_name = _text(device.get("name_by_user")) or _text(device.get("name")) or name
+            device_name = (
+                _text(device.get("name_by_user"))
+                or _text(device.get("name"))
+                or name
+            )
             meta[stable_key] = {
                 "device_id": device_id,
                 "name": device_name,
@@ -133,4 +156,9 @@ def build_registry(
             )
         )
 
-    return tuple(sorted(devices, key=lambda d: (d.area_name.casefold(), d.name.casefold(), d.bobi_id)))
+    return tuple(
+        sorted(
+            devices,
+            key=lambda d: (d.area_name.casefold(), d.name.casefold(), d.bobi_id),
+        )
+    )
