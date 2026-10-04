@@ -228,6 +228,72 @@ class PendingApprovalStore:
             raise RuntimeError("pending_approval_not_persisted")
         return created
 
+    def claim(
+        self,
+        *,
+        approval_request_id: str,
+        user_key: str,
+        owner_token: str,
+        now_ts: int | None = None,
+        lease_seconds: int = 60,
+    ) -> PendingApproval | None:
+        """Atomically claim one exact approval bound to the authenticated user."""
+
+        request_id = approval_request_id.strip()
+        user = user_key.strip()
+        owner = owner_token.strip()
+        if not request_id or not user or not owner:
+            raise ValueError("invalid_approval_claim_identity")
+        now = int(now_ts or time.time())
+        lease_until = now + max(5, int(lease_seconds))
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            # Expire only the exact approval for the exact authenticated user.
+            # A stale poll from another user must never mutate this row.
+            self._db.execute(
+                """
+                UPDATE pending_approval_requests
+                SET state='expired', owner_token='', lease_until_ts=0, updated_ts=?
+                WHERE approval_request_id=? AND user_key=?
+                  AND state IN ('pending','running') AND expires_ts < ?
+                """,
+                (now, request_id, user, now),
+            )
+            row = self._db.execute(
+                """
+                SELECT * FROM pending_approval_requests
+                WHERE approval_request_id=? AND user_key=? AND expires_ts >= ?
+                  AND (
+                    state='pending'
+                    OR (state='running' AND lease_until_ts < ?)
+                  )
+                LIMIT 1
+                """,
+                (request_id, user, now, now),
+            ).fetchone()
+            pending = self._row(row)
+            if pending is None:
+                self._db.commit()
+                return None
+            updated = self._db.execute(
+                """
+                UPDATE pending_approval_requests
+                SET state='running', owner_token=?, lease_until_ts=?,
+                    attempts=attempts+1, updated_ts=?
+                WHERE approval_request_id=? AND user_key=? AND expires_ts >= ?
+                  AND (state='pending' OR (state='running' AND lease_until_ts < ?))
+                """,
+                (owner, lease_until, now, request_id, user, now, now),
+            )
+            if updated.rowcount != 1:
+                self._db.rollback()
+                return None
+            self._db.commit()
+        except Exception:
+            self._db.rollback()
+            raise
+        return self.get(request_id)
+
     def claim_latest(
         self,
         *,
