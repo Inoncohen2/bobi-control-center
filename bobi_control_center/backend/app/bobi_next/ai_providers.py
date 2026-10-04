@@ -1,7 +1,7 @@
 """Local-first AI provider configuration for Bobi Next.
 
-Credentials never live in this database.  Rows contain only a secret reference
-that a runtime secret backend resolves.  The same selected provider can later be
+Credentials never live in this database. Rows contain only a secret reference
+that a runtime secret backend resolves. The same selected provider can later be
 used by intent understanding, audio transcription and vision when supported.
 """
 
@@ -33,6 +33,35 @@ class AIProviderConfig:
 
 
 _ALLOWED_CAPABILITIES = frozenset({"intent", "chat", "audio", "vision", "embeddings"})
+_SECRET_KEYS = frozenset(
+    {
+        "api_key",
+        "apikey",
+        "api-token",
+        "api_token",
+        "token",
+        "access_token",
+        "secret",
+        "password",
+        "authorization",
+        "bearer",
+        "credential",
+        "credentials",
+    }
+)
+
+
+def _contains_plaintext_secret(value: Any) -> bool:
+    if isinstance(value, dict):
+        for raw_key, nested in value.items():
+            key = str(raw_key).strip().casefold().replace(" ", "_")
+            if key in _SECRET_KEYS:
+                return True
+            if _contains_plaintext_secret(nested):
+                return True
+    elif isinstance(value, (list, tuple)):
+        return any(_contains_plaintext_secret(item) for item in value)
+    return False
 
 
 class AIProviderStore:
@@ -132,6 +161,8 @@ class AIProviderStore:
         values = config or {}
         if not isinstance(values, dict):
             raise TypeError("ai_provider_config_must_be_object")
+        if _contains_plaintext_secret(values):
+            raise ValueError("plaintext_secret_not_allowed")
         now = int(now_ts or time.time())
         with self._db:
             self._db.execute(
@@ -218,7 +249,6 @@ class AIProviderStore:
                     "provider_key": provider.provider_key,
                     "provider_type": provider.provider_type,
                     "display_name": provider.display_name,
-                    "endpoint": provider.endpoint,
                     "model": provider.model,
                     "enabled": provider.enabled,
                     "capabilities": sorted(provider.capabilities),
