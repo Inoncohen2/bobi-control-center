@@ -46,6 +46,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     adapter = build_adapter(settings)
     management = build_management(adapter, settings)
+    next_runtime = None
+    if settings.next_runtime_enabled:
+        from app.bobi_next.runtime_service import BobiNextRuntimeService
+
+        next_runtime = BobiNextRuntimeService(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -55,9 +60,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             adapter.name,
             adapter.unrestricted_writes,
         )
+        if next_runtime is not None:
+            try:
+                runtime_status = await next_runtime.start_if_ready()
+                logger.info(
+                    "Bobi Next runtime start: started=%s reason=%s",
+                    runtime_status.started,
+                    runtime_status.reason,
+                )
+            except Exception:
+                # Next is an opt-in migration surface. A failure here must not
+                # take the legacy Control Center down with it.
+                logger.exception("Bobi Next runtime failed to start; continuing safely")
         try:
             yield
         finally:
+            if next_runtime is not None:
+                try:
+                    await next_runtime.aclose()
+                except Exception:
+                    logger.exception("Bobi Next runtime shutdown failed")
             await adapter.aclose()
 
     app = FastAPI(
@@ -75,6 +97,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.adapter = adapter
     app.state.management = management
     app.state.external_auth = ExternalAuth(settings)
+    app.state.next_runtime = next_runtime
 
     app.add_middleware(
         CORSMiddleware,
