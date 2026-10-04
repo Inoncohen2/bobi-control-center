@@ -226,7 +226,14 @@ def authorize_plan(
     if provenance.negated:
         return AuthorizationDecision(False, "source_negated", risk, False, False, fingerprint)
     if provenance.literal_name:
-        return AuthorizationDecision(False, "literal_name_protected", risk, False, False, fingerprint)
+        return AuthorizationDecision(
+            False,
+            "literal_name_protected",
+            risk,
+            False,
+            False,
+            fingerprint,
+        )
 
     approval_reasons: list[str] = []
     if provenance.question:
