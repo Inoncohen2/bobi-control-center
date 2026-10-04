@@ -1,6 +1,6 @@
 """Parity comparison between legacy Bobi observations and Bobi Next.
 
-Parity does not mean copying bugs.  The comparator supports an explicit expected
+Parity does not mean copying bugs. The comparator supports an explicit expected
 behavior contract: when Next matches that contract and legacy does not, the
 verdict is ``improved`` rather than a false regression.
 """
@@ -138,6 +138,33 @@ def _next_plan_value(plans: tuple[ActionPlan, ...]) -> Any:
     return None
 
 
+def _plan_domain_compatible(
+    legacy_domain: str,
+    next_domain: str,
+    target_ids: tuple[str, ...],
+) -> bool:
+    if not legacy_domain or not next_domain:
+        return False
+    if legacy_domain == next_domain:
+        return True
+
+    # Legacy Bobi models "lighting" as one semantic group. Home Assistant may
+    # represent a physical light circuit as either light.* or switch.*. If the
+    # resolved target and operation agree, that representation difference is
+    # not a behavioral mismatch.
+    target_domains = {
+        target.split(".", 1)[0]
+        for target in target_ids
+        if "." in target
+    }
+    return (
+        legacy_domain == "light"
+        and next_domain in {"light", "switch"}
+        and bool(target_domains)
+        and target_domains <= {"light", "switch"}
+    )
+
+
 def _expected_score(
     *,
     domain: str,
@@ -252,9 +279,14 @@ def compare_plans(
     next_operation = next(iter(operations)) if len(operations) == 1 else ""
     next_targets = tuple(plan.entity_id for plan in plans)
     next_value = _next_plan_value(plans)
+    domain_match = (
+        _plan_domain_compatible(legacy.domain, next_domain, next_targets)
+        if legacy.domain and next_domain
+        else None
+    )
 
     matches: dict[str, bool | None] = {
-        "domain": legacy.domain == next_domain if legacy.domain and next_domain else None,
+        "domain": domain_match,
         "operation": (
             legacy.operation == next_operation if legacy.operation and next_operation else None
         ),
@@ -267,6 +299,11 @@ def compare_plans(
     }
     known = [value for value in matches.values() if value is not None]
     legacy_matches_next = bool(known) and all(known)
+    domain_note = (
+        ("semantic_domain_maps_to_native_ha_domain",)
+        if domain_match and legacy.domain != next_domain
+        else ()
+    )
 
     if expected is not None:
         legacy_expected = _expected_score(
@@ -292,18 +329,23 @@ def compare_plans(
                 "improved",
                 matches,
                 legacy,
-                ("legacy_plan_differs_from_contract",),
+                domain_note + ("legacy_plan_differs_from_contract",),
             )
         if legacy_expected and not next_expected:
             return ParityReport(
                 "regression",
                 matches,
                 legacy,
-                ("next_plan_differs_from_contract",),
+                domain_note + ("next_plan_differs_from_contract",),
             )
 
     if legacy_matches_next:
-        return ParityReport("match", matches, legacy)
+        return ParityReport("match", matches, legacy, domain_note)
     if not known:
-        return ParityReport("inconclusive", matches, legacy, ("no_comparable_plan_fields",))
-    return ParityReport("mismatch", matches, legacy)
+        return ParityReport(
+            "inconclusive",
+            matches,
+            legacy,
+            ("no_comparable_plan_fields",),
+        )
+    return ParityReport("mismatch", matches, legacy, domain_note)
