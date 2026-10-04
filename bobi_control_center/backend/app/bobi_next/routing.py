@@ -1,7 +1,7 @@
 """Deterministic routing from semantic intent to a Bobi capability contract.
 
-The language layer says *what the user means*.  This router says which generic
-capability must satisfy that meaning.  It contains no entity ids, room names or
+The language layer says *what the user means*. This router says which generic
+capability must satisfy that meaning. It contains no entity ids, room names or
 vendor-specific device knowledge.
 """
 
@@ -29,13 +29,19 @@ class RoutedIntent:
     defer_reason: str = ""
 
 
+def _defer(intent: SemanticIntent) -> tuple[bool, str]:
+    if intent.scheduled:
+        return True, "scheduled"
+    if intent.conditional:
+        return True, "conditional"
+    return False, ""
+
+
 def route_intent(intent: SemanticIntent) -> RoutedIntent:
     domain = intent.canonical_domain
     operation = intent.canonical_operation
     kind = str(intent.value_kind or "").casefold()
-
-    defer = bool(intent.scheduled or intent.conditional)
-    defer_reason = "scheduled" if intent.scheduled else "conditional" if intent.conditional else ""
+    defer, defer_reason = _defer(intent)
 
     if domain in {"light", "switch", "input_boolean"} and operation in {"on", "off"}:
         return RoutedIntent(
@@ -110,15 +116,88 @@ def route_intent(intent: SemanticIntent) -> RoutedIntent:
                 defer_execution=defer,
                 defer_reason=defer_reason,
             )
+        if kind in {"tilt", "tilt_position"}:
+            return RoutedIntent(
+                domain,
+                "tilt_position",
+                "set",
+                value=intent.value,
+                delta=intent.delta,
+                allow_group=intent.multi_target,
+                defer_execution=defer,
+                defer_reason=defer_reason,
+            )
 
-    if domain == "vacuum" and operation in {"start", "stop", "return_home"}:
-        return RoutedIntent(
-            domain,
-            operation,
-            operation,
-            defer_execution=defer,
-            defer_reason=defer_reason,
-        )
+    if domain == "fan":
+        if operation in {"on", "off"}:
+            return RoutedIntent(
+                domain,
+                "power",
+                operation,
+                allow_group=intent.multi_target,
+                defer_execution=defer,
+                defer_reason=defer_reason,
+            )
+        if kind in {"percentage", "speed", "fan_percentage"}:
+            return RoutedIntent(
+                domain,
+                "percentage",
+                "set",
+                value=intent.value,
+                delta=intent.delta,
+                allow_group=intent.multi_target,
+                defer_execution=defer,
+                defer_reason=defer_reason,
+            )
+        if kind == "preset_mode":
+            return RoutedIntent(domain, "preset_mode", "set", value=intent.value)
+
+    if domain == "vacuum":
+        if operation in {"start", "stop", "return_home"}:
+            return RoutedIntent(
+                domain,
+                operation,
+                operation,
+                defer_execution=defer,
+                defer_reason=defer_reason,
+            )
+        if kind in {"fan_speed", "speed"}:
+            return RoutedIntent(
+                domain,
+                "fan_speed",
+                "set",
+                value=intent.value,
+                defer_execution=defer,
+                defer_reason=defer_reason,
+            )
+
+    if domain == "media_player":
+        if operation in {"on", "off"}:
+            return RoutedIntent(
+                domain,
+                "power",
+                operation,
+                defer_execution=defer,
+                defer_reason=defer_reason,
+            )
+        if operation in {"play", "pause", "stop"}:
+            return RoutedIntent(
+                domain,
+                operation,
+                operation,
+                defer_execution=defer,
+                defer_reason=defer_reason,
+            )
+        if operation in {"volume", "set_volume"} or kind in {"volume", "percentage"}:
+            return RoutedIntent(
+                domain,
+                "volume",
+                "set",
+                value=intent.value,
+                delta=intent.delta,
+                defer_execution=defer,
+                defer_reason=defer_reason,
+            )
 
     if domain == "lock" and operation in {"lock", "unlock"}:
         return RoutedIntent(
@@ -132,7 +211,24 @@ def route_intent(intent: SemanticIntent) -> RoutedIntent:
     if domain == "button" and operation in {"press", "on"}:
         return RoutedIntent(domain, "press", "press")
 
+    if domain == "number" and operation in {"set", "set_value"}:
+        return RoutedIntent(
+            domain,
+            "set_value",
+            "set",
+            value=intent.value,
+            defer_execution=defer,
+            defer_reason=defer_reason,
+        )
+
     if domain == "select" and operation in {"set", "select_option"}:
-        return RoutedIntent(domain, "select_option", "set", value=intent.value)
+        return RoutedIntent(
+            domain,
+            "select_option",
+            "set",
+            value=intent.value,
+            defer_execution=defer,
+            defer_reason=defer_reason,
+        )
 
     raise RoutingError(f"unsupported_intent:{domain}:{operation}:{kind}")
