@@ -1,9 +1,10 @@
 """Provider-neutral conversation handler for Bobi Next messaging workers.
 
 Approval replies are consumed before any AI/understanding provider sees them.
-All other messages enter the generic engine.  The handler returns only a safe
-user-facing response; durable reaction/typing/outbox delivery remains owned by
-``messaging.process_next_message``.
+All other messages enter the generic engine. Media is converted to trusted
+text/context before understanding; raw provider URLs never reach the brain.
+The handler returns only a safe user-facing response; durable delivery remains
+owned by ``messaging.process_next_message``.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from .engine import (
     process_request,
 )
 from .executor import HAControlClient
+from .media_pipeline import MediaPipeline, MediaPipelineError
 from .memory import BobiMemory
 from .messaging import InboundMessage, MessageResponse
 from .pending_approval import PendingApprovalStore
@@ -128,6 +130,7 @@ def build_conversation_handler(
     pending_approvals: PendingApprovalStore,
     approval_tokens: ApprovalStore,
     schedules: ScheduleStore | None = None,
+    media_pipeline: MediaPipeline | None = None,
     dry_run: bool = False,
     clock: Clock | None = None,
     verification_attempts: int = 3,
@@ -138,7 +141,9 @@ def build_conversation_handler(
     now_fn = clock or (lambda: int(time.time()))
 
     async def handler(message: InboundMessage) -> MessageResponse:
-        normalized = _normalize_confirmation(message.text)
+        # Only a plain text message may continue a pending approval. A caption
+        # extracted from media must never be able to approve a sensitive action.
+        normalized = _normalize_confirmation(message.text) if message.kind == "text" else ""
         now = int(now_fn())
         approval_owner = f"approval:{message.provider}:{message.message_id}"
 
@@ -202,12 +207,22 @@ def build_conversation_handler(
                 )
                 return MessageResponse(text)
 
+        request_text = message.text
+        if message.kind != "text":
+            if media_pipeline is None:
+                return MessageResponse("קיבלתי את הקובץ, אבל עיבוד המדיה עדיין לא מוגדר.")
+            try:
+                enriched = await media_pipeline.enrich(message)
+            except MediaPipelineError:
+                return MessageResponse("לא הצלחתי לעבד את הקובץ בצורה בטוחה.")
+            request_text = enriched.text
+
         engine_request_id = f"{message.provider}:{message.message_id}"
         result = await process_request(
             EngineRequest(
                 request_id=engine_request_id,
                 user_key=message.user_key,
-                text=message.text,
+                text=request_text,
                 owner_token=f"engine:{message.provider}:{message.message_id}",
                 message_id=message.message_id,
                 now_ts=message.received_ts,
