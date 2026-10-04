@@ -481,7 +481,12 @@ class ActivityLedger:
                 (now, undo_request_id, activity_id),
             )
 
-    def mark_approval_completed(self, approval_request_id: str, *, now_ts: int | None = None) -> bool:
+    def mark_approval_completed(
+        self,
+        approval_request_id: str,
+        *,
+        now_ts: int | None = None,
+    ) -> bool:
         now = int(now_ts or time.time())
         with self._db:
             result = self._db.execute(
