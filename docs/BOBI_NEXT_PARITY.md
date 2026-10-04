@@ -29,16 +29,43 @@ The counts are inventory, not the desired V2 architecture. Legacy, temporary, pr
 
 | Current component | Behaviour that must survive | Bobi Next destination | Status |
 |---|---|---|---|
-| `automation.whatsapp_qlytt_hvd_vt_waha` | auth, PN/LID identity, event filtering, exact-message dedupe, reaction/typing, media routes, poll routes, lifecycle, Rescue | `whatsapp.ingress` + policies + router | inventoried |
-| `script.whatsapp_text_router_entry` | ordered intent routing, negation, menu/dialog authority, context, multi-intent, fallback | typed router/pipeline | inventoried |
-| `script.bobi_entity_resolver` | canonical target, capabilities, ambiguity fail-closed | dynamic HA registry + semantic resolver | V2 foundation started |
-| `script.bobi_target_resolver` | single/group/area targets, exclusions, confidence, authority | semantic resolver | V2 foundation started |
-| `script.bobi_command_validate` | capability/range/step validation | capability contract + planner | V2 foundation started |
-| `script.whatsapp_command_execute` | availability, mutation authority, execution guard, undo, handler dispatch, Rescue | executor + policies | contract extracted |
-| `script.bobi_command_verify` | HA-state confirmation, tolerance, freshness/truth metadata | verifier | contract extracted |
-| `script.bobi_request_lifecycle` | request receipt, atomic reply ownership, terminal ledger | SQLite request ledger | schema started |
-| `script.bobi_conversation_context_store` | per-user turns, idempotency, typed semantics, expiry | SQLite conversation/context | schema started |
-| `script.bobi_instinct_rescue` | one rescue per request, RESOLVE/CLARIFY/UNRESOLVED, re-entry through guards | fallback/instinct | contract extracted |
+| `automation.whatsapp_qlytt_hvd_vt_waha` | auth, PN/LID identity, event filtering, exact-message dedupe, reaction/typing, media routes, poll routes, lifecycle, Rescue | `whatsapp.ingress` + policies + router | V2 transport/runtime implemented; live shadow gate pending |
+| `script.whatsapp_text_router_entry` | ordered intent routing, negation, menu/dialog authority, context, multi-intent, fallback | typed router/pipeline | V2 router/orchestrator implemented; full legacy family parity pending |
+| `script.bobi_entity_resolver` | canonical target, capabilities, ambiguity fail-closed | dynamic HA registry + semantic resolver | implemented + unit tested; live shadow gate pending |
+| `script.bobi_target_resolver` | single/group/area targets, exclusions, confidence, authority | semantic resolver | implemented + unit tested; live shadow gate pending |
+| `script.bobi_command_validate` | capability/range/step validation | capability contract + planner | implemented + unit tested |
+| `script.whatsapp_command_execute` | availability, mutation authority, execution guard, undo, handler dispatch, Rescue | executor + policies | implemented + unit tested; controlled E2E gate pending |
+| `script.bobi_command_verify` | HA-state confirmation, tolerance, freshness/truth metadata | verifier | implemented + unit tested |
+| `script.bobi_request_lifecycle` | request receipt, atomic reply ownership, terminal ledger | SQLite request ledger | implemented + unit tested |
+| `script.bobi_conversation_context_store` | per-user turns, idempotency, typed semantics, expiry | SQLite conversation/context | implemented + unit tested |
+| `script.bobi_instinct_rescue` | one rescue per request, RESOLVE/CLARIFY/UNRESOLVED, re-entry through guards | fallback/instinct | implemented; deterministic guards retained |
+
+## Bobi Next implementation snapshot — 2026-10-04
+
+The following V2 foundations are implemented on `chatgpt/bobi-next-generic-core` and covered by automated tests. This is not permission to replace production: shadow/live/rollback gates still apply.
+
+| Family | Implemented V2 contract | Remaining gate |
+|---|---|---|
+| Generic HA discovery/control | device/entity discovery, capability inference, stable semantic IDs, resolver, planner, relative climate deltas, secure execution, read-after-write verification | live shadow + controlled mutation |
+| Scheduling | persistent schedules, recurrence, retry/cancel, leases, live re-resolution, secure scheduled execution | migration + live E2E |
+| Conditional rules | HA state stream, threshold/state rules, cooldown/dedupe, `for X seconds` durable recheck, secure execution | live shadow/E2E |
+| Permissions/approval | typed policy, fail-closed authority, exact one-time approvals, state guard, race protection, restart-safe continuation | user-policy migration + live E2E |
+| WhatsApp messaging | durable inbox/outbox, dedupe, per-chat ordering, reaction/typing, media ingest, quote context, polls, exact approval polls, crash-safe poll reconciliation | WAHA live shadow/E2E |
+| AI/Understanding | structured semantic intent, context, provider runtime, Instinct rescue that re-enters deterministic guards | adversarial/live parity |
+| Calendar/To-do | native HA response client and productivity engine without Bobi scripts/helpers | live parity |
+| Activity/Undo | durable activity ledger and safe exactly-once undo runtime | live mutation parity |
+| Archive/Documents | explicit-save authority, semantic archive index, SHA-256 dedupe, private local blob storage, search/ambiguity handling, retrieval dispatch, WAHA `sendFile`, crash-safe outbound-media journal | natural-language/runtime wiring + live E2E |
+| Vouchers/Supabase | typed storage client and voucher wallet exist; current production Edge contract audited | generic document cloud provider optional; no production Supabase mutation yet |
+| Setup/Integrations | setup store/wizard foundations, roles/policies, secret vault, integration framework | Control Center UX + migration E2E |
+
+### Archive/Documents safety contract
+
+- Receiving a file does **not** save it automatically. Save is a separate side effect and requires an explicit non-negated user instruction plus `archive.write` permission.
+- OCR/transcription/AI-derived text cannot authorize a save. Only the user's original message/caption may do so.
+- Archive search is isolated by `owner_key`; ambiguous results require clarification rather than guessing.
+- Bobi can use private local storage under its own data directory without Supabase. Supabase/cloud storage remains an optional provider.
+- Outbound WhatsApp files use WAHA `sendFile` with private bytes (Base64), so no public document URL is required.
+- Because the current WAHA `sendFile` schema has no caller-defined message id, a crash after provider acceptance but before local acknowledgement is marked `uncertain`; Bobi does not automatically resend and risk a duplicate.
 
 ## Runtime families requiring parity
 
