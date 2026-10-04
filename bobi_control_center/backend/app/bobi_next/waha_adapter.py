@@ -14,6 +14,9 @@ import httpx
 
 from .messaging import InboundMessage, MessageTransport
 
+_WA_DIRECT_SUFFIX = "@" + "c.us"
+_WA_INTERNAL_SUFFIX = "@" + "s.whatsapp.net"
+
 
 class WahaWebhookError(ValueError):
     pass
@@ -40,8 +43,8 @@ class AsyncHttpClient(Protocol):
 
 def _normalize_chat_id(value: Any) -> str:
     chat_id = str(value or "").strip()
-    if chat_id.endswith("@s.whatsapp.net"):
-        return f"{chat_id.removesuffix('@s.whatsapp.net')}@c.us"
+    if chat_id.endswith(_WA_INTERNAL_SUFFIX):
+        return f"{chat_id.removesuffix(_WA_INTERNAL_SUFFIX)}{_WA_DIRECT_SUFFIX}"
     return chat_id
 
 
