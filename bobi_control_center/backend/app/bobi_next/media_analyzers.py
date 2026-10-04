@@ -10,7 +10,6 @@ from __future__ import annotations
 import io
 import json
 import zipfile
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
 from xml.etree import ElementTree
