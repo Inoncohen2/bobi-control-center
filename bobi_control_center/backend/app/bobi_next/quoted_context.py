@@ -80,7 +80,7 @@ class QuotedContextUnderstanding:
         recent = tuple(getattr(context, "recent_turns", ()) or ())
         proxy = _ContextProxy(
             user_key=str(getattr(context, "user_key", "")),
-            recent_turns=recent + (self.quoted.as_turn(),),
+            recent_turns=(*recent, self.quoted.as_turn()),
             active_context=getattr(context, "active_context", None),
         )
         intent = await self.base.understand(text, context=proxy)
