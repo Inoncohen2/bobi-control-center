@@ -3,8 +3,9 @@
 Approval replies and explicit undo commands are consumed before any
 AI/understanding provider sees them. All other messages enter the generic
 engine. Media is converted to trusted text/context before understanding; raw
-provider URLs never reach the brain. Durable delivery remains owned by
-``messaging.process_next_message``.
+provider URLs never reach the brain. Quoted/replied-to messages are supplied as
+bounded context only and never replace the current command. Durable delivery
+remains owned by ``messaging.process_next_message``.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from .media_pipeline import MediaPipeline, MediaPipelineError
 from .memory import BobiMemory
 from .messaging import InboundMessage, MessageResponse
 from .pending_approval import PendingApprovalStore
+from .quoted_context import QuotedContextUnderstanding, quote_from_metadata
 from .request_ledger import RequestLedger
 from .scheduler import ScheduleStore
 
@@ -177,7 +179,7 @@ def build_conversation_handler(
 
     async def handler(message: InboundMessage) -> MessageResponse:
         # Only a plain text message may continue a pending approval or request
-        # undo. Media-derived text must never authorize or roll back a mutation.
+        # undo. Media-derived or quoted text must never authorize/rollback a mutation.
         normalized = _normalize_confirmation(message.text) if message.kind == "text" else ""
         now = int(now_fn())
         approval_owner = f"approval:{message.provider}:{message.message_id}"
@@ -292,6 +294,11 @@ def build_conversation_handler(
                 return MessageResponse("לא הצלחתי לעבד את הקובץ בצורה בטוחה.")
             request_text = enriched.text
 
+        request_understanding: UnderstandingProvider = understanding
+        quoted = quote_from_metadata(message.metadata)
+        if quoted is not None:
+            request_understanding = QuotedContextUnderstanding(understanding, quoted)
+
         engine_request_id = f"{message.provider}:{message.message_id}"
         result = await process_request(
             EngineRequest(
@@ -302,7 +309,7 @@ def build_conversation_handler(
                 message_id=message.message_id,
                 now_ts=message.received_ts,
             ),
-            understanding=understanding,
+            understanding=request_understanding,
             list_devices=list_devices,
             policy_for=policy_for,
             ha=ha,

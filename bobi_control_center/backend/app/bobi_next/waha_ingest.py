@@ -1,7 +1,7 @@
 """Ingress bridge from WAHA webhooks into the Bobi Next durable inbox.
 
 This boundary is intentionally fail-closed: only an enabled configured WAHA
-provider/session and an enabled linked Bobi user may enqueue a command.  Unknown
+provider/session and an enabled linked Bobi user may enqueue a command. Unknown
 senders are not silently treated as guests and outgoing/status events are
 ignored by the WAHA parser before they reach the inbox.
 """
@@ -16,6 +16,8 @@ from .messaging import MessageStore
 from .setup_store import SetupStore
 from .waha_adapter import WahaWebhookError, parse_waha_webhook
 
+_MAX_QUOTED_BODY = 4000
+
 
 @dataclass(slots=True, frozen=True)
 class IngestResult:
@@ -24,6 +26,45 @@ class IngestResult:
     message_id: str = ""
     user_key: str = ""
     duplicate: bool = False
+
+
+def reply_context_from_waha_event(event: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract WAHA ``payload.replyTo`` into bounded provider-neutral metadata.
+
+    WAHA documents ``replyTo`` as the original message context for replies. We
+    deliberately do not persist participant identifiers or arbitrary internal
+    ``_data`` fields. Media URLs remain transport metadata only and never reach
+    the language model directly.
+    """
+
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get("replyTo")
+    if not isinstance(raw, dict):
+        return None
+
+    media_raw = raw.get("media")
+    media = media_raw if isinstance(media_raw, dict) else {}
+    body = str(raw.get("body") or "").strip()[:_MAX_QUOTED_BODY]
+    message_id = str(raw.get("id") or "").strip()[:512]
+    has_media = bool(raw.get("hasMedia", False))
+    mimetype = str(media.get("mimetype") or "").strip()[:256]
+    filename = str(media.get("filename") or "").strip()[:255]
+    media_url = str(media.get("url") or "").strip()
+
+    if not body and not message_id and not has_media:
+        return None
+    result: dict[str, Any] = {
+        "id": message_id,
+        "body": body,
+        "has_media": has_media,
+        "mimetype": mimetype,
+        "filename": filename,
+    }
+    if has_media and media_url:
+        result["provider_ref"] = media_url
+    return result
 
 
 def ingest_waha_event(
@@ -66,6 +107,9 @@ def ingest_waha_event(
             "mimetype": parsed.media_mimetype,
             "filename": parsed.media_filename,
         }
+    reply_to = reply_context_from_waha_event(event)
+    if reply_to is not None:
+        metadata["reply_to"] = reply_to
 
     inserted = messages.enqueue(
         provider=provider_key,
