@@ -355,10 +355,13 @@ class ConditionalRuleStore:
             if rule is None or not rule.enabled:
                 self._db.rollback()
                 return False
-            if rule.cooldown_seconds > 0 and rule.last_fired_ts:
-                if now_ts - rule.last_fired_ts < rule.cooldown_seconds:
-                    self._db.rollback()
-                    return False
+            if (
+                rule.cooldown_seconds > 0
+                and rule.last_fired_ts
+                and now_ts - rule.last_fired_ts < rule.cooldown_seconds
+            ):
+                self._db.rollback()
+                return False
             try:
                 self._db.execute(
                     """
