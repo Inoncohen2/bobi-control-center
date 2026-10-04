@@ -62,7 +62,7 @@ def build_plan(
         if operation not in {"on", "off"}:
             raise PlanError("invalid_power_operation")
         action = "turn_on" if operation == "on" else "turn_off"
-        if domain == "media_player" and operation == "on":
+        if domain in {"climate", "media_player"} and operation == "on":
             expected["state_not"] = ["off", "unavailable", "unknown"]
         else:
             expected["state"] = operation
@@ -257,9 +257,7 @@ def build_plan(
         target = _quantize(target, minimum, step) if step > 0 else target
         action = "set_value"
         data["value"] = target
-        expected.update(
-            {"state": str(target)}
-        )
+        expected.update({"state": str(target)})
     elif capability == "select_option" and domain == "select":
         options = entity.limits.get("options", [])
         if value not in options:
