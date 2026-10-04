@@ -14,6 +14,28 @@ def _client(tmp_path):
     return database_path, TestClient(app)
 
 
+def _configure_ai(client: TestClient) -> None:
+    created = client.post(
+        "/api/next/setup/ai/providers",
+        json={
+            "provider_key": "ai:primary",
+            "provider_type": "openai-compatible",
+            "display_name": "Primary AI",
+            "endpoint": "http://private-ai.local/v1",
+            "model": "model-a",
+            "secret_ref": "secret://ai/primary",
+            "capabilities": ["intent", "audio", "vision"],
+        },
+    )
+    assert created.status_code == 200
+    body = created.json()
+    assert body["has_secret_ref"] is True
+    assert "endpoint" not in body
+    assert "secret_ref" not in body
+    selected = client.post("/api/next/setup/ai/providers/ai:primary/select")
+    assert selected.status_code == 200
+
+
 def test_status_starts_incomplete_without_leaking_sensitive_config(tmp_path):
     _, client = _client(tmp_path)
     response = client.get("/api/next/setup/status")
@@ -21,7 +43,9 @@ def test_status_starts_incomplete_without_leaking_sensitive_config(tmp_path):
     body = response.json()
     assert body["setup"]["completed"] is False
     assert body["setup"]["ready"] is False
+    assert "ai_provider" in body["setup"]["missing_steps"]
     assert body["providers"] == []
+    assert body["ai"]["active_provider"] == ""
 
 
 def test_full_setup_flow_can_finish_without_home_assistant_helpers(tmp_path):
@@ -44,6 +68,8 @@ def test_full_setup_flow_can_finish_without_home_assistant_helpers(tmp_path):
     assert provider_body["has_secret_ref"] is True
     assert "endpoint" not in provider_body
     assert "secret_ref" not in provider_body
+
+    _configure_ai(client)
 
     user = client.post(
         "/api/next/setup/users",
@@ -74,9 +100,12 @@ def test_full_setup_flow_can_finish_without_home_assistant_helpers(tmp_path):
     snapshot = complete.json()
     assert snapshot["setup"]["ready"] is True
     assert snapshot["setup"]["completed"] is True
+    assert snapshot["ai"]["active_provider"] == "ai:primary"
     assert external_id not in complete.text
     assert "secret://provider/api" not in complete.text
+    assert "secret://ai/primary" not in complete.text
     assert "private-provider.local" not in complete.text
+    assert "private-ai.local" not in complete.text
 
 
 def test_complete_is_rejected_until_required_steps_exist(tmp_path):
@@ -84,6 +113,49 @@ def test_complete_is_rejected_until_required_steps_exist(tmp_path):
     response = client.post("/api/next/setup/complete")
     assert response.status_code == 409
     assert "setup_incomplete" in response.json()["detail"]
+    assert "ai_provider" in response.json()["detail"]
+
+
+def test_complete_is_rejected_when_everything_except_ai_exists(tmp_path):
+    _, client = _client(tmp_path)
+    client.post(
+        "/api/next/setup/providers",
+        json={
+            "provider_key": "waha:primary",
+            "provider_type": "waha",
+            "display_name": "WhatsApp",
+        },
+    )
+    client.post(
+        "/api/next/setup/users",
+        json={"display_name": "Owner", "role": "owner", "user_key": "owner"},
+    )
+    client.post(
+        "/api/next/setup/identities",
+        json={
+            "provider_key": "waha:primary",
+            "external_id": "sender",
+            "user_key": "owner",
+        },
+    )
+    response = client.post("/api/next/setup/complete")
+    assert response.status_code == 409
+    assert response.json()["detail"] == "setup_incomplete:ai_provider"
+
+
+def test_ai_provider_rejects_plaintext_secret_in_config(tmp_path):
+    _, client = _client(tmp_path)
+    response = client.post(
+        "/api/next/setup/ai/providers",
+        json={
+            "provider_key": "ai:unsafe",
+            "provider_type": "provider",
+            "display_name": "Unsafe",
+            "config": {"transport": {"api_key": "plaintext"}},
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "plaintext_secret_not_allowed"
 
 
 def test_policy_endpoint_persists_explicit_permissions(tmp_path):
