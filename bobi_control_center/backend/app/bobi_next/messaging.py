@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import sqlite3
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 
 @dataclass(slots=True, frozen=True)
@@ -29,6 +30,7 @@ class InboundMessage:
     kind: str
     received_ts: int
     state: str
+    metadata: dict[str, Any] = field(default_factory=dict)
     attempts: int = 0
     owner_token: str = ""
     lease_until_ts: int = 0
@@ -76,6 +78,14 @@ def _response_key(message: InboundMessage, role: str = "primary") -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _metadata_from_json(raw: Any) -> dict[str, Any]:
+    try:
+        value = json.loads(str(raw or "{}"))
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 class MessageStore:
     """SQLite inbox/outbox with webhook dedupe and per-chat sequencing."""
 
@@ -102,6 +112,7 @@ class MessageStore:
                 user_key TEXT NOT NULL,
                 text TEXT NOT NULL,
                 kind TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
                 received_ts INTEGER NOT NULL,
                 state TEXT NOT NULL DEFAULT 'pending',
                 attempts INTEGER NOT NULL DEFAULT 0,
@@ -133,12 +144,21 @@ class MessageStore:
                 ON outbound_messages(provider, in_reply_to);
             """
         )
+        columns = {
+            str(row["name"])
+            for row in self._db.execute("PRAGMA table_info(inbound_messages)").fetchall()
+        }
+        if "metadata_json" not in columns:
+            self._db.execute(
+                "ALTER TABLE inbound_messages ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'"
+            )
         self._db.commit()
 
     @staticmethod
     def _inbound(row: sqlite3.Row | None) -> InboundMessage | None:
         if row is None:
             return None
+        keys = set(row.keys())
         return InboundMessage(
             row_id=int(row["row_id"]),
             provider=str(row["provider"]),
@@ -149,6 +169,11 @@ class MessageStore:
             kind=str(row["kind"]),
             received_ts=int(row["received_ts"]),
             state=str(row["state"]),
+            metadata=(
+                _metadata_from_json(row["metadata_json"])
+                if "metadata_json" in keys
+                else {}
+            ),
             attempts=int(row["attempts"]),
             owner_token=str(row["owner_token"]),
             lease_until_ts=int(row["lease_until_ts"]),
@@ -178,21 +203,41 @@ class MessageStore:
         user_key: str,
         text: str,
         kind: str = "text",
+        metadata: dict[str, Any] | None = None,
         received_ts: int | None = None,
     ) -> bool:
         if not provider.strip() or not message_id.strip() or not chat_id.strip():
             raise ValueError("invalid_message_identity")
+        metadata_value = metadata or {}
+        if not isinstance(metadata_value, dict):
+            raise TypeError("message_metadata_must_be_object")
+        encoded_metadata = json.dumps(
+            metadata_value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         now = int(received_ts or time.time())
         try:
             with self._db:
                 self._db.execute(
                     """
                     INSERT INTO inbound_messages(
-                        provider,message_id,chat_id,user_key,text,kind,received_ts,
-                        state,next_attempt_ts
-                    ) VALUES(?,?,?,?,?,?,?,'pending',?)
+                        provider,message_id,chat_id,user_key,text,kind,metadata_json,
+                        received_ts,state,next_attempt_ts
+                    ) VALUES(?,?,?,?,?,?,?,?,'pending',?)
                     """,
-                    (provider, message_id, chat_id, user_key, text, kind, now, now),
+                    (
+                        provider,
+                        message_id,
+                        chat_id,
+                        user_key,
+                        text,
+                        kind,
+                        encoded_metadata,
+                        now,
+                        now,
+                    ),
                 )
         except sqlite3.IntegrityError:
             return False
