@@ -193,7 +193,12 @@ async def process_productivity_intent(
     domain = intent.canonical_domain
     operation = intent.canonical_operation
     if domain not in {"calendar", "todo"}:
-        return ProductivityResult("unsupported", "unsupported_productivity_domain", domain, operation)
+        return ProductivityResult(
+            "unsupported",
+            "unsupported_productivity_domain",
+            domain,
+            operation,
+        )
 
     default_entity = (
         default_calendar_entity_id if domain == "calendar" else default_todo_entity_id
