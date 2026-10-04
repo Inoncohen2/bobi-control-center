@@ -7,6 +7,7 @@ and are written atomically. The URI contains no original filename or user text.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import re
@@ -34,10 +35,8 @@ class LocalArchiveStorage:
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
-        try:
+        with contextlib.suppress(OSError):
             self.root.chmod(0o700)
-        except OSError:
-            pass
         self._root = self.root.resolve()
 
     def _owner_dir(self, owner_key: str) -> tuple[str, Path]:
@@ -47,10 +46,8 @@ class LocalArchiveStorage:
         resolved = directory.resolve()
         if resolved.parent != self._root:
             raise ValueError("archive_local_path_invalid")
-        try:
+        with contextlib.suppress(OSError):
             resolved.chmod(0o700)
-        except OSError:
-            pass
         return owner_hash, resolved
 
     @staticmethod
@@ -92,15 +89,11 @@ class LocalArchiveStorage:
                     handle.write(content)
                     handle.flush()
                     os.fsync(handle.fileno())
-                try:
+                with contextlib.suppress(OSError):
                     temp.chmod(0o600)
-                except OSError:
-                    pass
                 os.replace(temp, target)
-                try:
+                with contextlib.suppress(OSError):
                     target.chmod(0o600)
-                except OSError:
-                    pass
             finally:
                 if temp.exists():
                     temp.unlink(missing_ok=True)
