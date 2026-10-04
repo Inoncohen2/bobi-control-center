@@ -124,8 +124,8 @@ def event_matches(
     """Match only transitions for the currently discovered stable entity."""
 
     if trigger.for_seconds > 0:
-        # Duration triggers require a delayed recheck worker; fail closed until
-        # that worker is connected rather than firing early.
+        # Duration triggers are handled by ConditionalDurationRuntime.  Keep the
+        # immediate runner fail-closed so the initial transition never fires.
         return False
 
     live_entity = find_trigger_entity(devices, stable_key=trigger.entity.stable_key)
@@ -285,8 +285,6 @@ class ConditionalRuleStore:
     ) -> ConditionalRule:
         if not rule_id.strip() or not user_key.strip():
             raise ValueError("invalid_conditional_identity")
-        if trigger.for_seconds > 0:
-            raise ValueError("duration_trigger_not_connected")
         now = int(now_ts or time.time())
         with self._db:
             self._db.execute(
