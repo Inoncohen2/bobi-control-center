@@ -6,7 +6,8 @@ provider-specific inbox/outbox -> reaction/typing -> trusted media -> semantic A
 
 Interactive provider events are routed separately from free-form messages. Poll
 votes are matched to Bobi-owned poll ids and linked users and are never passed to
-AI as command text.
+AI as command text. Outbound polls are registered only after WAHA returns its
+canonical poll message id.
 
 Each messaging provider owns a separate durable queue/worker. Bobi memory,
 request ledger, schedules, activity and approval state are installation-wide so
@@ -39,7 +40,8 @@ from .memory import BobiMemory
 from .messaging import InboundMessage, MessageStore, MessageTransport, process_next_message
 from .models import DeviceRecord
 from .pending_approval import PendingApprovalStore
-from .poll_interactions import PollInteractionStore
+from .poll_interactions import PollInteraction, PollInteractionStore
+from .poll_outbound import send_registered_poll
 from .request_ledger import RequestLedger
 from .scheduler import ScheduleStore
 from .secret_vault import EncryptedSecretVault, SecretVaultError
@@ -238,6 +240,50 @@ class BobiNextMessagingRuntime:
                 ",".join(failures),
             )
         return MessagingRuntimeStatus(True, "ready", tuple(sorted(self.boundaries)))
+
+    async def send_poll(
+        self,
+        provider_key: str,
+        *,
+        chat_id: str,
+        user_key: str,
+        question: str,
+        option_keys: dict[str, str],
+        multiple_answers: bool = False,
+        context_key: str = "",
+        expires_ts: int = 0,
+        now_ts: int | None = None,
+    ) -> PollInteraction:
+        """Send and durably register one Bobi-owned WAHA poll.
+
+        Registration happens only after WAHA returns its canonical message id.
+        There is intentionally no guessed/fallback poll id. If the process dies
+        between network acceptance and registration, a later vote fails closed
+        as ``unknown_poll`` rather than being interpreted as an action.
+        """
+
+        boundary = self.boundaries.get(provider_key)
+        if boundary is None:
+            raise KeyError("provider_not_runtime_enabled")
+        if not isinstance(boundary.transport, WahaTransport):
+            raise TypeError("provider_does_not_support_polls")
+        user = self.setup.get_user(user_key)
+        if user is None or not user.enabled:
+            raise PermissionError("unknown_or_disabled_user")
+
+        return await send_registered_poll(
+            boundary.transport,
+            self.interactions,
+            provider=provider_key,
+            chat_id=chat_id,
+            user_key=user_key,
+            question=question,
+            option_keys=option_keys,
+            multiple_answers=multiple_answers,
+            context_key=context_key,
+            expires_ts=expires_ts,
+            now_ts=now_ts,
+        )
 
     def ingest(self, provider_key: str, event: dict) -> IngestResult:
         boundary = self.boundaries.get(provider_key)
