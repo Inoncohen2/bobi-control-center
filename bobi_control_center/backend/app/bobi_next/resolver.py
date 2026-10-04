@@ -1,8 +1,8 @@
 """Generic target resolution for Bobi Next.
 
-Resolution is deterministic and fail-closed.  It uses discovered HA names,
+Resolution is deterministic and fail-closed. It uses discovered HA names,
 areas, aliases and optional learned aliases; it contains no private room/device
-mapping.  AI may propose text, but this resolver remains the authority that
+mapping. AI may propose text, but this resolver remains the authority that
 binds text to actual HA targets.
 """
 
@@ -13,12 +13,22 @@ from collections.abc import Callable, Iterable
 
 from .models import DeviceRecord, TargetResolution
 
-
 _SPACE = re.compile(r"\s+")
 _PUNCT = re.compile(r"[^0-9a-zA-Zא-ת%._ -]+")
 _REFERENCE_WORDS = {
-    "אותו", "אותה", "אותם", "אותן", "בו", "בה", "שם", "זה", "זאת",
-    "עוד", "קצת", "יותר", "פחות",
+    "אותו",
+    "אותה",
+    "אותם",
+    "אותן",
+    "בו",
+    "בה",
+    "שם",
+    "זה",
+    "זאת",
+    "עוד",
+    "קצת",
+    "יותר",
+    "פחות",
 }
 
 
@@ -112,8 +122,8 @@ def resolve_target(
                 best += 0.07
                 reason = "alias_area"
             elif domain_hint:
-                # "the climate in bedroom" is safe when domain + area narrows
-                # the result; bare "bedroom" is intentionally not enough.
+                # Domain + area may safely narrow the result; a bare area is
+                # intentionally not enough to guess a device.
                 best = 0.82
                 reason = "domain_area"
 
@@ -141,7 +151,7 @@ def resolve_target(
     second_score = scored[1][0] if len(scored) > 1 else 0.0
     candidate_ids = tuple(row[1].bobi_id for row in scored[:5])
 
-    # A close tie is ambiguity, not permission to guess.  This mirrors Bobi's
+    # A close tie is ambiguity, not permission to guess. This mirrors Bobi's
     # current Target Authority fail-closed rule without hard-coded rooms.
     if second_score >= 0.80 and top_score - second_score < 0.08:
         return TargetResolution(
