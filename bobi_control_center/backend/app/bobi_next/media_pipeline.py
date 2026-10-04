@@ -9,7 +9,7 @@ before the normal deterministic Bobi engine sees the request.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
