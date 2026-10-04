@@ -16,7 +16,8 @@ from dataclasses import dataclass
 from app.config import Settings
 
 from .authorization import RiskLevel, UserPolicy
-from .conditional import ConditionalRuleStore
+from .conditional import ConditionalRuleStore, StateChangeEvent
+from .conditional_duration import ConditionalDurationRuntime, DurationCheckStore
 from .conditional_runtime import ConditionalEventRuntime
 from .ha_control import HomeAssistantNativeClient
 from .ha_discovery import HomeAssistantDiscoveryClient
@@ -49,6 +50,8 @@ class BobiNextRuntimeService:
         self.settings = settings
         self.setup = SetupStore(settings.data_dir / "bobi-next-setup.db")
         self.rules: ConditionalRuleStore | None = None
+        self.duration_checks: DurationCheckStore | None = None
+        self.duration_runtime: ConditionalDurationRuntime | None = None
         self.pending_approvals: PendingApprovalStore | None = None
         self.discovery: HomeAssistantDiscoveryClient | None = None
         self.native: HomeAssistantNativeClient | None = None
@@ -56,6 +59,7 @@ class BobiNextRuntimeService:
         self.runtime: ConditionalEventRuntime | None = None
         self.stop_event: asyncio.Event | None = None
         self.task: asyncio.Task[None] | None = None
+        self.duration_task: asyncio.Task[None] | None = None
 
     async def policy_for(self, user_key: str) -> UserPolicy:
         user = self.setup.get_user(user_key)
@@ -110,9 +114,28 @@ class BobiNextRuntimeService:
             return RuntimeStartStatus(False, "initial_discovery_failed")
 
         self.rules = ConditionalRuleStore(self.settings.data_dir / "bobi-next-conditionals.db")
+        self.duration_checks = DurationCheckStore(
+            self.settings.data_dir / "bobi-next-duration-checks.db"
+        )
         self.pending_approvals = PendingApprovalStore(
             self.settings.data_dir / "bobi-next-pending-approvals.db"
         )
+        self.duration_runtime = ConditionalDurationRuntime(
+            checks=self.duration_checks,
+            rules=self.rules,
+            client=self.native,
+            list_devices=self.catalog.get_devices,
+            policy_for=self.policy_for,
+            pending_approvals=self.pending_approvals,
+            result_handler=self._handle_results,
+        )
+
+        async def observe_event(event: StateChangeEvent) -> None:
+            if self.catalog is None or self.duration_runtime is None:
+                return
+            await self.catalog.apply_state_event(event)
+            await self.duration_runtime.observe_event(event)
+
         stream = HomeAssistantEventStream(
             api_base_url=self.settings.ha_base_url,
             token=token,
@@ -126,14 +149,22 @@ class BobiNextRuntimeService:
             policy_for=self.policy_for,
             pending_approvals=self.pending_approvals,
             result_handler=self._handle_results,
-            event_observer=self.catalog.apply_state_event,
+            event_observer=observe_event,
         )
         self.stop_event = asyncio.Event()
         self.task = asyncio.create_task(
             self.runtime.run(stop_event=self.stop_event),
             name="bobi-next-conditional-runtime",
         )
+        self.duration_task = asyncio.create_task(
+            self.duration_runtime.run(
+                stop_event=self.stop_event,
+                owner_token="bobi-next-duration-worker",
+            ),
+            name="bobi-next-duration-runtime",
+        )
         self.task.add_done_callback(self._runtime_done)
+        self.duration_task.add_done_callback(self._runtime_done)
         return RuntimeStartStatus(True, "started")
 
     @staticmethod
@@ -147,11 +178,13 @@ class BobiNextRuntimeService:
     async def aclose(self) -> None:
         if self.stop_event is not None:
             self.stop_event.set()
-        if self.task is not None and not self.task.done():
-            self.task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self.task
+        for task in (self.task, self.duration_task):
+            if task is not None and not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
         self.task = None
+        self.duration_task = None
         self.stop_event = None
 
         if self.discovery is not None:
@@ -162,10 +195,14 @@ class BobiNextRuntimeService:
         self.native = None
         self.catalog = None
         self.runtime = None
+        self.duration_runtime = None
 
         if self.rules is not None:
             self.rules.close()
             self.rules = None
+        if self.duration_checks is not None:
+            self.duration_checks.close()
+            self.duration_checks = None
         if self.pending_approvals is not None:
             self.pending_approvals.close()
             self.pending_approvals = None
