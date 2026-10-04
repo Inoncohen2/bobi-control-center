@@ -252,6 +252,66 @@ class ScheduleStore:
             raise RuntimeError("job_disappeared")
         return updated
 
+    def hold_for_approval(
+        self,
+        job_id: str,
+        *,
+        owner_token: str,
+        reason: str,
+        now_ts: int | None = None,
+    ) -> ScheduledJob:
+        """Pause a claimed job without retrying or performing a side effect."""
+
+        now = int(now_ts or time.time())
+        job = self.get(job_id)
+        if job is None:
+            raise KeyError("job_not_found")
+        if job.state != "running" or job.owner_token != owner_token:
+            raise PermissionError("job_not_owned")
+        with self._db:
+            self._db.execute(
+                """
+                UPDATE scheduled_jobs
+                SET state='awaiting_approval', owner_token='', lease_until_ts=0,
+                    last_error=?, updated_ts=?
+                WHERE job_id=? AND state='running' AND owner_token=?
+                """,
+                (str(reason)[:1000], now, job_id, owner_token),
+            )
+        updated = self.get(job_id)
+        if updated is None:
+            raise RuntimeError("job_disappeared")
+        return updated
+
+    def resume_after_approval(
+        self,
+        job_id: str,
+        *,
+        now_ts: int | None = None,
+    ) -> ScheduledJob:
+        """Make an approval-held job eligible for a fresh policy/state evaluation."""
+
+        now = int(now_ts or time.time())
+        job = self.get(job_id)
+        if job is None:
+            raise KeyError("job_not_found")
+        if job.state != "awaiting_approval":
+            raise RuntimeError("job_not_awaiting_approval")
+        with self._db:
+            self._db.execute(
+                """
+                UPDATE scheduled_jobs
+                SET state='pending', run_at_ts=?, owner_token='', lease_until_ts=0,
+                    last_error='', updated_ts=?
+                WHERE job_id=? AND state='awaiting_approval'
+                """,
+                (now, now, job_id),
+            )
+        updated = self.get(job_id)
+        if updated is None:
+            raise RuntimeError("job_disappeared")
+        return updated
+
     def fail(
         self,
         job_id: str,
