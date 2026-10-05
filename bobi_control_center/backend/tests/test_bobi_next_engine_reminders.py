@@ -262,15 +262,15 @@ async def test_duplicate_request_does_not_create_second_reminder(tmp_path) -> No
         provider_key="wa-main",
         chat_id="chat-1",
     )
-    kwargs = dict(
-        understanding=StaticUnderstanding(_intent()),
-        list_devices=_devices,
-        policy_for=_policy,
-        ha=NoopHA(),
-        memory=memory,
-        requests=requests,
-        reminders=reminders,
-    )
+    kwargs = {
+        "understanding": StaticUnderstanding(_intent()),
+        "list_devices": _devices,
+        "policy_for": _policy,
+        "ha": NoopHA(),
+        "memory": memory,
+        "requests": requests,
+        "reminders": reminders,
+    }
     try:
         first = await process_request(request, **kwargs)
         second = await process_request(request, **kwargs)
