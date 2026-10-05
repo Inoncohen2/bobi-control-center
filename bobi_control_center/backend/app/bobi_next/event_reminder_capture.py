@@ -13,13 +13,27 @@ from dataclasses import dataclass
 from typing import Any
 
 from .authorization import UserPolicy
-from .conditional import TriggerSpec, trigger_ref
+from .conditional import TriggerSpec, entity_stable_key, trigger_ref
 from .event_reminders import EventReminderDefinition, EventReminderStore
 from .intent import SemanticIntent
 from .models import DeviceRecord, EntityRecord, TargetResolution
 from .resolver import resolve_target
 
 AliasProvider = Callable[[str], Iterable[tuple[str, float]]]
+
+_SELF_TARGETS = frozenset(
+    {
+        "i",
+        "me",
+        "myself",
+        "my location",
+        "אני",
+        "אותי",
+        "המיקום שלי",
+        "מיקום שלי",
+    }
+)
+_PRESENCE_DOMAINS = frozenset({"", "person", "device_tracker"})
 
 
 @dataclass(slots=True, frozen=True)
@@ -59,6 +73,45 @@ def _one_trigger_entity(device: DeviceRecord, domain: str) -> EntityRecord:
     if len(candidates) != 1:
         raise ValueError("event_reminder_trigger_entity_ambiguous")
     return candidates[0]
+
+
+def _is_self_target(value: str) -> bool:
+    normalized = " ".join(value.casefold().strip().split())
+    return normalized in _SELF_TARGETS
+
+
+def _presence_resolution(
+    devices: tuple[DeviceRecord, ...],
+    presence_entity: EntityRecord | None,
+) -> tuple[TargetResolution, EntityRecord | None]:
+    if presence_entity is None:
+        return TargetResolution(False, reason="presence_binding_required"), None
+    stable_key = entity_stable_key(presence_entity)
+    matches = tuple(
+        device
+        for device in devices
+        if any(entity_stable_key(entity) == stable_key for entity in device.entities)
+    )
+    if len(matches) != 1:
+        return TargetResolution(False, reason="presence_binding_unavailable"), None
+    live = next(
+        entity
+        for entity in matches[0].entities
+        if entity_stable_key(entity) == stable_key
+    )
+    if live.domain not in {"person", "device_tracker"}:
+        return TargetResolution(False, reason="presence_binding_invalid"), None
+    return (
+        TargetResolution(
+            True,
+            devices=(matches[0],),
+            confidence=1.0,
+            reason="presence_binding",
+            resolution_kind="presence_binding",
+            candidate_ids=(matches[0].bobi_id,),
+        ),
+        live,
+    )
 
 
 def _trigger_spec(payload: dict[str, Any], entity: EntityRecord) -> TriggerSpec:
@@ -119,6 +172,7 @@ def capture_event_reminder(
     policy: UserPolicy,
     store: EventReminderStore,
     learned_aliases: AliasProvider | None = None,
+    presence_entity: EntityRecord | None = None,
     now_ts: int,
     dry_run: bool = False,
 ) -> EventReminderCaptureResult:
@@ -158,13 +212,24 @@ def capture_event_reminder(
     if not trigger_target:
         return EventReminderCaptureResult("clarification", "event_reminder_trigger_target_missing")
 
-    resolution = resolve_target(
-        trigger_target,
-        tuple(devices),
-        domain_hint=trigger_domain,
-        learned_aliases=learned_aliases,
-        allow_group=False,
-    )
+    device_tuple = tuple(devices)
+    bound_entity: EntityRecord | None = None
+    if _is_self_target(trigger_target):
+        if trigger_domain not in _PRESENCE_DOMAINS:
+            return EventReminderCaptureResult(
+                "clarification",
+                "presence_trigger_domain_invalid",
+            )
+        resolution, bound_entity = _presence_resolution(device_tuple, presence_entity)
+    else:
+        resolution = resolve_target(
+            trigger_target,
+            device_tuple,
+            domain_hint=trigger_domain,
+            learned_aliases=learned_aliases,
+            allow_group=False,
+        )
+
     if not resolution.ok or len(resolution.devices) != 1:
         return EventReminderCaptureResult(
             "clarification",
@@ -173,7 +238,7 @@ def capture_event_reminder(
         )
 
     try:
-        entity = _one_trigger_entity(resolution.devices[0], trigger_domain)
+        entity = bound_entity or _one_trigger_entity(resolution.devices[0], trigger_domain)
         trigger = _trigger_spec(payload, entity)
     except (TypeError, ValueError) as exc:
         return EventReminderCaptureResult(
