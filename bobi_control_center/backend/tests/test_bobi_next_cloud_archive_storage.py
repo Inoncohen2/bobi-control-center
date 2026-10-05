@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 
 import httpx
 import pytest
@@ -162,7 +163,7 @@ async def test_storage_client_emits_narrow_archive_operation() -> None:
     seen: list[dict] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request.json())
+        seen.append(json.loads(request.content.decode()))
         return httpx.Response(
             200,
             json={
