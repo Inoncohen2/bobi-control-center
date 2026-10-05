@@ -4,17 +4,23 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import Protocol
 
-from .archive_capture import ArchiveCaptureService
+from .archive_capture import ArchiveBlobStorage, ArchiveCaptureService
 from .archive_retrieval import ArchiveRetrievalService
 from .archive_store import ArchiveStore
 from .local_archive_storage import LocalArchiveStorage
 from .outbound_media import (
+    ArchiveBlobReader,
     OutboundMediaDispatch,
     OutboundMediaStore,
     OutboundMediaTransport,
     process_next_outbound_media,
 )
+
+
+class ArchiveBlobBackend(ArchiveBlobStorage, ArchiveBlobReader, Protocol):
+    """One archive provider capable of both persistence and verified reads."""
 
 
 def _provider_key(value: str) -> str:
@@ -27,11 +33,18 @@ def _provider_key(value: str) -> str:
 class ArchiveSubsystem:
     """Own archive semantics, private bytes and per-provider outbound journals."""
 
-    def __init__(self, data_dir: str | Path) -> None:
+    def __init__(
+        self,
+        data_dir: str | Path,
+        *,
+        storage: ArchiveBlobBackend | None = None,
+    ) -> None:
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.index = ArchiveStore(self.data_dir / "bobi-next-archive.db")
-        self.storage = LocalArchiveStorage(self.data_dir / "bobi-next-archive-files")
+        self.storage = storage or LocalArchiveStorage(
+            self.data_dir / "bobi-next-archive-files"
+        )
         self.capture = ArchiveCaptureService(self.index, self.storage)
         self._outboxes: dict[str, OutboundMediaStore] = {}
         self._closed = False
