@@ -26,6 +26,14 @@ from .conversation_handler import (
     build_conversation_handler,
 )
 from .event_reminders import EventReminderStore
+from .expense_commands import (
+    expense_allowed,
+    expense_help,
+    expense_requested,
+    parse_expense_month,
+    parse_expense_record,
+)
+from .expense_ledger import ALREADY_RECORDED, EXPENSE_RECORDED, ExpenseLedger
 from .integration_runtime import RoutedArchiveStorage
 from .interaction_dispatch import InteractionHandlerResult
 from .media_analyzers import MediaAnalyzerRegistry
@@ -89,6 +97,7 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
             self.data_dir,
             storage=RoutedArchiveStorage(self.data_dir),
         )
+        self.expenses = ExpenseLedger(self.archive.index.path)
         self.reminders = ReminderStore(self.data_dir / "bobi-next-reminders.db")
         self.event_reminders = EventReminderStore(self.data_dir / "bobi-next-event-reminders.db")
         self.archive_tasks: dict[str, asyncio.Task[None]] = {}
@@ -98,13 +107,14 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
             self.requests,
             self.pending_approvals,
             self.approvals,
+            self.expenses,
         )
         previous_approval_handler = self.interaction_handlers.get("approval")
 
         async def approval_handler(selection):
             namespace, _, request_id = selection.context_key.partition(":")
             pending = self.pending_approvals.get(request_id) if namespace == "approval" else None
-            if pending and pending.plans and pending.plans[0].domain == "archive":
+            if pending and pending.plans and pending.plans[0].domain in {"archive", "expenses"}:
                 if len(selection.selected_keys) != 1:
                     return InteractionHandlerResult(
                         "invalid_selection", "יש לבחור אפשרות אחת בלבד."
@@ -137,11 +147,14 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
         async def handler(message: InboundMessage) -> MessageResponse:
             if message.kind == "text":
                 review = parse_receipt_review(message.text)
-                mutation = review or parse_archive_mutation(message.text)
+                expense = parse_expense_record(message.text)
+                mutation = expense or review or parse_archive_mutation(message.text)
                 normalized = _normalize_confirmation(message.text)
                 now = int(time.time())
                 mutation_text = None
-                if review is None and receipt_review_requested(message.text):
+                if expense is None and expense_requested(message.text):
+                    mutation_text = expense_help()
+                elif review is None and receipt_review_requested(message.text):
                     mutation_text = receipt_review_help()
                 elif mutation is not None:
                     policy = await self.policy_for(message.user_key)
@@ -170,6 +183,15 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
                     )
                 if mutation_text is not None:
                     return self._remember_archive_reply(message, mutation_text, now_ts=now)
+                expense_month = parse_expense_month(message.text)
+                if expense_month is not None:
+                    policy = await self.policy_for(message.user_key)
+                    text = self.expenses.month_reply(
+                        owner_key=message.user_key, month=expense_month,
+                    ) if expense_allowed(
+                        policy, user_key=message.user_key, action="summary",
+                    ) else "אין הרשאה לקרוא את יומן ההוצאות."
+                    return self._remember_archive_reply(message, text, now_ts=now)
                 details = parse_receipt_details(message.text)
                 if details is not None:
                     policy = await self.policy_for(message.user_key)
@@ -234,7 +256,9 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
         """Reauthorize fresh/cached financial replies without regenerating their payload."""
         details = parse_receipt_details(message.text) if message.kind == "text" else None
         review = parse_receipt_review(message.text) if message.kind == "text" else None
-        if details is None and review is None:
+        expense = parse_expense_record(message.text) if message.kind == "text" else None
+        expense_month = parse_expense_month(message.text) if message.kind == "text" else None
+        if details is None and review is None and expense is None and expense_month is None:
             return True
         if outbound.text in {
             "אין הרשאה לקרוא את פרטי המסמך בארכיון.",
@@ -243,6 +267,11 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
             "לא מצאתי מסמך שמתאים לבקשה הזאת.",
             "הבקשה נבדקה במצב Shadow. הארכיון לא שונה.",
             "✅ נשמרו פרטי המסמך שכתבת ואישרת. יתר הפרטים שחולצו עדיין דורשים בדיקה.",
+            "אין הרשאה לרשום הוצאה מהקבלה.",
+            "אין הרשאה לקרוא את יומן ההוצאות.",
+            "הבקשה נבדקה במצב Shadow. לא נרשמה הוצאה.",
+            ALREADY_RECORDED,
+            EXPENSE_RECORDED,
         }:
             return True
         actor = message.metadata.get("sender_fingerprint")
@@ -258,6 +287,14 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
         if user is None or user.user_key != message.user_key:
             return False
         policy = await self.policy_for(message.user_key)
+        if expense_month is not None:
+            return expense_allowed(policy, user_key=message.user_key, action="summary")
+        if expense is not None:
+            return expense_allowed(
+                policy, user_key=message.user_key, action="record",
+            ) and archive_read_allowed(
+                policy, user_key=message.user_key, action="details",
+            ) and policy.can_approve
         if details is not None:
             return archive_read_allowed(policy, user_key=message.user_key, action="details")
         return archive_write_allowed(
@@ -433,4 +470,5 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
         await super().aclose()
         self.event_reminders.close()
         self.reminders.close()
+        self.expenses.close()
         self.archive.close()

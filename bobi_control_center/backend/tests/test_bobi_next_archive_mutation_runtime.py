@@ -347,3 +347,86 @@ async def test_older_private_inbox_rechecks_link_and_older_group_inbox_fails_clo
     # A static denial remains deliverable and contains no saved financial data.
     denied = replace(reply, text="אין הרשאה לקרוא את פרטי המסמך בארכיון.")
     assert await runtime._private_financial_reply_allowed(request, denied)
+
+
+@pytest.mark.asyncio
+async def test_expense_authority_is_current_text_and_requires_separate_review_and_approval(runtime):
+    item = await saved_receipt(runtime)
+    calls = []
+    command = "רשום הוצאה מהקבלה של איקאה בקטגוריית בית"
+
+    async def base(msg):
+        calls.append(msg)
+        return MessageResponse("normal context")
+
+    handler = runtime._archive_retrieval_handler("waha", base)
+    for kind in ("voice", "document", "image"):
+        await handler(message(command, kind, kind=kind))
+    await handler(message("תסביר", "quote-expense", metadata={"quoted": {"text": command}}))
+    assert len(calls) == 4
+    assert "החילוץ האוטומטי אינו מספיק" in (await handler(message(command, "unreviewed"))).text
+    assert runtime.pending_approvals.peek_latest(user_key="u1") is None
+    await handler(message(
+        "עדכן את פרטי הקבלה איקאה: סכום=12.34 ILS; ספק=איקאה; תאריך=2026-10-05", "review",
+    ))
+    await handler(message("כן", "review-yes"))
+    assert runtime.expenses.for_source(owner_key="u1", sha256=item.sha256) is None
+    prompt = await handler(message(command, "expense"))
+    assert "12.34 ILS" in prompt.text and "999.00" not in prompt.text
+    await handler(message("כן", "media-yes", kind="voice"))
+    assert runtime.expenses.for_source(owner_key="u1", sha256=item.sha256) is None
+    pending = runtime.pending_approvals.peek_latest(user_key="u1")
+    selection = InteractionSelection(
+        dispatch_id="expense-dispatch", provider="waha", interaction_id="poll",
+        poll_message_id="expense-poll", chat_id="chat", user_key="u1",
+        context_key=f"approval:{pending.approval_request_id}", selected_keys=("approve",),
+        source_event_id="vote", provider_timestamp=100,
+    )
+    assert "נרשמה ואומתה" in (await runtime.interaction_handlers["approval"](selection)).response_text
+    assert "נרשמה ואומתה" in (await runtime.interaction_handlers["approval"](selection)).response_text
+    summary = (await handler(message("הצג הוצאות לחודש 2026-10", "summary"))).text
+    assert "12.34 ILS (1 הוצאה)" in summary and "999.00" not in summary
+    assert runtime.archive.index.get(item.object_id, owner_key="u1").revision == 1
+
+
+@pytest.mark.asyncio
+async def test_denied_expense_summary_never_queries_the_ledger(runtime, monkeypatch):
+    async def denied(user):
+        return UserPolicy(user, denied_capabilities=frozenset({"expenses.read"}))
+
+    async def base(msg):
+        raise AssertionError("expense summary must not reach AI")
+
+    def forbidden(**kwargs):
+        raise AssertionError("denied expense summary read the ledger")
+
+    runtime.policy_for = denied
+    monkeypatch.setattr(runtime.expenses, "month_reply", forbidden)
+    response = await runtime._archive_retrieval_handler("waha", base)(
+        message("הצג הוצאות לחודש 2026-10"),
+    )
+    assert response.text == "אין הרשאה לקרוא את יומן ההוצאות."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command,revoked", [
+    ("רשום הוצאה מהקבלה איקאה בקטגוריית בית", "archive.read"),
+    ("רשום הוצאה מהקבלה איקאה בקטגוריית בית", "expenses.write"),
+    ("הצג הוצאות לחודש 2026-10", "expenses.read"),
+])
+async def test_expense_private_dispatch_requires_enabled_identity_and_current_permission(runtime, command, revoked):
+    runtime.setup.upsert_provider(provider_key="waha", provider_type="waha", display_name="WAHA")
+    runtime.setup.create_user(display_name="Owner", role="owner", user_key="u1")
+    runtime.setup.link_identity(provider_key="waha", external_id="111@c.us", user_key="u1")
+    request = replace(message(command), chat_id="111@c.us")
+    reply = OutboundMessage("key", "waha", request.chat_id, request.message_id, "private", "prepared")
+    assert await runtime._private_financial_reply_allowed(request, reply)
+
+    async def denied(user):
+        return UserPolicy(user, denied_capabilities=frozenset({revoked}))
+
+    runtime.policy_for = denied
+    assert not await runtime._private_financial_reply_allowed(request, reply)
+    runtime.policy_for = policy
+    runtime.setup.unlink_identity(provider_key="waha", external_id="111@c.us")
+    assert not await runtime._private_financial_reply_allowed(request, reply)

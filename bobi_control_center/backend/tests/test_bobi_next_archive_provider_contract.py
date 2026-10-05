@@ -554,6 +554,75 @@ async def test_private_financial_reply_retry_rechecks_current_policy_and_identit
 
 
 @pytest.mark.asyncio
+async def test_receipt_expense_flow_requires_review_then_independent_approval_and_survives_reply_loss(
+    archive_endpoint, tmp_path, monkeypatch,
+):
+    _configure_archive(tmp_path / "bobi-next-setup.db", archive_endpoint)
+    waha = _WahaHTTP()
+    understanding = _Understanding()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(waha.request)) as client:
+        _inject_waha_http(monkeypatch, client)
+        flow = _WhatsAppFlow(tmp_path, understanding)
+        try:
+            await flow.send("expense-receipt-save", "שמור את הקבלה", media=True)
+            item, = flow.runtime.archive.index.search(owner_key="owner", kind="receipt")
+            await flow.send("expense-unreviewed", "רשום הוצאה מהקבלה insurance בקטגוריית בית")
+            assert "החילוץ האוטומטי אינו מספיק" in waha.replies[-1]["text"]
+            assert flow.runtime.pending_approvals.peek_latest(user_key="owner") is None
+            await flow.send(
+                "expense-source-review",
+                "עדכן את פרטי הקבלה insurance: סכום=12.34 ILS; ספק=IKEA; תאריך=2026-10-05",
+            )
+            await flow.send("expense-review-confirm", "כן")
+            assert flow.runtime.expenses.for_source(owner_key="owner", sha256=item.sha256) is None
+            await flow.send("expense-request", "רשום הוצאה מהקבלה IKEA בקטגוריית בית", quoted=True)
+            prompt = waha.replies[-1]["text"]
+            assert "12.34 ILS" in prompt and "2026-10-05" in prompt and "קטגוריה: בית" in prompt
+            await flow.close()
+            flow.open()
+            event = flow.event("expense-confirm", "כן")
+            assert flow.ingest(event).accepted
+            waha.fail_reply_once = True
+            assert (await flow.process()).state == "retry"
+            entry = flow.runtime.expenses.for_source(owner_key="owner", sha256=item.sha256)
+            assert entry.amount_minor == 1234 and entry.source_revision == 1
+            await flow.close()
+            flow.open()
+            assert (await flow.process()).state == "completed"
+            assert "נרשמה ואומתה" in waha.replies[-1]["text"]
+            assert flow.ingest(event).duplicate
+            await flow.send("expense-again", "רשום הוצאה מהקבלה IKEA בקטגוריית ריהוט")
+            assert "לא נרשמה הוצאה נוספת" in waha.replies[-1]["text"]
+            assert flow.runtime.expenses.for_source(owner_key="owner", sha256=item.sha256) == entry
+            await flow.send("expense-summary", "הצג הוצאות לחודש 2026-10")
+            assert "12.34 ILS (1 הוצאה)" in waha.replies[-1]["text"]
+            assert "בית" in waha.replies[-1]["text"] and "ריהוט" not in waha.replies[-1]["text"]
+            source = flow.runtime.archive.index.get(item.object_id, owner_key="owner")
+            assert source.revision == 1 and source.storage_uri == item.storage_uri
+            assert await flow.runtime.archive.storage.read(source.storage_uri, max_bytes=1024)
+            assert flow.ingest(flow.event("expense-private-retry", "הצג הוצאות לחודש 2026-10")).accepted
+            waha.fail_reply_once = True
+            assert (await flow.process()).state == "retry"
+            queued = flow.boundary.messages.get_inbound("waha", "expense-private-retry")
+            cached = flow.boundary.messages.outbound_for(queued)
+            assert "12.34 ILS" in cached.text
+            sends = sum(request.url.path == "/api/sendText" for request in waha.requests)
+            policy = flow.setup.get_user("owner").policy
+            flow.setup.update_user_policy(
+                "owner", replace(policy, denied_capabilities=frozenset({"expenses.read"})),
+            )
+            await flow.close()
+            flow.open()
+            blocked = await flow.process()
+            assert blocked.state == "failed" and blocked.last_error.endswith("reply_authorization_denied")
+            assert sum(request.url.path == "/api/sendText" for request in waha.requests) == sends
+            assert flow.boundary.messages.outbound_for(blocked).text == cached.text
+            assert not waha.files and understanding.texts == []
+        finally:
+            await flow.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("case", ["no_instruction", "quote_only", "denied", "shadow"])
 async def test_cloud_whatsapp_requires_current_explicit_authority_and_permission(
     archive_endpoint,

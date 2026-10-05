@@ -1,6 +1,6 @@
-"""Deterministic private archive plans, approval continuation and verified execution.
+"""Deterministic private archive/receipt expense plans and approval continuation.
 
-This executor changes Bobi's semantic index only. Category changes and soft
+These executors change Bobi's local index/ledger only. Category changes and soft
 deletion never move/delete immutable provider bytes or invoke an HA service.
 The exact mutation and its receipt commit together, so crashes between execution
 and messaging acknowledgement cannot apply a command to another search result.
@@ -13,6 +13,7 @@ import uuid
 
 from .archive_commands import archive_write_allowed
 from .archive_mutation_commands import ArchiveMutationCommand
+from .archive_retrieval import archive_read_allowed
 from .archive_store import ArchiveMutationReceipt, ArchiveRecord, ArchiveStore
 from .authorization import (
     ApprovalStore,
@@ -21,6 +22,14 @@ from .authorization import (
     authorize_plan,
     plan_fingerprint,
     state_fingerprint,
+)
+from .expense_commands import expense_allowed, parse_expense_record, validate_expense_category
+from .expense_ledger import (
+    ALREADY_RECORDED,
+    EXPENSE_RECORDED,
+    ExpenseLedger,
+    ExpenseReceipt,
+    expense_source_fields,
 )
 from .models import ActionPlan
 from .pending_approval import PendingApproval, PendingApprovalStore
@@ -49,7 +58,9 @@ def _chat_hash(chat_id: str) -> str:
     return hashlib.sha256(chat_id.encode()).hexdigest()
 
 
-def _receipt_reply(receipt: ArchiveMutationReceipt) -> str:
+def _receipt_reply(receipt: ArchiveMutationReceipt | ExpenseReceipt) -> str:
+    if isinstance(receipt, ExpenseReceipt):
+        return ALREADY_RECORDED if receipt.duplicate else EXPENSE_RECORDED
     if receipt.operation == "move":
         return f"✅ העברתי את המסמך לתיקיית {receipt.record.category}."
     if receipt.operation == "delete":
@@ -70,11 +81,32 @@ class ArchiveMutationService:
         requests: RequestLedger,
         pending: PendingApprovalStore,
         approvals: ApprovalStore,
+        expenses: ExpenseLedger | None = None,
     ) -> None:
         self.archive = archive
         self.requests = requests
         self.pending = pending
         self.approvals = approvals
+        self.expenses = expenses
+
+    def _receipt(
+        self, request_id: str, *, owner_key: str,
+    ) -> ArchiveMutationReceipt | ExpenseReceipt | None:
+        return self.archive.mutation_receipt(request_id, owner_key=owner_key) or (
+            self.expenses.receipt(request_id, owner_key=owner_key) if self.expenses else None
+        )
+
+    @staticmethod
+    def _command_allowed(
+        command: ArchiveMutationCommand, policy: UserPolicy, user_key: str,
+    ) -> bool:
+        if command.operation == "record_expense":
+            return expense_allowed(
+                policy, user_key=user_key, action="record",
+            ) and archive_read_allowed(
+                policy, user_key=user_key, action="details",
+            )
+        return archive_write_allowed(policy, user_key=user_key, action=command.operation)
 
     def execute_command(
         self,
@@ -89,12 +121,18 @@ class ArchiveMutationService:
         now_ts: int,
         dry_run: bool = False,
     ) -> str:
-        if not archive_write_allowed(policy, user_key=user_key, action=command.operation):
+        if not self._command_allowed(command, policy, user_key):
+            if command.operation == "record_expense":
+                return "אין הרשאה לרשום הוצאה מהקבלה."
             return "אין הרשאה לשנות את המסמך בארכיון."
+        if command.operation == "record_expense" and parse_expense_record(input_text) != command:
+            return "נדרשת הוראה מפורשת בהודעה הנוכחית. לא נרשמה הוצאה."
         if command.operation == "review" and parse_receipt_review(input_text) != command:
             return "נדרשים ערכים מפורשים בהודעה הנוכחית. פרטי המסמך לא שונו."
         if dry_run:
-            return "הבקשה נבדקה במצב Shadow. הארכיון לא שונה."
+            return "הבקשה נבדקה במצב Shadow. לא נרשמה הוצאה." if (
+                command.operation == "record_expense"
+            ) else "הבקשה נבדקה במצב Shadow. הארכיון לא שונה."
         prior = self.requests.get(request_id)
         if prior and (prior.user_key != user_key or prior.input_text != input_text):
             return "הבקשה אינה תקפה. הארכיון לא שונה."
@@ -109,7 +147,7 @@ class ArchiveMutationService:
         if not claim.claimed:
             if claim.reason != "request_terminal":
                 raise RuntimeError("archive_mutation_request_owned")
-            receipt = self.archive.mutation_receipt(request_id, owner_key=user_key)
+            receipt = self._receipt(request_id, owner_key=user_key)
             if receipt:
                 return _receipt_reply(receipt)
             if claim.record.terminal_kind == "archive_approval_required":
@@ -123,7 +161,7 @@ class ArchiveMutationService:
             return "הבקשה כבר טופלה. לא בוצע שינוי נוסף בארכיון."
 
         try:
-            receipt = self.archive.mutation_receipt(request_id, owner_key=user_key)
+            receipt = self._receipt(request_id, owner_key=user_key)
             if receipt:
                 text, terminal = _receipt_reply(receipt), "archive_mutated"
             else:
@@ -154,6 +192,11 @@ class ArchiveMutationService:
                 return (
                     "יש סכום שנבדק קודם במטבע אחר. כדי להחליף מטבע יש לציין מחדש "
                     "את הסכום ואת המע״מ שכבר נבדקו. לא בוצע שינוי."
+                )
+            if str(exc) in {"expense_review_required", "expense_review_not_verified"}:
+                return (
+                    "לרישום הוצאה דרושים סכום חיובי, מטבע, ספק ותאריך שכתבת ואישרת "
+                    "בפרטי הקבלה. החילוץ האוטומטי אינו מספיק. לא נרשמה הוצאה."
                 )
             return "מצב המסמך השתנה או שהבקשה אינה תקפה. לא בוצע שינוי."
         except BaseException:
@@ -203,6 +246,23 @@ class ArchiveMutationService:
                 "clarification",
             )
         record = records[0]
+        expense_fields: dict = {}
+        if command.operation == "record_expense":
+            if self.expenses is None:
+                raise ValueError("expense_ledger_unavailable")
+            if record.kind != "receipt":
+                raise ValueError("expense_source_invalid")
+            if self.expenses.for_source(owner_key=user_key, sha256=record.sha256):
+                return ALREADY_RECORDED, "expense_duplicate"
+            validate_expense_category(command.category)
+            expense_fields = expense_source_fields(
+                record.metadata, owner_key=user_key, sha256=record.sha256,
+            )
+            self.expenses.check_source(
+                owner_key=user_key, object_id=record.object_id, sha256=record.sha256,
+                revision=record.revision, fields=expense_fields,
+                review_request_id=str(record.metadata["financial_review"].get("request_id", "")),
+            )
         if command.operation == "review":
             if record.kind not in {"receipt", "bill"}:
                 raise ValueError("archive_review_kind_invalid")
@@ -217,9 +277,9 @@ class ArchiveMutationService:
             request_id=request_id,
             device_id=record.object_id,
             entity_id=f"archive:{record.object_id}",
-            domain="archive",
-            action=command.operation,
-            capability="archive.write",
+            domain="expenses" if expense_fields else "archive",
+            action="record" if expense_fields else command.operation,
+            capability="expenses.write" if expense_fields else "archive.write",
             data={
                 "object_id": record.object_id,
                 "owner_key": user_key,
@@ -228,9 +288,12 @@ class ArchiveMutationService:
                 "chat_hash": _chat_hash(chat_id),
                 **({"financial_fields": dict(command.financial_fields)}
                    if command.operation == "review" else {}),
+                **({"expense_fields": expense_fields,
+                    "review_request_id": record.metadata["financial_review"]["request_id"]}
+                   if expense_fields else {}),
             },
             expected=guard,
-            requires_confirmation=command.operation in {"delete", "review"},
+            requires_confirmation=command.operation in {"delete", "review", "record_expense"},
         )
         provenance = RequestProvenance(explicit_target_ids=frozenset({plan.entity_id}))
         decision = authorize_plan(plan, policy=policy, provenance=provenance)
@@ -247,6 +310,12 @@ class ArchiveMutationService:
                     f'לעדכן במסמך "{display_financial_text(record.title)}" את הפרטים שכתבת?\n'
                     + format_financial_fields(command.financial_fields)
                     + "\nרק השדות המפורשים האלה מתעדכנים. יתר החילוץ דורש בדיקה."
+                )
+            if expense_fields:
+                summary = (
+                    f'לרשום הוצאה מהקבלה "{display_financial_text(record.title)}"?\n'
+                    + format_financial_fields(expense_fields)
+                    + f"\nקטגוריה: {command.category}\nהסכום והפרטים האלה יירשמו ביומן ההוצאות."
                 )
             pending = self.pending.create(
                 approval_request_id=self._approval_id(request_id),
@@ -265,8 +334,27 @@ class ArchiveMutationService:
             self._execute(plan, user_key=user_key, now_ts=now_ts)
         ), "archive_mutated"
 
-    def _execute(self, plan: ActionPlan, *, user_key: str, now_ts: int) -> ArchiveMutationReceipt:
+    def _execute(
+        self, plan: ActionPlan, *, user_key: str, now_ts: int,
+    ) -> ArchiveMutationReceipt | ExpenseReceipt:
         object_id = str(plan.data.get("object_id", ""))
+        if plan.domain == "expenses":
+            if (
+                self.expenses is None or plan.capability != "expenses.write"
+                or plan.action != "record"
+                or not plan.requires_confirmation or plan.data.get("owner_key") != user_key
+                or plan.device_id != object_id or plan.entity_id != f"archive:{object_id}"
+                or plan.expected.get("owner_key") != user_key
+                or plan.expected.get("object_id") != object_id
+            ):
+                raise ValueError("expense_plan_invalid")
+            return self.expenses.record_once(
+                request_id=plan.request_id, owner_key=user_key, plan_hash=plan_fingerprint(plan),
+                object_id=object_id, sha256=plan.expected["sha256"],
+                revision=plan.expected["revision"], fields=plan.data.get("expense_fields"),
+                review_request_id=plan.data.get("review_request_id"),
+                category=plan.data.get("category"), now_ts=now_ts,
+            )
         if (
             plan.domain != "archive"
             or plan.capability != "archive.write"
@@ -310,7 +398,9 @@ class ArchiveMutationService:
             request_id = binding[0]
         else:
             latest = self.pending.peek_latest(user_key=user_key)
-            if latest is None or not latest.plans or latest.plans[0].domain != "archive":
+            if latest is None or not latest.plans or latest.plans[0].domain not in {
+                "archive", "expenses",
+            }:
                 return None
             request_id = latest.approval_request_id
             if dry_run:
@@ -361,13 +451,13 @@ class ArchiveMutationService:
             or pending is None
             or pending.user_key != user_key
             or not self._same_channel(pending, provider, chat_id)
-            or pending.plans[0].domain != "archive"
+            or pending.plans[0].domain not in {"archive", "expenses"}
             or len(pending.state_guards) != 1
         ):
             return "האישור אינו תקף. לא בוצעה פעולה."
         plan = pending.plans[0]
         if pending.state == "completed":
-            receipt = self.archive.mutation_receipt(plan.request_id, owner_key=user_key)
+            receipt = self._receipt(plan.request_id, owner_key=user_key)
             return _receipt_reply(receipt) if receipt else "הבקשה כבר טופלה. לא בוצעה פעולה נוספת."
         owner_token = f"archive-approval:{uuid.uuid4().hex}"
         claimed = self.pending.claim(
@@ -382,9 +472,11 @@ class ArchiveMutationService:
             return "האישור פג, בוטל או כבר טופל. לא בוצעה פעולה נוספת."
         if choice == "reject":
             self.pending.reject(approval_request_id, owner_token=owner_token, now_ts=now_ts)
-            return "בוטל. הארכיון לא שונה."
+            return "בוטל. לא נרשמה הוצאה." if (
+                plan.domain == "expenses"
+            ) else "בוטל. הארכיון לא שונה."
         try:
-            receipt = self.archive.mutation_receipt(plan.request_id, owner_key=user_key)
+            receipt = self._receipt(plan.request_id, owner_key=user_key)
             if receipt is None:
                 decision = authorize_plan(
                     plan,
@@ -392,7 +484,12 @@ class ArchiveMutationService:
                     provenance=claimed.provenance,
                     approval_authorized=True,
                 )
-                if policy.user_key != user_key or not policy.can_approve or not decision.allowed:
+                if (
+                    policy.user_key != user_key or not policy.can_approve or not decision.allowed
+                    or (plan.domain == "expenses" and not archive_read_allowed(
+                        policy, user_key=user_key, action="details",
+                    ))
+                ):
                     raise ValueError("archive_approval_policy_denied")
                 record = self.archive.get(plan.device_id, owner_key=user_key, include_deleted=True)
                 if record is None or state_fingerprint(
@@ -427,7 +524,9 @@ class ArchiveMutationService:
                 error=str(exc),
                 now_ts=now_ts,
             )
-            return "מצב המסמך או ההרשאות השתנו. לא בוצע שינוי נוסף בארכיון."
+            return "מצב הקבלה או ההרשאות השתנו. לא נרשמה הוצאה נוספת." if (
+                plan.domain == "expenses"
+            ) else "מצב המסמך או ההרשאות השתנו. לא בוצע שינוי נוסף בארכיון."
         except BaseException:
             self.pending.release(
                 approval_request_id,
