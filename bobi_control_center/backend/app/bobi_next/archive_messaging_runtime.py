@@ -17,7 +17,6 @@ from .archive_retrieval import ArchiveRetrievalResult
 from .archive_retrieval_commands import parse_archive_retrieval
 from .archive_subsystem import ArchiveSubsystem
 from .conversation_handler import build_conversation_handler
-from .event_reminders import EventReminderStore
 from .integration_runtime import build_archive_storage
 from .media_analyzers import MediaAnalyzerRegistry
 from .media_pipeline import MediaPipeline
@@ -27,6 +26,7 @@ from .messaging_runtime import (
     MessagingRuntimeStatus,
     ProviderBoundary,
 )
+from .presence_bindings import PresenceAwareEventReminderStore
 from .reminders import ReminderStore, process_next_reminder
 from .setup_store import MessagingProvider
 from .understanding import ResilientUnderstandingProvider
@@ -73,8 +73,9 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
             storage=build_archive_storage(self.data_dir),
         )
         self.reminders = ReminderStore(self.data_dir / "bobi-next-reminders.db")
-        self.event_reminders = EventReminderStore(
-            self.data_dir / "bobi-next-event-reminders.db"
+        self.event_reminders = PresenceAwareEventReminderStore(
+            self.data_dir / "bobi-next-event-reminders.db",
+            presence_path=self.data_dir / "bobi-next-presence.db",
         )
         self.archive_tasks: dict[str, asyncio.Task[None]] = {}
         self.reminder_task: asyncio.Task[None] | None = None
