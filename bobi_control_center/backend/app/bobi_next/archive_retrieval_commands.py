@@ -68,7 +68,7 @@ def _kind_for(text: str) -> str:
 
 def _query_for(body: str, kind: str) -> str:
     value = " ".join(body.strip(" .,!?:;\t\n").split())
-    value = re.sub(r"^(?:את\s+)?", "", value)
+    value = re.sub(r"^(?:את|the)\s+", "", value, flags=re.IGNORECASE)
     if kind == "receipt":
         value = re.sub(
             r"^(?:ה?(?:קבלה|חשבונית|קבלות|חשבוניות)|receipt|invoice)\s*",
