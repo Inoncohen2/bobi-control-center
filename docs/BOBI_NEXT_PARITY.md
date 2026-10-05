@@ -54,7 +54,7 @@ The following V2 foundations are implemented on `chatgpt/bobi-next-generic-core`
 | AI/Understanding | structured semantic intent, context, provider runtime, Instinct rescue that re-enters deterministic guards | adversarial/live parity |
 | Calendar/To-do | native HA response client and productivity engine without Bobi scripts/helpers | live parity |
 | Activity/Undo | durable activity ledger and safe exactly-once undo runtime | live mutation parity |
-| Archive/Documents | explicit-save authority, semantic archive index, SHA-256 dedupe, private local blob storage, deterministic retrieval and category move/soft-delete/restore before AI, state-bound single-use deletion approval, atomic mutation receipts, runtime wiring, WAHA `sendFile`, crash-safe outbound-media journal | receipt/bill extraction + live E2E |
+| Archive/Documents | explicit-save authority, semantic archive index, SHA-256 dedupe, private storage, deterministic retrieval and category move/soft-delete/restore, exact deletion approval and atomic receipts, bounded advisory receipt/bill extraction, WAHA `sendFile` with crash-safe delivery | hosted cloud + live E2E; richer document extraction/review UX pending |
 | Vouchers/Supabase | typed client, voucher wallet and optional archive client; independent generic archive Edge API/schema prepared with isolation, integrity, retry and Python contract tests | provider undeployed; hosted Storage/Deno E2E and onboarding pending; no production Supabase mutation |
 | Setup/Integrations | setup store/wizard foundations, roles/policies, secret vault, integration framework | Control Center UX + migration E2E |
 
@@ -75,6 +75,7 @@ The following V2 foundations are implemented on `chatgpt/bobi-next-generic-core`
 - Deletion always needs approval. Other mutations respect the user's risk threshold. The existing pending/approval stores bind approval to the exact user, plan, provider/chat, object and revision; an exact SQL compare-and-swap closes the state-change race.
 - Mutation and read-back receipt commit in one SQLite transaction. Confirmation message IDs stay bound to one exact prompt across restart, so replaying an old "yes" cannot approve a newer action. HA approval continuation rejects archive plans before any HA call.
 - Private file deliveries recheck owner, active record, binary identity and read policy before loading and again before sending. A queued file deleted during loading is not sent; a provider send already accepted cannot be recalled.
+- Current-media labeled text can enrich receipts/bills with merchant, document number, dates and exact integer minor-unit amounts. OCR/vision evidence remains `requires_review=true`; conflicting labels/currencies, ambiguous dates and incomplete text stay missing. It cannot grant authority, change an explicit folder or create expenses/reminders. Scanned/no-text documents remain saveable.
 - Bobi can use private local storage under its own data directory without Supabase. Supabase/cloud storage remains an optional provider.
 - Outbound WhatsApp files use WAHA `sendFile` with private bytes (Base64), so no public document URL is required.
 - Because the current WAHA `sendFile` schema has no caller-defined message id, a crash after provider acceptance but before local acknowledgement is marked `uncertain`; Bobi does not automatically resend and risk a duplicate.

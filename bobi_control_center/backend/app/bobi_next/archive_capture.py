@@ -14,6 +14,7 @@ from typing import Any, Protocol
 
 from .archive_store import ArchiveRecord, ArchiveStore
 from .media_pipeline import LoadedMedia, MediaAnalysis
+from .receipt_metadata import extract_financial_document
 
 
 @dataclass(slots=True, frozen=True)
@@ -108,10 +109,23 @@ class ArchiveCaptureService:
 
         metadata.setdefault("source_provider", descriptor.provider)
         metadata.setdefault("source_kind", descriptor.kind)
+        analysis_text = ""
+        if analysis is not None and analysis.metadata.get("sha256", digest) == digest:
+            analysis_text = analysis.text
+        extraction = extract_financial_document(analysis_text, requested_kind=request.kind)
+        metadata.pop("financial_document", None)
+        kind = request.kind
+        if extraction is not None:
+            # Advisory metadata cannot replace explicit save/category authority
+            # or create expenses/reminders. Do not accept a caller's forged
+            # verified extraction under this reserved key.
+            metadata["financial_document"] = extraction.metadata(media_sha256=digest)
+            if kind in {"document", "image", "other"}:
+                kind = extraction.kind
 
         return self.archive.register(
             owner_key=owner,
-            kind=request.kind,
+            kind=kind,
             title=request.title,
             category=request.category,
             filename=filename,
