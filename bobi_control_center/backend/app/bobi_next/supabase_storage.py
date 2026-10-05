@@ -1,6 +1,6 @@
 """Typed client for the existing Bobi Supabase Edge storage boundary.
 
-Bobi Next never receives a generic Supabase client or service-role key.  It talks
+Bobi Next never receives a generic Supabase client or service-role key. It talks
 only to the narrow ``bobi-storage`` Edge Function using the installation token
 resolved from Bobi's encrypted local secret vault.
 """
@@ -113,3 +113,45 @@ class BobiStorageClient:
 
     async def ping(self) -> dict[str, Any]:
         return await self._call("ping")
+
+    async def archive_upload(
+        self,
+        *,
+        external_id: str,
+        media_base64: str,
+        filename: str,
+        mime_type: str,
+        sha256: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Upload one archive blob through the future narrow archive operation."""
+
+        return await self._call(
+            "archive.media.upload",
+            external_id=external_id,
+            payload={
+                "media_base64": media_base64,
+                "filename": filename,
+                "mime_type": mime_type,
+                "sha256": sha256,
+                "idempotency_key": idempotency_key,
+            },
+        )
+
+    async def archive_signed_url(
+        self,
+        *,
+        external_id: str,
+        media_id: str,
+        expires_in: int = 120,
+    ) -> dict[str, Any]:
+        """Request a short-lived read URL for one archive object."""
+
+        return await self._call(
+            "archive.media.signed_url",
+            external_id=external_id,
+            payload={
+                "media_id": str(media_id or ""),
+                "expires_in": max(30, min(int(expires_in), 900)),
+            },
+        )
