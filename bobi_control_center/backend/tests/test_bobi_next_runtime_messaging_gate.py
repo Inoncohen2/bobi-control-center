@@ -5,7 +5,9 @@ from types import SimpleNamespace
 import pytest
 
 import app.bobi_next.runtime_service as runtime_service_module
+from app.bobi_next.conditional import StateChangeEvent
 from app.bobi_next.pending_approval import PendingApprovalStore
+from app.bobi_next.reminders import ReminderStore
 from app.bobi_next.runtime_service import BobiNextRuntimeService
 from app.config import Settings
 
@@ -38,6 +40,8 @@ async def test_messaging_gate_disabled_does_not_construct_runtime(tmp_path, monk
     try:
         await service._start_messaging_if_enabled()
         assert service.messaging is None
+        assert service.event_reminder_runtime is None
+        assert service.event_reminder_definitions is None
     finally:
         await service.aclose()
 
@@ -67,13 +71,16 @@ async def test_messaging_gate_starts_shadow_runtime_with_shared_dependencies(
         def __init__(self, **kwargs):
             self.kwargs = kwargs
             self.closed = False
+            self.reminders = ReminderStore(tmp_path / "runtime-reminders.db")
             constructed.append(self)
 
         async def start(self):
             return SimpleNamespace(ready=True, reason="started", providers=("waha-main",))
 
         async def aclose(self):
-            self.closed = True
+            if not self.closed:
+                self.reminders.close()
+                self.closed = True
 
     monkeypatch.setattr(
         runtime_service_module,
@@ -89,11 +96,51 @@ async def test_messaging_gate_starts_shadow_runtime_with_shared_dependencies(
         assert runtime.kwargs["list_devices"].__self__ is catalog
         assert runtime.kwargs["pending_approvals"] is pending
         assert runtime.kwargs["dry_run"] is True
+        assert service.event_reminder_definitions is not None
+        assert service.event_reminder_runtime is not None
+        assert service.event_reminder_runtime.reminders is runtime.reminders
+        assert service.event_reminder_runtime.list_devices.__self__ is catalog
     finally:
         await service.aclose()
 
     assert constructed[0].closed is True
     assert native.closed is True
+
+
+@pytest.mark.asyncio
+async def test_event_reminder_observer_is_fail_closed_and_isolated(tmp_path):
+    service = BobiNextRuntimeService(Settings(adapter="mock", data_dir=tmp_path))
+    seen = []
+
+    class FakeEventReminderRuntime:
+        async def observe_event(self, event):
+            seen.append(event)
+            return (SimpleNamespace(outcome="queued"),)
+
+    service.event_reminder_runtime = FakeEventReminderRuntime()
+    event = StateChangeEvent(
+        event_id="evt-1",
+        entity_id="person.user",
+        old_state="not_home",
+        new_state="home",
+        old_attributes={},
+        new_attributes={},
+        occurred_ts=100,
+    )
+    try:
+        await service._observe_event_reminders(event)
+        assert seen == [event]
+
+        class BrokenRuntime:
+            async def observe_event(self, event):
+                del event
+                raise RuntimeError("boom")
+
+        service.event_reminder_runtime = BrokenRuntime()
+        await service._observe_event_reminders(event)
+    finally:
+        service.event_reminder_runtime = None
+        await service.aclose()
 
 
 @pytest.mark.asyncio
@@ -125,6 +172,8 @@ async def test_messaging_not_ready_fails_closed_without_becoming_active(
     try:
         await service._start_messaging_if_enabled()
         assert service.messaging is None
+        assert service.event_reminder_runtime is None
+        assert service.event_reminder_definitions is None
         assert len(instances) == 1
         assert instances[0].closed is True
     finally:
