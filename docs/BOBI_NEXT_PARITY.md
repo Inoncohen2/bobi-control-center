@@ -62,6 +62,12 @@ The following V2 foundations are implemented on `chatgpt/bobi-next-generic-core`
 
 - Receiving a file does **not** save it automatically. Save is a separate side effect and requires an explicit non-negated user instruction plus `archive.write` permission.
 - OCR/transcription/AI-derived text cannot authorize a save. Only the user's original message/caption may do so.
+- Save authority is limited to direct imperative captions; mentions, quoted text, negations, questions and deferred/conditional requests do not authorize immediate archive writes.
+- Explicit folder/category labels come from the current caption and are persisted as semantic categories. SHA dedupe confirms the existing record's actual category without silently moving it.
+- Trusted media must be bound to the current provider/message/kind. Quote-only saves require a new current attachment until a separate trusted quote-media loader exists.
+- Archive saves claim the existing durable request ledger before loading/uploading. Terminal dedupe survives restart; concurrent deliveries have one owner; recoverable outages and cancellation release the claim for retry.
+- OCR/analysis is optional for an authorized save, while MIME, byte limits and SHA/storage integrity checks remain mandatory. Scanned PDFs may be saved without extracted text.
+- Shadow/dry-run mode cannot upload/register archive content or enqueue/send archived files, including already queued file deliveries. Its replies never claim a file was saved or sent.
 - Archive retrieval is recognized deterministically from an explicit user request before AI; generic send/show requests that do not clearly refer to saved/archive content stay in the normal Bobi pipeline.
 - Archive search is isolated by `owner_key`; ambiguous results require clarification rather than guessing.
 - Bobi can use private local storage under its own data directory without Supabase. Supabase/cloud storage remains an optional provider.

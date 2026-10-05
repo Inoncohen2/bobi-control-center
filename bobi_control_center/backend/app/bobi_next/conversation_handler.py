@@ -10,7 +10,9 @@ remains owned by ``messaging.process_next_message``.
 
 from __future__ import annotations
 
+import asyncio
 import time
+import uuid
 from collections.abc import Callable
 
 from .activity import ActivityLedger
@@ -18,6 +20,7 @@ from .activity_runtime import UndoRequestStore, undo_once
 from .approval_continuation import approve_latest_pending, reject_latest_pending
 from .archive_capture import ArchiveCaptureRequest, ArchiveCaptureService
 from .archive_commands import (
+    archive_save_category,
     archive_write_allowed,
     default_archive_title,
     explicit_archive_save,
@@ -221,6 +224,110 @@ def build_conversation_handler(
 
     now_fn = clock or (lambda: int(time.time()))
 
+    async def save_current_media(message: InboundMessage, *, now: int) -> MessageResponse:
+        def reply(text: str) -> MessageResponse:
+            return _direct_response(memory, message, text, now_ts=now)
+
+        if message.kind == "text":
+            return reply("לשמירה יש לצרף את הקובץ להודעה הנוכחית.")
+        policy = await policy_for(message.user_key)
+        if not archive_write_allowed(policy, user_key=message.user_key):
+            return reply("אין הרשאה לשמור את הקובץ.")
+        try:
+            category = archive_save_category(message.text)
+        except ValueError:
+            return reply("צריך לציין שם תיקייה ברור לפני שמירת הקובץ.")
+        if archive_capture is None:
+            return reply("שמירת מסמכים עדיין לא מוגדרת ב-Bobi Next.")
+        if media_pipeline is None:
+            return reply("קיבלתי את הקובץ, אבל עיבוד המדיה עדיין לא מוגדר.")
+        if dry_run:
+            return reply("הבקשה לשמירת הקובץ נבדקה במצב Shadow ולא נשמרה בפועל.")
+
+        request_id = f"archive-save:{message.provider}:{message.message_id}"
+        owner_token = f"archive-save:{uuid.uuid4().hex}"
+        claim = requests.claim(
+            request_id=request_id,
+            user_key=message.user_key,
+            input_text=message.text,
+            owner_token=owner_token,
+            now_ts=now,
+        )
+        if not claim.claimed:
+            if claim.record.user_key != message.user_key:
+                return reply("אין הרשאה לשמור את הקובץ.")
+            if claim.record.terminal_kind == "archive_saved":
+                return reply("✅ הקובץ כבר שמור בארכיון.")
+            if claim.reason == "request_terminal":
+                return reply("לא הצלחתי לשמור את הקובץ בצורה בטוחה.")
+            raise RuntimeError("archive_request_owned")
+
+        try:
+            enriched = await media_pipeline.enrich(message, analysis_required=False)
+            media = enriched.loaded_media
+            if media is None or (
+                media.descriptor.provider != message.provider
+                or media.descriptor.message_id != message.message_id
+                or media.descriptor.kind != message.kind
+            ):
+                raise MediaPipelineError("archive_current_media_required")
+            kind = infer_archive_kind(message.text, media)
+            record = await archive_capture.capture(
+                ArchiveCaptureRequest(
+                    owner_key=message.user_key,
+                    kind=kind,
+                    title=default_archive_title(media, kind=kind),
+                    category=category,
+                    source_message_id=message.message_id,
+                    text_excerpt=(
+                        str(enriched.media.text or enriched.media.summary or "").strip()
+                        if enriched.media else ""
+                    ),
+                ),
+                media=media,
+                analysis=enriched.media,
+                now_ts=now,
+            )
+        except asyncio.CancelledError:
+            requests.retry(
+                request_id,
+                owner_token=owner_token,
+                error="archive_capture_cancelled",
+                now_ts=now,
+            )
+            raise
+        except (MediaPipelineError, ValueError, TypeError):
+            requests.fail_terminal(
+                request_id,
+                owner_token=owner_token,
+                error="archive_capture_invalid",
+                now_ts=now,
+            )
+            return reply("לא הצלחתי לשמור את הקובץ בצורה בטוחה.")
+        except Exception as exc:
+            requests.retry(
+                request_id,
+                owner_token=owner_token,
+                error=type(exc).__name__,
+                now_ts=now,
+            )
+            raise
+
+        requests.complete(
+            request_id,
+            owner_token=owner_token,
+            terminal_kind="archive_saved",
+            now_ts=now,
+        )
+        # SHA dedupe may return an existing record in a different category.
+        # Confirm its persisted location; saving must not silently move it.
+        if category and record.category != category:
+            location = f"בתיקיית {record.category}" if record.category else "בארכיון"
+            return reply(f"✅ הקובץ כבר שמור {location}. להעברה יש לבקש להעביר אותו.")
+        if record.category:
+            return reply(f"✅ שמרתי את הקובץ בתיקיית {record.category}.")
+        return reply("✅ שמרתי את הקובץ.")
+
     async def handler(message: InboundMessage) -> MessageResponse:
         # Only a plain text message may continue a pending approval or request
         # undo. Media-derived or quoted text must never authorize/rollback a mutation.
@@ -328,6 +435,11 @@ def build_conversation_handler(
             )
             return MessageResponse(text)
 
+        # Only the current user's direct caption grants archive authority.
+        # Quoted/OCR/transcribed content never enters this save decision.
+        if explicit_archive_save(message.text):
+            return await save_current_media(message, now=now)
+
         request_text = message.text
         if message.kind != "text":
             if media_pipeline is None:
@@ -336,56 +448,6 @@ def build_conversation_handler(
                 enriched = await media_pipeline.enrich(message)
             except MediaPipelineError:
                 return MessageResponse("לא הצלחתי לעבד את הקובץ בצורה בטוחה.")
-
-            # Archive side effects require authority from the user's original
-            # caption only. OCR/transcription/analyzer output never authorizes save.
-            if explicit_archive_save(message.text):
-                policy = await policy_for(message.user_key)
-                if not archive_write_allowed(policy, user_key=message.user_key):
-                    return _direct_response(
-                        memory,
-                        message,
-                        "אין הרשאה לשמור את הקובץ.",
-                        now_ts=now,
-                    )
-                if archive_capture is None:
-                    return _direct_response(
-                        memory,
-                        message,
-                        "שמירת מסמכים עדיין לא מוגדרת ב-Bobi Next.",
-                        now_ts=now,
-                    )
-                if enriched.loaded_media is None:
-                    return _direct_response(
-                        memory,
-                        message,
-                        "לא הצלחתי לטעון את הקובץ בצורה בטוחה לשמירה.",
-                        now_ts=now,
-                    )
-
-                kind = infer_archive_kind(message.text, enriched.loaded_media)
-                title = default_archive_title(enriched.loaded_media, kind=kind)
-                excerpt = ""
-                if enriched.media is not None:
-                    excerpt = str(enriched.media.text or enriched.media.summary or "").strip()
-                await archive_capture.capture(
-                    ArchiveCaptureRequest(
-                        owner_key=message.user_key,
-                        kind=kind,
-                        title=title,
-                        source_message_id=message.message_id,
-                        text_excerpt=excerpt,
-                    ),
-                    media=enriched.loaded_media,
-                    analysis=enriched.media,
-                    now_ts=now,
-                )
-                return _direct_response(
-                    memory,
-                    message,
-                    "✅ שמרתי את הקובץ.",
-                    now_ts=now,
-                )
 
             request_text = enriched.text
 

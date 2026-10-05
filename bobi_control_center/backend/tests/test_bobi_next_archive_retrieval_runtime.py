@@ -169,3 +169,34 @@ async def test_generic_picture_request_falls_through_to_normal_bobi_pipeline(tmp
         await runtime.aclose()
         pending.close()
         setup.close()
+
+
+@pytest.mark.asyncio
+async def test_shadow_retrieval_never_creates_private_file_dispatch(tmp_path):
+    setup = SetupStore(tmp_path / "setup.db")
+    pending = PendingApprovalStore(tmp_path / "pending.db")
+    runtime = ArchiveMessagingRuntime(
+        data_dir=tmp_path,
+        setup=setup,
+        ha=FakeHA(),
+        list_devices=_devices,
+        policy_for=_policy,
+        pending_approvals=pending,
+        dry_run=True,
+    )
+
+    async def base_handler(message):
+        raise AssertionError("explicit retrieval must not reach AI")
+
+    try:
+        record = await _store_receipt(runtime, "איקאה", b"%PDF-shadow-ikea")
+        response = await runtime._archive_retrieval_handler("waha-main", base_handler)(
+            _message("שלח לי את הקבלה של איקאה"),
+        )
+        assert "Shadow" in response.text
+        dispatch_key = media_dispatch_key("waha-main", "archive:waha-main:m1", record.object_id)
+        assert runtime.archive.outbox("waha-main").get(dispatch_key) is None
+    finally:
+        await runtime.aclose()
+        pending.close()
+        setup.close()

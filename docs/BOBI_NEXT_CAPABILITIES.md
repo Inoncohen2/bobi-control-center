@@ -85,12 +85,12 @@ implemented; `ready` = code/tests exist; `verified` = accepted live shadow/E2E.
 | recurring_tasks | recurring task scheduler | planned |
 | image_inbox | image inbox | planned |
 | exit_check | presence/checklist evaluator | planned |
-| receipts | receipt ingest/archive | planned |
-| documents | document archive/storage | planned |
+| receipts | explicit media ingest/archive; structured extraction pending | partial |
+| documents | trusted explicit save/category + private storage/retrieval; live/cloud/mutation gates pending | partial |
 | notes | personal notes | planned |
 | products | product/warranty store | planned |
 | expenses | expense/budget module | planned |
-| object_search | generic saved-object index | planned |
+| object_search | owner-isolated archive search/retrieval; live parity pending | partial |
 | context_authority | typed context authority | partial |
 | parking | personal parking memory | planned |
 | inventory | consumables inventory | planned |

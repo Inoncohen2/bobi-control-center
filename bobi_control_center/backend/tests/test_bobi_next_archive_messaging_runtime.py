@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +9,7 @@ import app.bobi_next.archive_messaging_runtime as archive_runtime_module
 from app.bobi_next.archive_messaging_runtime import ArchiveMessagingRuntime
 from app.bobi_next.authorization import UserPolicy
 from app.bobi_next.media_analyzers import MediaAnalyzerRegistry
+from app.bobi_next.messaging_runtime import BobiNextMessagingRuntime, MessagingRuntimeStatus
 from app.bobi_next.pending_approval import PendingApprovalStore
 from app.bobi_next.setup_store import MessagingProvider, SetupStore
 
@@ -104,5 +106,51 @@ async def test_archive_runtime_close_is_idempotent(tmp_path):
         await runtime.aclose()
         await runtime.aclose()
     finally:
+        pending.close()
+        setup.close()
+
+
+@pytest.mark.asyncio
+async def test_shadow_runtime_never_starts_outbound_archive_worker(tmp_path, monkeypatch):
+    setup = SetupStore(tmp_path / "setup.db")
+    pending = PendingApprovalStore(tmp_path / "pending.db")
+    runtime = ArchiveMessagingRuntime(
+        data_dir=tmp_path,
+        setup=setup,
+        ha=FakeHA(),
+        list_devices=_devices,
+        policy_for=_policy,
+        pending_approvals=pending,
+        dry_run=True,
+    )
+
+    async def ready(self):
+        self.stop_event = asyncio.Event()
+        return MessagingRuntimeStatus(True, "started", ("waha-main",))
+
+    monkeypatch.setattr(BobiNextMessagingRuntime, "start", ready)
+    provider = MessagingProvider(
+        provider_key="waha-main",
+        provider_type="waha",
+        display_name="WAHA",
+        enabled=True,
+        endpoint="http://waha:3000",
+        session="default",
+        engine="GOWS",
+        secret_ref="",
+        config={},
+    )
+    try:
+        boundary = runtime._waha_boundary(
+            provider,
+            understanding=DummyUnderstanding(),
+            analyzers=MediaAnalyzerRegistry(),
+        )
+        runtime.boundaries[provider.provider_key] = boundary
+        assert (await runtime.start()).ready is True
+        assert runtime.archive_tasks == {}
+        assert runtime.reminder_task is None
+    finally:
+        await runtime.aclose()
         pending.close()
         setup.close()

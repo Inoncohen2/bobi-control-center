@@ -90,6 +90,8 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
             if message.kind == "text":
                 command = parse_archive_retrieval(message.text)
                 if command is not None:
+                    if self.dry_run:
+                        return MessageResponse("במצב Shadow לא נשלחים קבצים מהארכיון.")
                     now = int(message.received_ts or time.time())
                     policy = await self.policy_for(message.user_key)
                     result = retrieval.prepare_search(
@@ -206,6 +208,8 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
         boundary: ProviderBoundary,
         stop_event: asyncio.Event,
     ) -> None:
+        if self.dry_run:
+            return
         transport = boundary.transport
         if not isinstance(transport, WahaTransport):
             return
@@ -237,7 +241,7 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
 
     async def start(self) -> MessagingRuntimeStatus:
         status = await super().start()
-        if not status.ready or self.stop_event is None:
+        if not status.ready or self.stop_event is None or self.dry_run:
             return status
 
         for provider_key, boundary in self.boundaries.items():

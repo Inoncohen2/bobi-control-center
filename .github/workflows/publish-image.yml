@@ -27,6 +27,8 @@ permissions:
 jobs:
   publish:
     name: ${{ matrix.arch }}
+    # Bobi Next development must never publish a production-version image.
+    if: ${{ !startsWith(github.ref, 'refs/heads/chatgpt/bobi-next-') }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -119,6 +121,7 @@ jobs:
   verify:
     name: The Supervisor can pull what the manifest names
     needs: publish
+    if: ${{ !startsWith(github.ref, 'refs/heads/chatgpt/bobi-next-') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

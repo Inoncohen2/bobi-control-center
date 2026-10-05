@@ -9,13 +9,30 @@ from .authorization import UserPolicy
 from .media_pipeline import LoadedMedia
 
 _SAVE_PATTERNS = (
-    re.compile(r"(?:^|\s)(?:שמור|שמרי|תשמור|תשמרי)(?:\s|$|[.!,:])"),
-    re.compile(r"\b(?:please\s+)?(?:save|keep|archive|store)\b", re.IGNORECASE),
+    re.compile(
+        r"^(?:בובי[,:]?\s+)?(?:בבקשה[,:]?\s+)?"
+        r"(?:שמור|שמרי|תשמור|תשמרי)(?:\s|$|[.!,:])"
+    ),
+    re.compile(
+        r"^(?:bobi[,:]?\s+)?(?:please[,:]?\s+)?(?:save|keep|archive|store)\b",
+        re.IGNORECASE,
+    ),
 )
 _NEGATED_SAVE_PATTERNS = (
     re.compile(r"(?:אל|לא)\s+(?:תשמור|תשמרי|שמור|שמרי|לשמור)"),
     re.compile(r"לא\s+(?:צריך|רוצה)\s+לשמור"),
     re.compile(r"\b(?:do\s+not|don't|dont|never)\s+(?:save|keep|archive|store)\b", re.IGNORECASE),
+)
+_DEFERRED_SAVE = re.compile(
+    r"(?:^|\s)(?:אם|כאשר|מחר|אחר\s+כך)(?:\s|$)|(?:^|\s)כש\S*|"
+    r"\b(?:if|when|unless|later|tomorrow)\b",
+    re.IGNORECASE,
+)
+_CATEGORY = re.compile(
+    r"(?:^|\s)(?:(?:בתיקיית|לתיקיית|בתיקיה|לתיקיה|בתיקייה|לתיקייה|"
+    r"בקטגוריית|לקטגוריית|בקטגוריה|לקטגוריה)\s*|"
+    r"(?:in|into|to)\s+(?:the\s+)?(?:folder|category)\s*)(.*)$",
+    re.IGNORECASE,
 )
 _RECEIPT_TERMS = ("קבלה", "חשבונית", "receipt", "invoice")
 _WARRANTY_TERMS = ("אחריות", "warranty")
@@ -31,7 +48,26 @@ def explicit_archive_save(text: str) -> bool:
         return False
     if any(pattern.search(value) for pattern in _NEGATED_SAVE_PATTERNS):
         return False
+    if "?" in value or "？" in value or _DEFERRED_SAVE.search(value):
+        return False
     return any(pattern.search(value) for pattern in _SAVE_PATTERNS)
+
+
+def archive_save_category(text: str) -> str:
+    """Read an explicit semantic folder label; never infer one from media/AI."""
+
+    value = " ".join(str(text or "").strip().split())
+    match = _CATEGORY.search(value)
+    if match is None:
+        return ""
+    category = match.group(1).strip().rstrip(".!").strip()
+    for opening, closing in (("\"", "\""), ("'", "'"), ("״", "״"), ("“", "”")):
+        if category.startswith(opening) and category.endswith(closing):
+            category = category[1:-1].strip()
+            break
+    if not category or len(category) > 160 or any(ord(char) < 32 for char in category):
+        raise ValueError("archive_category_invalid")
+    return category
 
 
 def archive_write_allowed(policy: UserPolicy, *, user_key: str) -> bool:
@@ -46,7 +82,7 @@ def archive_write_allowed(policy: UserPolicy, *, user_key: str) -> bool:
         return False
     if "*" not in policy.allowed_domains and "archive" not in policy.allowed_domains:
         return False
-    return "archive.save" not in policy.denied_actions
+    return not {"archive.save", "save"}.intersection(policy.denied_actions)
 
 
 def infer_archive_kind(caption: str, media: LoadedMedia) -> str:

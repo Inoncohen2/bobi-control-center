@@ -64,9 +64,7 @@ class StaticAnalyzer:
 
 def test_descriptor_rejects_unknown_mimetype() -> None:
     with pytest.raises(MediaPipelineError, match="media_mimetype_not_allowed"):
-        descriptor_from_message(
-            _message(kind="document", mimetype="application/x-executable")
-        )
+        descriptor_from_message(_message(kind="document", mimetype="application/x-executable"))
 
 
 @pytest.mark.asyncio
@@ -98,6 +96,46 @@ async def test_pipeline_enforces_byte_limit_even_if_loader_misbehaves() -> None:
     )
     with pytest.raises(MediaPipelineError, match="media_too_large"):
         await pipeline.enrich(_message())
+
+
+class UnavailableAnalyzer:
+    async def analyze(self, media):
+        del media
+        raise TimeoutError("analysis unavailable")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("analyzer", [None, UnavailableAnalyzer()])
+async def test_archive_preprocessing_preserves_trusted_bytes_without_analysis(analyzer):
+    loader = StaticLoader(b"scanned-pdf-bytes")
+    pipeline = MediaPipeline(loader=loader, analyzer_for=lambda kind: analyzer)
+    message = _message(kind="document", mimetype="application/pdf", text="שמור את זה")
+
+    result = await pipeline.enrich(message, analysis_required=False)
+
+    assert result.loaded_media is not None
+    assert result.loaded_media.content == b"scanned-pdf-bytes"
+    assert result.loaded_media.descriptor.message_id == message.message_id
+    assert result.media is None
+    assert result.text == message.text
+    assert len(loader.seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_optional_analysis_never_relaxes_mime_or_size_boundary():
+    loader = StaticLoader(b"x" * 11)
+    pipeline = MediaPipeline(loader=loader, analyzer_for=lambda kind: None, max_bytes=10)
+    with pytest.raises(MediaPipelineError, match="media_mimetype_not_allowed"):
+        await pipeline.enrich(
+            _message(kind="document", mimetype="application/x-executable"),
+            analysis_required=False,
+        )
+    assert loader.seen == []
+    with pytest.raises(MediaPipelineError, match="media_too_large"):
+        await pipeline.enrich(
+            _message(kind="document", mimetype="application/pdf"),
+            analysis_required=False,
+        )
 
 
 @pytest.mark.asyncio

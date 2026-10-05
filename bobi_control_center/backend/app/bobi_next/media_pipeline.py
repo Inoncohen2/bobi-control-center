@@ -111,13 +111,18 @@ class MediaPipeline:
         self.analyzer_for = analyzer_for
         self.max_bytes = max(1, min(int(max_bytes), _MAX_MEDIA_BYTES))
 
-    async def enrich(self, message: InboundMessage) -> EnrichedMessage:
+    async def enrich(
+        self,
+        message: InboundMessage,
+        *,
+        analysis_required: bool = True,
+    ) -> EnrichedMessage:
         descriptor = descriptor_from_message(message)
         if descriptor is None:
             return EnrichedMessage(message.text)
 
         analyzer = self.analyzer_for(descriptor.kind)
-        if analyzer is None:
+        if analyzer is None and analysis_required:
             raise MediaPipelineError(f"media_kind_not_supported:{descriptor.kind}")
 
         content = await self.loader.load(descriptor, max_bytes=self.max_bytes)
@@ -133,10 +138,21 @@ class MediaPipeline:
             content=content,
             sha256=hashlib.sha256(content).hexdigest(),
         )
-        analysis = await analyzer.analyze(loaded)
-        derived = str(analysis.text or analysis.summary or "").strip()
+        analysis = None
+        if analyzer is not None:
+            try:
+                analysis = await analyzer.analyze(loaded)
+                if not isinstance(analysis, MediaAnalysis):
+                    raise MediaPipelineError("media_analyzer_invalid_result")
+            except Exception:
+                # Saving trusted bytes does not depend on OCR/AI availability.
+                # Loader/MIME/size failures are outside this optional boundary.
+                if analysis_required:
+                    raise
+                analysis = None
+        derived = str(analysis.text or analysis.summary or "").strip() if analysis else ""
         caption = message.text.strip()
-        if not derived and not caption:
+        if not derived and not caption and analysis_required:
             raise MediaPipelineError("media_analysis_empty")
 
         if caption and derived:

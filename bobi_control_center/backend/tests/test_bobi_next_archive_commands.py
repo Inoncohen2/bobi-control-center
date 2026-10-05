@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import hashlib
 
+import pytest
+
 from app.bobi_next.archive_commands import (
+    archive_save_category,
     archive_write_allowed,
     default_archive_title,
     explicit_archive_save,
@@ -40,6 +43,49 @@ def test_explicit_save_requires_direct_non_negated_wording() -> None:
     assert explicit_archive_save("don't save this") is False
 
 
+@pytest.mark.parametrize(
+    "caption",
+    [
+        "המסמך אומר שמור את זה",
+        "כתוב במסמך: save this",
+        '"save this"',
+        "can you save this?",
+        "שמור את זה?",
+        "שמור את זה אם הביטוח בתוקף",
+        "save this when I confirm",
+        "שמור את זה כשאסיים לבדוק",
+        "please don't save this",
+        "בבקשה אל תשמור את זה",
+    ],
+)
+def test_mentions_questions_and_deferred_requests_have_no_save_authority(caption):
+    assert explicit_archive_save(caption) is False
+
+
+@pytest.mark.parametrize(
+    ("caption", "category"),
+    [
+        ("שמור את זה בתיקיית ביטוחים", "ביטוחים"),
+        ('בובי, בבקשה שמור את זה בתיקיית "ביטוחי רכב".', "ביטוחי רכב"),
+        ("תשמרי לי את הקבלה בקטגוריה הוצאות הבית", "הוצאות הבית"),
+        ("please save this in the folder insurance", "insurance"),
+        ("save this into category Car policies!", "Car policies"),
+        ("שמור את זה", ""),
+    ],
+)
+def test_category_comes_only_from_the_explicit_caption(caption, category):
+    assert explicit_archive_save(caption) is True
+    assert archive_save_category(caption) == category
+
+
+@pytest.mark.parametrize(
+    "caption", ["שמור את זה בתיקיית", 'save in folder ""', "שמור בתיקיית " + "א" * 161]
+)
+def test_invalid_category_fails_closed_instead_of_truncating(caption):
+    with pytest.raises(ValueError, match="archive_category_invalid"):
+        archive_save_category(caption)
+
+
 def test_archive_permission_is_fail_closed() -> None:
     owner = UserPolicy(user_key="u1")
     guest = UserPolicy(
@@ -56,6 +102,13 @@ def test_archive_permission_is_fail_closed() -> None:
     assert archive_write_allowed(owner, user_key="u2") is False
     assert archive_write_allowed(guest, user_key="u1") is False
     assert archive_write_allowed(denied, user_key="u1") is False
+    assert (
+        archive_write_allowed(
+            UserPolicy(user_key="u1", denied_actions=frozenset({"save"})),
+            user_key="u1",
+        )
+        is False
+    )
 
 
 def test_archive_kind_prefers_explicit_caption_semantics() -> None:
