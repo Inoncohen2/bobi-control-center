@@ -11,12 +11,15 @@ import asyncio
 import hashlib
 import logging
 import time
+from collections.abc import Awaitable, Callable
 
+from .archive_retrieval import ArchiveRetrievalResult
+from .archive_retrieval_commands import parse_archive_retrieval
 from .archive_subsystem import ArchiveSubsystem
 from .conversation_handler import build_conversation_handler
 from .media_analyzers import MediaAnalyzerRegistry
 from .media_pipeline import MediaPipeline
-from .messaging import MessageStore
+from .messaging import InboundMessage, MessageResponse, MessageStore
 from .messaging_runtime import (
     BobiNextMessagingRuntime,
     MessagingRuntimeStatus,
@@ -34,6 +37,29 @@ def _provider_storage_key(provider_key: str) -> str:
     return hashlib.sha256(provider_key.encode()).hexdigest()[:20]
 
 
+def _retrieval_reply(result: ArchiveRetrievalResult) -> str:
+    if result.outcome == "prepared":
+        return "📎 מצאתי. שולח את הקובץ עכשיו."
+    if result.outcome == "blocked":
+        return "אין הרשאה לשלוח מסמכים מהארכיון."
+    if result.outcome == "not_found":
+        return "לא מצאתי מסמך שמותאם לבקשה הזאת."
+    if result.outcome == "unavailable":
+        return "מצאתי את הרשומה, אבל הקובץ עצמו לא זמין כרגע."
+    if result.outcome == "clarification":
+        labels = []
+        for candidate in result.candidates[:5]:
+            label = candidate.title
+            if candidate.category:
+                label = f"{label} ({candidate.category})"
+            labels.append(label)
+        choices = " | ".join(labels)
+        if choices:
+            return f"מצאתי כמה מסמכים מתאימים: {choices}. כתבו פרט נוסף כדי שאדע איזה לשלוח."
+        return "מצאתי כמה מסמכים מתאימים. כתבו פרט נוסף כדי שאדע איזה לשלוח."
+    return "לא הצלחתי להכין את המסמך לשליחה בצורה בטוחה."
+
+
 class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
     """Messaging runtime with private document capture and outbound delivery."""
 
@@ -41,6 +67,50 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
         super().__init__(*args, **kwargs)
         self.archive = ArchiveSubsystem(self.data_dir)
         self.archive_tasks: dict[str, asyncio.Task[None]] = {}
+
+    def _archive_retrieval_handler(
+        self,
+        provider_key: str,
+        base_handler: Callable[[InboundMessage], Awaitable[MessageResponse]],
+    ) -> Callable[[InboundMessage], Awaitable[MessageResponse]]:
+        retrieval = self.archive.retrieval(provider_key)
+
+        async def handler(message: InboundMessage) -> MessageResponse:
+            if message.kind == "text":
+                command = parse_archive_retrieval(message.text)
+                if command is not None:
+                    now = int(message.received_ts or time.time())
+                    policy = await self.policy_for(message.user_key)
+                    result = retrieval.prepare_search(
+                        owner_key=message.user_key,
+                        policy=policy,
+                        provider=provider_key,
+                        chat_id=message.chat_id,
+                        request_id=f"archive:{provider_key}:{message.message_id}",
+                        query=command.query,
+                        kind=command.kind,
+                        reply_to=message.message_id,
+                        now_ts=now,
+                    )
+                    text = _retrieval_reply(result)
+                    self.memory.store_turn(
+                        message.user_key,
+                        message.text,
+                        direction="inbound",
+                        message_id=message.message_id,
+                        created_ts=now,
+                    )
+                    self.memory.store_turn(
+                        message.user_key,
+                        text,
+                        direction="outbound",
+                        message_id=f"reply:{message.message_id}",
+                        created_ts=now,
+                    )
+                    return MessageResponse(text)
+            return await base_handler(message)
+
+        return handler
 
     def _waha_boundary(
         self,
@@ -72,7 +142,7 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
             self.data_dir
             / f"bobi-next-messages-{_provider_storage_key(provider.provider_key)}.db"
         )
-        handler = build_conversation_handler(
+        base_handler = build_conversation_handler(
             understanding=understanding,
             list_devices=self.list_devices,
             policy_for=self.policy_for,
@@ -89,6 +159,7 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
             undo_requests=self.undo_requests,
             dry_run=self.dry_run,
         )
+        handler = self._archive_retrieval_handler(provider.provider_key, base_handler)
         return ProviderBoundary(provider, messages, transport, handler)
 
     async def _archive_worker(
