@@ -213,14 +213,18 @@ def capture_event_reminder(
         return EventReminderCaptureResult("clarification", "event_reminder_trigger_target_missing")
 
     device_tuple = tuple(devices)
-    bound_entity: EntityRecord | None = None
+    bound_entity = presence_entity
     if _is_self_target(trigger_target):
         if trigger_domain not in _PRESENCE_DOMAINS:
             return EventReminderCaptureResult(
                 "clarification",
                 "presence_trigger_domain_invalid",
             )
-        resolution, bound_entity = _presence_resolution(device_tuple, presence_entity)
+        if bound_entity is None:
+            resolver = getattr(store, "resolve_presence", None)
+            if callable(resolver):
+                bound_entity = resolver(user_key, device_tuple)
+        resolution, bound_entity = _presence_resolution(device_tuple, bound_entity)
     else:
         resolution = resolve_target(
             trigger_target,
