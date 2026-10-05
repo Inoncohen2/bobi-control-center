@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .conditional import TriggerEntityRef, find_trigger_entity, trigger_ref
+from .event_reminders import EventReminderStore
 from .models import DeviceRecord, EntityRecord
 
 _ALLOWED_DOMAINS = frozenset({"person", "device_tracker"})
@@ -143,3 +144,30 @@ class PresenceBindingStore:
         if entity is None or entity.domain not in _ALLOWED_DOMAINS:
             return None
         return entity
+
+
+class PresenceAwareEventReminderStore(EventReminderStore):
+    """Event reminder definitions plus the explicit user-presence binding."""
+
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        presence_path: str | Path,
+    ) -> None:
+        super().__init__(path)
+        self.presence_bindings = PresenceBindingStore(presence_path)
+        self._presence_closed = False
+
+    def resolve_presence(
+        self,
+        user_key: str,
+        devices: tuple[DeviceRecord, ...],
+    ) -> EntityRecord | None:
+        return self.presence_bindings.resolve_live(user_key, devices)
+
+    def close(self) -> None:
+        if not self._presence_closed:
+            self.presence_bindings.close()
+            self._presence_closed = True
+        super().close()
