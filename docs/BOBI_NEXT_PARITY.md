@@ -56,7 +56,7 @@ The following V2 foundations are implemented on `chatgpt/bobi-next-generic-core`
 | Activity/Undo | durable activity ledger and safe exactly-once undo runtime | live mutation parity |
 | Archive/Documents | explicit-save authority, semantic archive index, SHA-256 dedupe, private storage, deterministic retrieval and category move/soft-delete/restore, exact deletion approval and atomic receipts, bounded advisory receipt/bill extraction, WAHA `sendFile` with crash-safe delivery | hosted cloud + live E2E; richer document extraction/review UX pending |
 | Vouchers/Supabase | typed client, voucher wallet and optional archive client; independent generic archive Edge API/schema prepared with isolation, integrity, retry and Python contract tests | provider undeployed; hosted Storage/Deno E2E and onboarding pending; no production Supabase mutation |
-| Setup/Integrations | setup store/wizard foundations, roles/policies, secret vault, integration framework | Control Center UX + migration E2E |
+| Setup/Integrations | setup store/wizard foundations, roles/policies, secret vault, integration framework; archive local/cloud controls with authenticated protocol/installation check | hosted archive onboarding/provisioning, remaining Control Center UX + migration E2E |
 
 ### Archive/Documents safety contract
 
@@ -79,6 +79,8 @@ The following V2 foundations are implemented on `chatgpt/bobi-next-generic-core`
 - Bobi can use private local storage under its own data directory without Supabase. Supabase/cloud storage remains an optional provider.
 - Runtime reads route by the saved URI's provider, while new uploads use the explicitly selected mode. Existing local blobs remain readable after selecting cloud, and cloud blobs remain readable after selecting local while their cloud integration is enabled. Cloud errors never cause a local upload/read fallback.
 - Archive configuration changes hold the request-claim lock and refuse active saves, including expired running claims. A cloud endpoint with retained objects (including trash) cannot be changed without an explicit migration, preserving existing retrieval/restore identity. Voucher-only configuration remains separate.
+- Archive setup/integration routes are mounted only with the existing opt-in setup flag. Local storage needs no cloud credentials. A read-only authenticated `ping` must advertise the generic archive protocol and this exact installation; voucher-only or foreign-installation credentials cannot select cloud mode.
+- The setup cloud choice requires a connection proof checked within five minutes, bound to the endpoint, enabled state and immutable credential version. Accepted configuration remains ready after that window; this is an identity/protocol check, not an uptime guarantee. Changed credentials invalidate the proof and block new uploads until rechecked. Existing URI reads keep provider authentication and archive read-policy checks.
 - Outbound WhatsApp files use WAHA `sendFile` with private bytes (Base64), so no public document URL is required.
 - Because the current WAHA `sendFile` schema has no caller-defined message id, a crash after provider acceptance but before local acknowledgement is marked `uncertain`; Bobi does not automatically resend and risk a duplicate.
 - Messaging remains independently gated by `next_messaging_enabled`; enabling the HA/event runtime alone cannot start Bobi Next WhatsApp workers. First trials remain `next_messaging_dry_run=true` by default.

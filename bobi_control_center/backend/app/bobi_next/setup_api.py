@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, SecretStr
 
 from .ai_providers import AIProviderConfig, AIProviderStore
+from .archive_setup_api import archive_setup_status
 from .authorization import RiskLevel, UserPolicy
 from .secret_vault import EncryptedSecretVault, SecretVaultError
 from .setup_store import BobiUser, MessagingProvider, SetupStore, policy_to_dict
@@ -173,6 +174,11 @@ def _combined_snapshot(setup: SetupStore, ai: AIProviderStore) -> dict[str, Any]
     snapshot["messaging_configured"] = messaging_configured
     ai_snapshot["configured"] = ai_configured
     snapshot["ai"] = ai_snapshot
+    archive = archive_setup_status(setup.path)
+    snapshot["archive"] = archive
+    if not archive["ready"]:
+        snapshot["setup"]["ready"] = False
+        snapshot["setup"]["missing_steps"].append("archive_connection_check")
     return snapshot
 
 

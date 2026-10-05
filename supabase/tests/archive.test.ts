@@ -7,6 +7,17 @@ let f: Awaited<ReturnType<typeof fixture>>;
 before(async () => { f = await fixture(); });
 after(async () => { await f.db.close(); });
 
+test("read-only authenticated ping advertises generic protocol and exact installation", async () => {
+  const beforeStorage = f.calls.filter((call) => call.path.startsWith("/storage/")).length;
+  const response = await f.handler(request("ping", {}));
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    ok: true, provider: "bobi-archive-next", archive_enabled: true,
+    archive_protocol: "bobi-archive-v1", installation_id: "installation-a",
+  });
+  assert.equal(f.calls.filter((call) => call.path.startsWith("/storage/")).length, beforeStorage);
+});
+
 test("actual handler + REST backend + SQL upload, owner isolation and signed URL", async () => {
   const saved = await f.handler(request("archive.media.upload", await uploadPayload()));
   assert.equal(saved.status, 200);

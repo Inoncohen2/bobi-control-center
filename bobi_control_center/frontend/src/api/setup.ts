@@ -41,6 +41,42 @@ export interface SetupUser {
   policy: SetupPolicy;
 }
 
+export type ArchiveStorageMode = 'local' | 'cloud';
+
+export interface ArchiveSetupSnapshot {
+  mode: ArchiveStorageMode;
+  ready: boolean;
+  cloud: {
+    configured: boolean;
+    ready: boolean;
+    integration_key: string;
+    endpoint: string;
+    has_secret: boolean;
+    reason: string;
+    checked_ts: number;
+    check_fresh: boolean;
+  };
+}
+
+export interface ArchiveIntegrationInput {
+  integration_key: string;
+  integration_type: 'bobi_archive';
+  display_name: string;
+  endpoint: string;
+  enabled: boolean;
+  secret_value?: string;
+  config: { archive_enabled: true };
+}
+
+export interface SetupIntegration {
+  integration_key: string;
+  integration_type: string;
+  display_name: string;
+  enabled: boolean;
+  endpoint: string;
+  has_secret_ref: boolean;
+}
+
 export interface SetupSnapshot {
   installation_id: string;
   setup: {
@@ -57,6 +93,7 @@ export interface SetupSnapshot {
     configured: boolean;
     providers: SetupAIProvider[];
   };
+  archive?: ArchiveSetupSnapshot;
 }
 
 export interface HomeScanSummary {
@@ -114,6 +151,11 @@ const ROOT = '/api/next/setup';
 export const setupApi = {
   status: () => api.get<SetupSnapshot>(`${ROOT}/status`),
   homeScan: () => api.post<HomeScanSummary>(`${ROOT}/home-scan`),
+  saveArchiveIntegration: (body: ArchiveIntegrationInput) =>
+    api.post<SetupIntegration>(`${ROOT}/integrations`, body),
+  checkArchive: () => api.post<ArchiveSetupSnapshot>(`${ROOT}/archive/check`),
+  selectArchiveMode: (mode: ArchiveStorageMode) =>
+    api.put<ArchiveSetupSnapshot>(`${ROOT}/archive`, { mode }),
   saveProvider: (body: ProviderInput) => api.post<SetupProvider>(`${ROOT}/providers`, body),
   saveAIProvider: (body: AIProviderInput) =>
     api.post<SetupAIProvider>(`${ROOT}/ai/providers`, body),

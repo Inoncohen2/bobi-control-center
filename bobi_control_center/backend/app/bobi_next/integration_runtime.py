@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 
 from .archive_capture import StoredArchiveBlob
+from .archive_configuration import archive_connection_fingerprint
 from .cloud_archive_storage import BobiCloudArchiveStorage
 from .cloud_identity import cloud_subject
 from .integration_store import ExternalIntegration, IntegrationStore
@@ -72,7 +73,7 @@ def build_archive_storage(
             return LocalArchiveStorage(root / "bobi-next-archive-files")
         if mode != "cloud":
             raise IntegrationRuntimeError("archive_storage_mode_invalid")
-        return _cloud_archive(root, setup, integrations, client=client)
+        return _cloud_archive(root, setup, integrations, client=client, writer=True)
     finally:
         setup.close()
         integrations.close()
@@ -84,6 +85,7 @@ def _cloud_archive(
     integrations: IntegrationStore,
     *,
     client: httpx.AsyncClient | None = None,
+    writer: bool = False,
 ) -> BobiCloudArchiveStorage:
     archive_type = (
         "bobi_archive" if integrations.list(integration_type="bobi_archive") else "bobi_storage"
@@ -91,6 +93,16 @@ def _cloud_archive(
     integration = _single_storage(integrations, archive_type)
     if integration.config.get("archive_enabled") is not True:
         raise IntegrationRuntimeError(f"{archive_type}_archive_not_enabled")
+    settings = setup.settings()
+    if writer and settings.get("archive_connection_check_required") is True:
+        proof = settings.get("archive_connection_proof")
+        if (
+            not isinstance(proof, dict)
+            or proof.get("ready") is not True
+            or proof.get("fingerprint")
+            != archive_connection_fingerprint(setup.installation_id(), integration)
+        ):
+            raise IntegrationRuntimeError("archive_connection_check_required")
     vault = EncryptedSecretVault(root / "bobi-next-secrets.db", root / "bobi-next-secrets.key")
     try:
         token = _resolve_storage_token(integration, vault)

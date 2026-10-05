@@ -19,6 +19,7 @@ import { toDisplayError } from '@/api/client';
 import { Badge } from '@/components/ui/Badge';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { ArchiveSetupCard } from '@/features/setup/ArchiveSetupCard';
 
 const inputClass =
   'mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-bobi-400 focus:ring-2 focus:ring-bobi-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:ring-bobi-500/20';
@@ -34,6 +35,7 @@ const MISSING_LABELS: Record<string, string> = {
   ai_provider_config: 'Endpoint ומודל AI',
   user: 'משתמש',
   user_identity: 'מספר WhatsApp מקושר',
+  archive_connection_check: 'בדיקת חיבור לארכיון המסמכים',
 };
 
 function StepBadge({ done, children }: { done: boolean; children: string }) {
@@ -252,6 +254,7 @@ export function NextSetupPage() {
         <StepBadge done={aiDone}>AI</StepBadge>
         <StepBadge done={usersDone}>משתמשים</StepBadge>
         <StepBadge done={identityDone}>קישור זהות</StepBadge>
+        {snapshot?.archive ? <StepBadge done={snapshot.archive.ready}>ארכיון מסמכים</StepBadge> : null}
       </div>
 
       {error ? (
@@ -489,6 +492,15 @@ export function NextSetupPage() {
               </div>
             </form>
           </Card>
+
+          {snapshot?.archive ? (
+            <ArchiveSetupCard
+              initial={snapshot.archive}
+              disabled={busy !== ''}
+              onSaved={refresh}
+              onBusyChange={(value) => setBusy(value ? 'archive' : '')}
+            />
+          ) : null}
 
           <Card as="section" className={ready && homeDone ? 'border-emerald-200 dark:border-emerald-900/50' : undefined}>
             <CardHeader

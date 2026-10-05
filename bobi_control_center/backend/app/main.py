@@ -119,10 +119,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # wizard a real HTTP contract for development/E2E without creating a new
     # write surface in the currently deployed app.
     if settings.next_setup_enabled:
+        from app.bobi_next.archive_setup_api import create_archive_setup_router
+        from app.bobi_next.integration_api import create_integration_setup_router
         from app.bobi_next.setup_api import create_setup_router
         from app.bobi_next.setup_discovery_api import create_setup_discovery_router
 
         app.include_router(create_setup_router(settings.data_dir / "bobi-next-setup.db"))
+        app.include_router(
+            create_integration_setup_router(settings.data_dir / "bobi-next-setup.db")
+        )
+        app.include_router(create_archive_setup_router(settings.data_dir / "bobi-next-setup.db"))
         app.include_router(
             create_setup_discovery_router(
                 api_base_url=settings.ha_base_url,

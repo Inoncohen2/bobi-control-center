@@ -8,6 +8,9 @@ or deploys functions. The default Bobi archive provider remains local.
 `x-bobi-token`. It implements only `ping`, `archive.media.upload` and
 `archive.media.signed_url`. Receiving media, OCR and AI do not authorize saving:
 the Bobi conversation authority/policy checks must run before this adapter.
+Authenticated `ping` advertises `archive_protocol=bobi-archive-v1` and the
+token's installation ID. This lets setup reject voucher-only endpoints and
+tokens belonging to another installation without uploading a file.
 
 | Boundary | Behavior |
 | --- | --- |
@@ -56,15 +59,21 @@ not a hosted Supabase, WAHA, Home Assistant or Deno runtime E2E proof.
    Token provisioning/onboarding automation is a separate remaining task.
 4. Configure a new integration key of type `bobi_archive` using the development
    function endpoint and installation token. Set `config.archive_enabled=true`
-   explicitly and select `archive_storage_mode=cloud` in SetupStore settings.
+   explicitly. Use the opt-in Setup Wizard's archive card to save the encrypted
+   credential, check the connection and explicitly select cloud mode. The check
+   requires the exact installation ID from step 3 and the generic protocol.
    Archive integration takes precedence over archive-capable legacy storage;
    disabling it, ambiguous providers or missing secrets fail closed without
    changing providers. Local remains the default. The voucher wallet uses only
    `bobi_storage`, with its own endpoint/token. Integration types are immutable;
    changing an endpoint requires an explicit token. Credential versions are
    immutable; a rejected or racing config update cannot overwrite an active
-   token. Optional cloud controls in
-   the Setup Wizard remain pending.
+   token. The mode API requires a fresh five-minute connection proof bound to
+   the credential version/endpoint. New uploads under a wizard-selected cloud
+   configuration stop if that proof is invalidated; they resume after a matching
+   check. The proof does not promise current provider uptime. Existing local and
+   cloud records remain readable by their saved URI when the new-upload mode
+   changes. Setup does not provision tokens or deploy this provider.
 5. Verify hosted upload/read/hash, private-bucket denial, owner/installation
    isolation, duplicate requests, interrupted uploads, disabled token, outage and
    signed URL expiry. Run actual Deno/Storage tests before claiming cloud parity.

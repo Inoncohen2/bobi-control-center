@@ -19,6 +19,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.bobi_next.archive_capture import ArchiveCaptureRequest, ArchiveCaptureService
+from app.bobi_next.archive_setup_api import create_archive_setup_router
 from app.bobi_next.archive_store import ArchiveStore
 from app.bobi_next.cloud_archive_storage import BobiCloudArchiveStorage
 from app.bobi_next.integration_api import create_integration_setup_router
@@ -34,7 +35,11 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture
-def archive_endpoint(tmp_path):
+def archive_endpoint(tmp_path, monkeypatch):
+    # This contract is strictly loopback. The setup handshake creates its own
+    # HTTP client, so inherited workstation proxies must not intercept it.
+    for key in ("ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "http_proxy", "https_proxy"):
+        monkeypatch.delenv(key, raising=False)
     root = Path(__file__).resolve().parents[3]
     setup = SetupStore(tmp_path / "bobi-next-setup.db")
     installation = setup.installation_id()
@@ -85,6 +90,7 @@ async def test_capture_dedupe_and_signed_retrieval_with_actual_provider(
     try:
         app = FastAPI()
         app.include_router(create_integration_setup_router(tmp_path / "bobi-next-setup.db"))
+        app.include_router(create_archive_setup_router(tmp_path / "bobi-next-setup.db"))
         with TestClient(app) as setup_client:
             response = setup_client.post("/api/next/setup/integrations", json={
                 "integration_key": "archive", "integration_type": "bobi_archive",
@@ -93,6 +99,11 @@ async def test_capture_dedupe_and_signed_retrieval_with_actual_provider(
             })
             assert response.status_code == 200
             assert "a" * 40 not in response.text
+            checked = setup_client.post("/api/next/setup/archive/check")
+            assert checked.status_code == 200 and checked.json()["cloud"]["ready"]
+            assert checked.json()["cloud"]["check_fresh"]
+            selected = setup_client.put("/api/next/setup/archive", json={"mode": "cloud"})
+            assert selected.status_code == 200 and selected.json()["ready"]
         async with httpx.AsyncClient(trust_env=False) as client:
             adapter = build_archive_storage(tmp_path, client=client)
             assert isinstance(adapter, BobiCloudArchiveStorage)

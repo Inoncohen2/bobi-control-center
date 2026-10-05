@@ -164,7 +164,10 @@ export function createArchiveHandler(backend: ArchiveBackend): (request: Request
       const payload = record(body.payload ?? {});
       if (body.op === "ping") {
         onlyKeys(payload, []);
-        return reply(200, { ok: true, provider: "bobi-archive-next", archive_enabled: true });
+        return reply(200, {
+          ok: true, provider: "bobi-archive-next", archive_enabled: true,
+          archive_protocol: "bobi-archive-v1", installation_id: installation,
+        });
       }
       const subject = string(body.external_id, /^bobi2_[a-f0-9]{48}$/);
       if (body.op === "archive.media.upload") {

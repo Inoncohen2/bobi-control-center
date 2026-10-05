@@ -2,16 +2,35 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from contextlib import contextmanager
 from pathlib import Path
 
 from .archive_store import ArchiveStore
-from .integration_store import IntegrationStore
+from .integration_store import ExternalIntegration, IntegrationStore
 from .request_ledger import RequestLedger
 
 
 class ArchiveConfigurationConflict(ValueError):
     pass
+
+
+def archive_connection_fingerprint(installation_id: str, item: ExternalIntegration) -> str:
+    """Bind a connection proof to the immutable credential version and tenant."""
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "installation_id": installation_id,
+                "key": item.integration_key,
+                "endpoint": item.endpoint,
+                "secret_ref": item.secret_ref,
+                "enabled": item.enabled,
+                "archive_enabled": item.config.get("archive_enabled"),
+            },
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
 
 
 @contextmanager
