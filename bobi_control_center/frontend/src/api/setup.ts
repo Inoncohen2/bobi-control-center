@@ -1,6 +1,7 @@
 import { api } from '@/api/client';
 
 export type SetupRole = 'owner' | 'admin' | 'member' | 'guest';
+export type AICapability = 'intent' | 'chat' | 'audio' | 'vision' | 'embeddings';
 
 export interface SetupPolicy {
   allowed_capabilities: string[];
@@ -19,6 +20,18 @@ export interface SetupProvider {
   session: string;
   engine: string;
   has_secret_ref: boolean;
+  webhook_hmac_ready?: boolean;
+}
+
+export interface SetupAIProvider {
+  provider_key: string;
+  provider_type: string;
+  display_name: string;
+  model: string;
+  enabled: boolean;
+  capabilities: AICapability[];
+  has_secret_ref: boolean;
+  selected?: boolean;
 }
 
 export interface SetupUser {
@@ -39,6 +52,20 @@ export interface SetupSnapshot {
   providers: SetupProvider[];
   users: SetupUser[];
   linked_identities: number;
+  ai: {
+    providers: SetupAIProvider[];
+    selected_provider_key?: string;
+  };
+}
+
+export interface HomeScanSummary {
+  ok: boolean;
+  devices: number;
+  available_devices: number;
+  entities: number;
+  areas: number;
+  capabilities: number;
+  domains: Array<{ domain: string; entities: number }>;
 }
 
 export interface ProviderInput {
@@ -50,6 +77,20 @@ export interface ProviderInput {
   session?: string;
   engine?: string;
   secret_ref?: string;
+  secret_value?: string;
+  config?: Record<string, unknown>;
+}
+
+export interface AIProviderInput {
+  provider_key: string;
+  provider_type: string;
+  display_name: string;
+  endpoint?: string;
+  model: string;
+  secret_ref?: string;
+  secret_value?: string;
+  enabled?: boolean;
+  capabilities?: AICapability[];
   config?: Record<string, unknown>;
 }
 
@@ -71,7 +112,12 @@ const ROOT = '/api/next/setup';
 
 export const setupApi = {
   status: () => api.get<SetupSnapshot>(`${ROOT}/status`),
+  homeScan: () => api.post<HomeScanSummary>(`${ROOT}/home-scan`),
   saveProvider: (body: ProviderInput) => api.post<SetupProvider>(`${ROOT}/providers`, body),
+  saveAIProvider: (body: AIProviderInput) =>
+    api.post<SetupAIProvider>(`${ROOT}/ai/providers`, body),
+  selectAIProvider: (providerKey: string) =>
+    api.post<SetupAIProvider>(`${ROOT}/ai/providers/${encodeURIComponent(providerKey)}/select`),
   createUser: (body: UserInput) => api.post<SetupUser>(`${ROOT}/users`, body),
   linkIdentity: (body: IdentityInput) =>
     api.post<{ provider_key: string; user_key: string; identity_label: string }>(
