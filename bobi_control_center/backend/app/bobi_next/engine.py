@@ -22,6 +22,8 @@ from .authorization import (
 )
 from .conditional import ConditionalRuleStore
 from .conditional_capture import persist_conditional_rule
+from .event_reminder_capture import capture_event_reminder
+from .event_reminders import EventReminderStore
 from .executor import HAControlClient
 from .intent import SemanticIntent
 from .memory import BobiMemory
@@ -267,6 +269,106 @@ async def _create_reminder(
     )
 
 
+async def _create_event_reminder(
+    request: EngineRequest,
+    intent: SemanticIntent,
+    *,
+    list_devices: DeviceProvider,
+    policy_for: PolicyProvider,
+    memory: BobiMemory,
+    event_reminders: EventReminderStore | None,
+    requests: RequestLedger,
+    now: int,
+    dry_run: bool,
+) -> EngineResult:
+    if event_reminders is None:
+        raise RuntimeError("event_reminder_store_not_configured")
+
+    devices = tuple(await list_devices())
+    memory.sync_devices(devices, now_ts=now)
+    policy = await policy_for(request.user_key)
+    result = capture_event_reminder(
+        request_id=request.request_id,
+        user_key=request.user_key,
+        provider_key=request.provider_key,
+        chat_id=request.chat_id,
+        source_message_id=request.message_id,
+        intent=intent,
+        devices=devices,
+        policy=policy,
+        store=event_reminders,
+        learned_aliases=memory.aliases_for,
+        now_ts=now,
+        dry_run=dry_run,
+    )
+
+    if result.outcome == "created":
+        requests.complete(
+            request.request_id,
+            owner_token=request.owner_token,
+            terminal_kind="event_reminder_created",
+            now_ts=now,
+        )
+        return EngineResult(
+            request.request_id,
+            "event_reminder_created",
+            result.reason,
+            resolution=result.resolution,
+            metadata=dict(result.metadata or {}),
+        )
+    if result.outcome == "shadow":
+        requests.complete(
+            request.request_id,
+            owner_token=request.owner_token,
+            terminal_kind="shadow",
+            now_ts=now,
+        )
+        return EngineResult(
+            request.request_id,
+            "shadow",
+            result.reason,
+            resolution=result.resolution,
+            metadata=dict(result.metadata or {}),
+        )
+    if result.outcome == "clarification":
+        requests.complete(
+            request.request_id,
+            owner_token=request.owner_token,
+            terminal_kind="clarification",
+            now_ts=now,
+        )
+        return EngineResult(
+            request.request_id,
+            "clarification",
+            result.reason,
+            resolution=result.resolution,
+        )
+    if result.outcome == "ignored":
+        requests.ignore(
+            request.request_id,
+            owner_token=request.owner_token,
+            terminal_kind="negated",
+            now_ts=now,
+        )
+        return EngineResult(request.request_id, "ignored", result.reason)
+    if result.outcome == "blocked":
+        requests.complete(
+            request.request_id,
+            owner_token=request.owner_token,
+            terminal_kind="blocked",
+            now_ts=now,
+        )
+        return EngineResult(request.request_id, "blocked", result.reason)
+
+    requests.complete(
+        request.request_id,
+        owner_token=request.owner_token,
+        terminal_kind="unsupported_intent",
+        now_ts=now,
+    )
+    return EngineResult(request.request_id, "unsupported", result.reason)
+
+
 async def process_request(
     request: EngineRequest,
     *,
@@ -278,6 +380,7 @@ async def process_request(
     requests: RequestLedger,
     schedules: ScheduleStore | None = None,
     reminders: ReminderStore | None = None,
+    event_reminders: EventReminderStore | None = None,
     conditional_rules: ConditionalRuleStore | None = None,
     pending_approvals: PendingApprovalStore | None = None,
     dry_run: bool = False,
@@ -323,6 +426,18 @@ async def process_request(
             return EngineResult(request.request_id, "ignored", "source_negated")
 
         if intent.family.casefold() == "reminder" or intent.canonical_domain == "reminder":
+            if intent.conditional:
+                return await _create_event_reminder(
+                    request,
+                    intent,
+                    list_devices=list_devices,
+                    policy_for=policy_for,
+                    memory=memory,
+                    event_reminders=event_reminders,
+                    requests=requests,
+                    now=now,
+                    dry_run=dry_run,
+                )
             return await _create_reminder(
                 request,
                 intent,
