@@ -158,7 +158,7 @@ async def test_known_sent_outbox_prevents_duplicate_reply_on_retry(tmp_path):
         transport = FakeTransport()
 
         async def handler(message):
-            return MessageResponse("same reply")
+            raise AssertionError("a persisted sent reply must not reenter the handler")
 
         result = await process_next_message(
             store,
@@ -169,6 +169,91 @@ async def test_known_sent_outbox_prevents_duplicate_reply_on_retry(tmp_path):
         )
 
         assert result.state == "completed"
+        assert transport.send_count == 0
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_prepared_reply_resumes_exact_payload_after_send_failure_and_restart(tmp_path):
+    path = tmp_path / "messages.db"
+    store = MessageStore(path)
+    store.enqueue(
+        provider="waha",
+        message_id="save",
+        chat_id="chat-a",
+        user_key="u1",
+        text="save document",
+        received_ts=10,
+    )
+    executions = []
+
+    async def handler(message):
+        executions.append(message.message_id)
+        return MessageResponse("original verified confirmation")
+
+    class FlakyTransport(FakeTransport):
+        async def send_text(self, *args, **kwargs):
+            result = await super().send_text(*args, **kwargs)
+            if self.send_count == 1:
+                raise RuntimeError("provider_unavailable")
+            return result
+
+    transport = FlakyTransport()
+    try:
+        first = await process_next_message(
+            store, transport, handler, owner_token="old-worker", now_ts=20
+        )
+        assert first.state == "retry" and executions == ["save"]
+    finally:
+        store.close()
+    restarted = MessageStore(path)
+    try:
+
+        async def no_reentry(message):
+            raise AssertionError("retry may not execute a command or regenerate its reply")
+
+        second = await process_next_message(
+            restarted, transport, no_reentry, owner_token="new-worker", now_ts=40
+        )
+        assert second.state == "completed" and second.attempts == 2
+        sends = [event for event in transport.events if event[0] == "send"]
+        assert len(sends) == 2 and sends[0] == sends[1]
+        assert sends[1][2] == "original verified confirmation"
+        assert executions == ["save"]
+    finally:
+        restarted.close()
+
+
+@pytest.mark.asyncio
+async def test_cached_reply_cannot_resume_in_a_different_chat(tmp_path):
+    store = MessageStore(tmp_path / "messages.db")
+    store.enqueue(
+        provider="waha",
+        message_id="m1",
+        chat_id="chat-a",
+        user_key="u1",
+        text="private request",
+        received_ts=10,
+    )
+    claimed = store.claim_next(owner_token="old", now_ts=20)
+    reply = store.prepare_outbound(claimed, text="private reply", now_ts=20)
+    with store._db:
+        store._db.execute(
+            "UPDATE outbound_messages SET chat_id=? WHERE response_key=?",
+            ("different-chat", reply.response_key),
+        )
+    store.fail(claimed, owner_token="old", error="restart", retry_at_ts=21)
+    transport = FakeTransport()
+
+    async def no_reentry(message):
+        raise AssertionError("changed reply context must fail before handler execution")
+
+    try:
+        result = await process_next_message(
+            store, transport, no_reentry, owner_token="new", now_ts=21
+        )
+        assert result.state == "retry" and result.last_error.endswith("outbound_context_changed")
         assert transport.send_count == 0
     finally:
         store.close()

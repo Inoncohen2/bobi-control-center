@@ -1,4 +1,4 @@
-"""Real Python client against the production TypeScript handler on loopback.
+"""Real Python client against the archive TypeScript handler on loopback.
 
 The provider CI job requires this test. SQL is evaluated by embedded Postgres;
 Supabase Storage HTTP is mocked. No live cloud or Home Assistant is involved.
@@ -6,32 +6,85 @@ Supabase Storage HTTP is mocked. No live cloud or Home Assistant is involved.
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import io
 import json
 import os
 import select
 import subprocess
+import time
+from dataclasses import replace
+from functools import partial
 from pathlib import Path
 
 import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pypdf import PdfWriter
 
+import app.bobi_next.archive_messaging_runtime as archive_runtime_module
 from app.bobi_next.archive_capture import ArchiveCaptureRequest, ArchiveCaptureService
+from app.bobi_next.archive_messaging_runtime import ArchiveMessagingRuntime
 from app.bobi_next.archive_setup_api import create_archive_setup_router
 from app.bobi_next.archive_store import ArchiveStore
 from app.bobi_next.cloud_archive_storage import BobiCloudArchiveStorage
 from app.bobi_next.integration_api import create_integration_setup_router
 from app.bobi_next.integration_runtime import build_archive_storage
+from app.bobi_next.intent import SemanticIntent
+from app.bobi_next.media_analyzers import MediaAnalyzerRegistry
 from app.bobi_next.media_pipeline import LoadedMedia, MediaDescriptor
+from app.bobi_next.messaging import process_next_message
+from app.bobi_next.pending_approval import PendingApprovalStore
+from app.bobi_next.setup_api import create_setup_router
 from app.bobi_next.setup_store import SetupStore
 from app.bobi_next.supabase_storage import BobiStorageClient, BobiStorageError
+from app.bobi_next.waha_adapter import WahaMediaLoader, WahaTransport
+from app.bobi_next.waha_ingest import ingest_waha_event
+from app.bobi_next.waha_outbound_media import WahaOutboundMediaTransport
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("BOBI_ARCHIVE_PROVIDER_CONTRACT") != "1",
     reason="requires Node 22+ and the isolated Supabase test dependencies",
 )
+
+
+def _configure_archive(path, endpoint):
+    app = FastAPI()
+    app.include_router(create_setup_router(path))
+    app.include_router(create_integration_setup_router(path))
+    app.include_router(create_archive_setup_router(path))
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/next/setup/integrations",
+            json={
+                "integration_key": "archive",
+                "integration_type": "bobi_archive",
+                "display_name": "Archive dev",
+                "endpoint": endpoint,
+                "secret_value": "a" * 40,
+                "config": {"archive_enabled": True},
+            },
+        )
+        assert response.status_code == 200 and "a" * 40 not in response.text
+        checked = client.post("/api/next/setup/archive/check")
+        assert checked.status_code == 200 and checked.json()["cloud"]["ready"]
+        assert checked.json()["cloud"]["check_fresh"]
+        selected = client.put("/api/next/setup/archive", json={"mode": "cloud"})
+        assert selected.status_code == 200 and selected.json()["ready"]
+        return client.post(
+            "/api/next/setup/providers",
+            json={
+                "provider_key": "waha",
+                "provider_type": "waha",
+                "display_name": "WhatsApp",
+                "endpoint": "http://waha-fixture:3000",
+                "session": "default",
+                "engine": "GOWS",
+                "secret_value": "waha-fixture-key",
+            },
+        ).json()
 
 
 @pytest.fixture
@@ -77,7 +130,8 @@ def archive_endpoint(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_capture_dedupe_and_signed_retrieval_with_actual_provider(
-    archive_endpoint, tmp_path,
+    archive_endpoint,
+    tmp_path,
 ) -> None:
     content = b"%PDF-1.4\nprivate insurance contract\n%%EOF"
     digest = hashlib.sha256(content).hexdigest()
@@ -88,22 +142,7 @@ async def test_capture_dedupe_and_signed_retrieval_with_actual_provider(
     )
     archive = ArchiveStore(tmp_path / "archive.db")
     try:
-        app = FastAPI()
-        app.include_router(create_integration_setup_router(tmp_path / "bobi-next-setup.db"))
-        app.include_router(create_archive_setup_router(tmp_path / "bobi-next-setup.db"))
-        with TestClient(app) as setup_client:
-            response = setup_client.post("/api/next/setup/integrations", json={
-                "integration_key": "archive", "integration_type": "bobi_archive",
-                "display_name": "Archive dev", "endpoint": archive_endpoint,
-                "secret_value": "a" * 40, "config": {"archive_enabled": True},
-            })
-            assert response.status_code == 200
-            assert "a" * 40 not in response.text
-            checked = setup_client.post("/api/next/setup/archive/check")
-            assert checked.status_code == 200 and checked.json()["cloud"]["ready"]
-            assert checked.json()["cloud"]["check_fresh"]
-            selected = setup_client.put("/api/next/setup/archive", json={"mode": "cloud"})
-            assert selected.status_code == 200 and selected.json()["ready"]
+        _configure_archive(tmp_path / "bobi-next-setup.db", archive_endpoint)
         async with httpx.AsyncClient(trust_env=False) as client:
             adapter = build_archive_storage(tmp_path, client=client)
             assert isinstance(adapter, BobiCloudArchiveStorage)
@@ -125,7 +164,8 @@ async def test_capture_dedupe_and_signed_retrieval_with_actual_provider(
             assert archive.get(record.object_id, owner_key="user-b") is None
 
             other = await capture.capture(
-                ArchiveCaptureRequest("user-b", "document", "Other insurance"), media=media,
+                ArchiveCaptureRequest("user-b", "document", "Other insurance"),
+                media=media,
             )
             assert other.storage_uri != record.storage_uri
             assert await adapter.read(other.storage_uri, max_bytes=1024) == content
@@ -134,9 +174,286 @@ async def test_capture_dedupe_and_signed_retrieval_with_actual_provider(
             # exact URI even if it knows both the opaque subject and media ID.
             foreign = BobiCloudArchiveStorage(
                 BobiStorageClient(archive_endpoint, "b" * 40, client=client),
-                installation_id="installation-b", client=client,
+                installation_id="installation-b",
+                client=client,
             )
             with pytest.raises(BobiStorageError):
                 await foreign.read(record.storage_uri, max_bytes=1024)
     finally:
         archive.close()
+
+
+class _NeverHA:
+    async def get_state(self, entity_id):
+        raise AssertionError("archive flow must not query Home Assistant")
+
+    async def call_service(self, *args):
+        raise AssertionError("archive flow must not mutate Home Assistant")
+
+
+class _Understanding:
+    def __init__(self):
+        self.texts = []
+
+    async def understand(self, text, *, context):
+        self.texts.append(text)
+        assert "/api/files/" not in text and "http://" not in text
+        return SemanticIntent(
+            raw_text=text,
+            family="device_control",
+            domain="switch",
+            operation="off",
+            target_text="missing target",
+            confidence=0.99,
+        )
+
+
+class _WahaHTTP:
+    def __init__(self):
+        writer = PdfWriter()
+        writer.add_blank_page(width=100, height=100)
+        buffer = io.BytesIO()
+        writer.write(buffer)
+        self.content = buffer.getvalue()
+        self.requests = []
+        self.replies = []
+        self.files = []
+        self.fail_reply_once = False
+
+    async def request(self, request):
+        self.requests.append(request)
+        assert request.url.host == "waha-fixture"
+        assert request.headers["x-api-key"] == "waha-fixture-key"
+        if request.method == "GET":
+            assert request.url.path == "/api/files/current.pdf"
+            return httpx.Response(
+                200, content=self.content, headers={"content-type": "application/pdf"}
+            )
+        body = json.loads(request.content)
+        if request.url.path == "/api/sendText":
+            if self.fail_reply_once:
+                self.fail_reply_once = False
+                return httpx.Response(503)
+            self.replies.append(body)
+        elif request.url.path == "/api/sendFile":
+            self.files.append(body)
+        return httpx.Response(200, json={"id": "provider-" + str(len(self.requests))})
+
+
+class _WhatsAppFlow:
+    """Actual ingest, durable queues, conversation and runtime; HTTP seams only."""
+
+    def __init__(self, path, understanding, *, dry_run=False):
+        self.path = path
+        self.understanding = understanding
+        self.dry_run = dry_run
+        self.now = int(time.time())
+        self.open()
+
+    def open(self):
+        self.setup = SetupStore(self.path / "bobi-next-setup.db")
+        if self.setup.get_user("owner") is None:
+            self.setup.create_user(display_name="Owner", role="owner", user_key="owner")
+            self.setup.link_identity(provider_key="waha", external_id="111@c.us", user_key="owner")
+        self.pending = PendingApprovalStore(self.path / "pending.db")
+
+        async def policy(key):
+            return self.setup.get_user(key).policy
+
+        async def devices():
+            return ()
+
+        self.runtime = ArchiveMessagingRuntime(
+            data_dir=self.path,
+            setup=self.setup,
+            ha=_NeverHA(),
+            list_devices=devices,
+            policy_for=policy,
+            pending_approvals=self.pending,
+            dry_run=self.dry_run,
+        )
+        self.boundary = self.runtime._waha_boundary(
+            self.setup.get_provider("waha"),
+            understanding=self.understanding,
+            analyzers=MediaAnalyzerRegistry(),
+        )
+        self.runtime.boundaries["waha"] = self.boundary
+
+    async def close(self):
+        await self.runtime.aclose()
+        self.pending.close()
+        self.setup.close()
+
+    def event(self, key, text, *, media=False, quoted=False):
+        payload = {
+            "id": key,
+            "from": "111@c.us",
+            "fromMe": False,
+            "body": text,
+            "timestamp": self.now,
+            "hasMedia": media,
+        }
+        if media:
+            payload["media"] = {
+                "url": "https://untrusted-host/api/files/current.pdf",
+                "mimetype": "application/pdf",
+                "filename": "insurance.pdf",
+            }
+        if quoted:
+            payload["replyTo"] = {
+                "id": "old-document",
+                "body": "שמור את זה",
+                "hasMedia": True,
+                "media": {
+                    "url": "https://untrusted-host/api/files/quoted.pdf",
+                    "mimetype": "application/pdf",
+                    "filename": "quoted.pdf",
+                },
+            }
+        return {"event": "message", "session": "default", "payload": payload}
+
+    def ingest(self, event):
+        return ingest_waha_event(
+            event,
+            provider_key="waha",
+            setup=self.setup,
+            messages=self.boundary.messages,
+            now_ts=self.now,
+        )
+
+    async def process(self):
+        self.now += 20
+        return await process_next_message(
+            self.boundary.messages,
+            self.boundary.transport,
+            self.boundary.handler,
+            owner_token="contract-worker",
+            now_ts=self.now,
+            reaction_for=lambda message: "📄",
+        )
+
+    async def send(self, key, text, **kwargs):
+        assert self.ingest(self.event(key, text, **kwargs)).accepted
+        processed = await self.process()
+        assert processed is not None and processed.state == "completed"
+
+
+def _inject_waha_http(monkeypatch, client):
+    # The production constructors and adapters remain real; only their HTTP
+    # clients are injected. No WAHA server or user phone is contacted.
+    monkeypatch.setattr(
+        archive_runtime_module, "WahaMediaLoader", partial(WahaMediaLoader, client=client)
+    )
+    monkeypatch.setattr(
+        archive_runtime_module, "WahaTransport", partial(WahaTransport, client=client)
+    )
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_cloud_archive_retry_restart_approval_and_delivery(
+    archive_endpoint,
+    tmp_path,
+    monkeypatch,
+):
+    _configure_archive(tmp_path / "bobi-next-setup.db", archive_endpoint)
+    waha = _WahaHTTP()
+    understanding = _Understanding()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(waha.request)) as client:
+        _inject_waha_http(monkeypatch, client)
+        flow = _WhatsAppFlow(tmp_path, understanding)
+        try:
+            save = flow.event("save", "שמור את זה בתיקיית ביטוחים", media=True, quoted=True)
+            assert flow.ingest(save).accepted
+            waha.fail_reply_once = True
+            assert (await flow.process()).state == "retry"
+            saved = flow.runtime.archive.index.search(owner_key="owner", category="ביטוחים")
+            assert len(saved) == 1 and saved[0].source_message_id == "save"
+            assert saved[0].sha256 == hashlib.sha256(waha.content).hexdigest()
+            assert saved[0].storage_uri.startswith("bobi-storage://")
+            assert not (tmp_path / "bobi-next-archive-files").exists()
+            await flow.close()
+            flow.open()
+            assert (await flow.process()).state == "completed"
+            assert waha.replies[-1]["text"] == "✅ שמרתי את הקובץ בתיקיית ביטוחים."
+            assert flow.ingest(save).duplicate
+            assert len([r for r in waha.requests if r.method == "GET"]) == 1
+            assert understanding.texts == []
+
+            await flow.send("retrieve", "שלח לי את המסמך insurance")
+            # The queued private file must survive reopening every Bobi store.
+            await flow.close()
+            flow.open()
+            outbound = WahaOutboundMediaTransport(
+                base_url="http://waha-fixture:3000",
+                session="default",
+                api_key="waha-fixture-key",
+                client=client,
+            )
+            delivered = await flow.runtime.archive.process_next(
+                "waha",
+                outbound,
+                owner_token="file-worker",
+                now_ts=flow.now,
+            )
+            assert delivered.state == "sent"
+            assert len(waha.files) == 1 and waha.files[0]["reply_to"] == "retrieve"
+            assert base64.b64decode(waha.files[0]["file"]["data"]) == waha.content
+            assert waha.files[0]["file"]["filename"] == "insurance.pdf"
+            assert "url" not in waha.files[0]["file"]
+            assert "a" * 40 not in json.dumps(waha.files)
+
+            await flow.send("delete", "מחק את המסמך insurance")
+            assert "כן או לא" in waha.replies[-1]["text"]
+            assert flow.runtime.archive.index.get(saved[0].object_id, owner_key="owner")
+            await flow.close()
+            flow.open()
+            await flow.send("approve", "כן")
+            assert "סל המחזור" in waha.replies[-1]["text"]
+            assert flow.runtime.archive.index.get(saved[0].object_id, owner_key="owner") is None
+            await flow.send("trashed", "שלח לי את המסמך insurance")
+            assert "לא מצאתי" in waha.replies[-1]["text"]
+            assert len(waha.files) == 1
+            await flow.send("restore", "שחזר את המסמך insurance")
+            await flow.send("move", "העבר את המסמך insurance לתיקיית רכב")
+            current = flow.runtime.archive.index.get(saved[0].object_id, owner_key="owner")
+            assert current.category == "רכב" and current.revision == 3
+            assert current.storage_uri == saved[0].storage_uri
+            assert (
+                await flow.runtime.archive.storage.read(current.storage_uri, max_bytes=1024)
+                == waha.content
+            )
+            assert flow.runtime.archive.index.search(owner_key="another-user") == ()
+            assert understanding.texts == []
+        finally:
+            await flow.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["no_instruction", "quote_only", "denied", "shadow"])
+async def test_cloud_whatsapp_requires_current_explicit_authority_and_permission(
+    archive_endpoint,
+    tmp_path,
+    monkeypatch,
+    case,
+):
+    _configure_archive(tmp_path / "bobi-next-setup.db", archive_endpoint)
+    waha = _WahaHTTP()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(waha.request)) as client:
+        _inject_waha_http(monkeypatch, client)
+        flow = _WhatsAppFlow(tmp_path, _Understanding(), dry_run=case == "shadow")
+        try:
+            if case == "denied":
+                policy = flow.setup.get_user("owner").policy
+                flow.setup.update_user_policy(
+                    "owner", replace(policy, denied_capabilities=frozenset({"archive.write"}))
+                )
+            caption = "מה כתוב במסמך?" if case == "no_instruction" else "שמור את זה"
+            await flow.send("authority", caption, media=case != "quote_only", quoted=True)
+            assert flow.runtime.archive.index.search(owner_key="owner") == ()
+            assert not (tmp_path / "bobi-next-archive-files").exists()
+            assert not waha.files
+            assert all("שמרתי" not in reply["text"] for reply in waha.replies)
+            if case != "no_instruction":
+                assert not [r for r in waha.requests if r.method == "GET"]
+        finally:
+            await flow.close()

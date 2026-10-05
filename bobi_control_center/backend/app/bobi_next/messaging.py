@@ -373,6 +373,22 @@ class MessageStore:
             raise RuntimeError("message_disappeared")
         return updated
 
+    def outbound_for(self, message: InboundMessage) -> OutboundMessage | None:
+        """Resume the exact Bobi-owned reply after a send or worker failure."""
+        row = self._db.execute(
+            "SELECT * FROM outbound_messages WHERE response_key=?",
+            (_response_key(message),),
+        ).fetchone()
+        outbound = self._outbound(row)
+        if outbound is not None and (
+            outbound.provider != message.provider
+            or outbound.chat_id != message.chat_id
+            or outbound.in_reply_to != message.message_id
+            or outbound.state not in {"prepared", "sent"}
+        ):
+            raise RuntimeError("outbound_context_changed")
+        return outbound
+
     def prepare_outbound(
         self,
         message: InboundMessage,
@@ -456,8 +472,10 @@ async def process_next_message(
         await transport.set_typing(message.chat_id, True)
         typing_started = True
 
-        response = await handler(message)
-        outbound = store.prepare_outbound(message, text=response.text, now_ts=now_ts)
+        outbound = store.outbound_for(message)
+        if outbound is None:
+            response = await handler(message)
+            outbound = store.prepare_outbound(message, text=response.text, now_ts=now_ts)
         if outbound.state != "sent":
             provider_id = await transport.send_text(
                 message.chat_id,

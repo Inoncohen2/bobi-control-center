@@ -40,8 +40,13 @@ BOBI_ARCHIVE_PROVIDER_CONTRACT=1 python -m pytest -q tests/test_bobi_next_archiv
 Node 22+ is required. PGlite evaluates the actual migration/RLS/claim functions in
 embedded Postgres. The actual TypeScript handler and REST backend run against
 that database with mocked Storage HTTP. CI also checks the Edge entrypoint with
-Deno 2.9.6. The Python test uses the Setup API, encrypted vault, runtime factory,
-real client, ArchiveCapture and ArchiveStore over loopback. These are isolated contract tests,
+Deno 2.9.6. The Python contracts use the Setup API, encrypted vault, runtime factory,
+real client, ArchiveCapture and ArchiveStore over loopback. They also exercise
+WAHA ingest/current-media loading, exact original reply retry after a send
+failure, reopening all Bobi stores, queued binary-file delivery and deletion
+approval/restore/move. Missing explicit authority, quote-only media, denied
+permission and Shadow cannot save. WAHA HTTP and hosted Storage are simulated.
+These are isolated contract tests,
 not a hosted Supabase, WAHA, Home Assistant or Deno runtime E2E proof.
 
 ## Controlled development rollout (still pending)
