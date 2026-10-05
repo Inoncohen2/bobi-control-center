@@ -91,7 +91,7 @@ def test_home_scan_returns_only_aggregate_discovery_summary(monkeypatch) -> None
         "available_devices": 1,
         "entities": 2,
         "areas": 2,
-        "capabilities": 5,
+        "capabilities": 4,
         "domains": [
             {"domain": "climate", "entities": 1},
             {"domain": "light", "entities": 1},
