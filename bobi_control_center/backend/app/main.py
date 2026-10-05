@@ -120,8 +120,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # write surface in the currently deployed app.
     if settings.next_setup_enabled:
         from app.bobi_next.setup_api import create_setup_router
+        from app.bobi_next.setup_discovery_api import create_setup_discovery_router
 
         app.include_router(create_setup_router(settings.data_dir / "bobi-next-setup.db"))
+        app.include_router(
+            create_setup_discovery_router(
+                api_base_url=settings.ha_base_url,
+                token=settings.ha_token,
+                timeout_seconds=settings.ha_timeout_seconds,
+            )
+        )
 
     @app.get("/health", tags=["system"], summary="Health check")
     async def health() -> dict[str, object]:
