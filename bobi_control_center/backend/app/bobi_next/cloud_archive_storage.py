@@ -24,7 +24,7 @@ _MEDIA_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,200}$")
 
 
 class BobiCloudArchiveStorage:
-    """ArchiveBlobStorage + ArchiveBlobReader backed by ``bobi-storage``."""
+    """ArchiveBlobStorage + ArchiveBlobReader using the private archive protocol."""
 
     def __init__(
         self,

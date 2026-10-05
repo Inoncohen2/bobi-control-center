@@ -30,6 +30,8 @@ def _configure_storage(
     key: str = "supabase",
     enabled: bool = True,
     config: dict | None = None,
+    integration_type: str = "bobi_storage",
+    token: str = "s" * 40,
 ) -> None:
     setup_path = data_dir / "bobi-next-setup.db"
     # Ensure installation identity exists before runtime construction.
@@ -40,16 +42,20 @@ def _configure_storage(
         data_dir / "bobi-next-secrets.db",
         data_dir / "bobi-next-secrets.key",
     )
-    ref = vault.put(f"integration:{key}", "s" * 40)
+    ref = vault.put(f"integration:{key}", token)
     vault.close()
 
     integrations = IntegrationStore(setup_path)
     integrations.upsert(
         integration_key=key,
-        integration_type="bobi_storage",
+        integration_type=integration_type,
         display_name="Bobi cloud",
         enabled=enabled,
-        endpoint="https://example.supabase.co/functions/v1/bobi-storage",
+        endpoint=(
+            "https://example.supabase.co/functions/v1/bobi-archive-next"
+            if integration_type == "bobi_archive"
+            else "https://example.supabase.co/functions/v1/bobi-storage"
+        ),
         secret_ref=ref,
         config=config,
     )
@@ -128,3 +134,80 @@ def test_runtime_factory_resolves_secret_and_uses_opaque_cloud_subject(tmp_path)
     assert "usr_1" not in wallet.profile_external_id
     assert wallet.storage.endpoint == "https://example.supabase.co/functions/v1/bobi-storage"
     assert wallet.storage.token == "s" * 40
+
+
+def test_dedicated_archive_keeps_voucher_endpoint_and_secret_separate(tmp_path) -> None:
+    _configure_storage(tmp_path, key="vouchers", config={"archive_enabled": True})
+    _configure_storage(
+        tmp_path, key="archive", integration_type="bobi_archive",
+        config={"archive_enabled": True}, token="a" * 40,
+    )
+    _set_archive_mode(tmp_path, "cloud")
+
+    archive = build_archive_storage(tmp_path)
+    wallet = build_voucher_wallet(tmp_path, user_key="usr_1")
+
+    assert isinstance(archive, BobiCloudArchiveStorage)
+    assert archive.storage.endpoint.endswith("/bobi-archive-next")
+    assert archive.storage.token == "a" * 40
+    assert wallet.storage.endpoint.endswith("/bobi-storage")
+    assert wallet.storage.token == "s" * 40
+
+
+def test_dedicated_archive_does_not_enable_cloud_implicitly(tmp_path) -> None:
+    _configure_storage(
+        tmp_path, integration_type="bobi_archive", config={"archive_enabled": True},
+    )
+    assert isinstance(build_archive_storage(tmp_path), LocalArchiveStorage)
+
+
+@pytest.mark.parametrize(
+    ("enabled", "config", "error"),
+    [
+        (False, {"archive_enabled": True}, "bobi_archive_not_configured"),
+        (True, {}, "bobi_archive_archive_not_enabled"),
+    ],
+)
+def test_dedicated_archive_failure_does_not_fall_back_to_vouchers(
+    tmp_path, enabled, config, error,
+) -> None:
+    _configure_storage(tmp_path, key="vouchers", config={"archive_enabled": True})
+    _configure_storage(
+        tmp_path, key="archive", integration_type="bobi_archive", enabled=enabled, config=config,
+    )
+    _set_archive_mode(tmp_path, "cloud")
+    with pytest.raises(IntegrationRuntimeError, match=error):
+        build_archive_storage(tmp_path)
+
+
+def test_ambiguous_dedicated_archive_does_not_fall_back_to_vouchers(tmp_path) -> None:
+    _configure_storage(tmp_path, key="vouchers", config={"archive_enabled": True})
+    for key in ("archive-a", "archive-b"):
+        _configure_storage(
+            tmp_path, key=key, integration_type="bobi_archive", config={"archive_enabled": True},
+        )
+    _set_archive_mode(tmp_path, "cloud")
+    with pytest.raises(IntegrationRuntimeError, match="bobi_archive_ambiguous"):
+        build_archive_storage(tmp_path)
+
+
+def test_dedicated_archive_never_becomes_a_voucher_wallet(tmp_path) -> None:
+    _configure_storage(
+        tmp_path, integration_type="bobi_archive", config={"archive_enabled": True},
+    )
+    with pytest.raises(IntegrationRuntimeError, match="bobi_storage_not_configured"):
+        build_voucher_wallet(tmp_path, user_key="usr_1")
+
+
+def test_missing_dedicated_archive_secret_does_not_fall_back_to_vouchers(tmp_path) -> None:
+    _configure_storage(tmp_path, key="vouchers", config={"archive_enabled": True})
+    store = IntegrationStore(tmp_path / "bobi-next-setup.db")
+    store.upsert(
+        integration_key="archive", integration_type="bobi_archive", display_name="Archive",
+        endpoint="https://example.supabase.co/functions/v1/bobi-archive-next",
+        config={"archive_enabled": True},
+    )
+    store.close()
+    _set_archive_mode(tmp_path, "cloud")
+    with pytest.raises(IntegrationRuntimeError, match="bobi_archive_secret_missing"):
+        build_archive_storage(tmp_path)

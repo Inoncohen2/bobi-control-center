@@ -110,7 +110,7 @@ class IntegrationStore:
         )
         now = int(now_ts or time.time())
         with self._db:
-            self._db.execute(
+            written = self._db.execute(
                 """
                 INSERT INTO external_integrations(
                     integration_key,integration_type,display_name,enabled,endpoint,
@@ -124,6 +124,7 @@ class IntegrationStore:
                     secret_ref=excluded.secret_ref,
                     config_json=excluded.config_json,
                     updated_ts=excluded.updated_ts
+                WHERE external_integrations.integration_type=excluded.integration_type
                 """,
                 (
                     key,
@@ -137,6 +138,8 @@ class IntegrationStore:
                     now,
                 ),
             )
+            if written.rowcount != 1:
+                raise ValueError("integration_type_change_requires_new_key")
         result = self.get(key)
         if result is None:
             raise RuntimeError("integration_not_persisted")

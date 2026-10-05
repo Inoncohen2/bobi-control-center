@@ -40,6 +40,10 @@ await once(server, "listening");
 const address = server.address();
 if (!address || typeof address === "string") throw new Error("loopback address unavailable");
 f = await fixture(`http://127.0.0.1:${address.port}`);
+const installation = process.env.BOBI_ARCHIVE_TEST_INSTALLATION_ID;
+if (installation) {
+  await f.db.query("update public.bobi_next_archive_installations set installation_id = $1 where installation_id = 'installation-a'", [installation]);
+}
 process.stdout.write(`${JSON.stringify({ port: address.port })}\n`);
 process.on("SIGTERM", () => {
   server.close(() => { void f.db.close().then(() => process.exit(0)); });

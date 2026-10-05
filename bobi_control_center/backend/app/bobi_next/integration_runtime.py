@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import httpx
+
 from .cloud_archive_storage import BobiCloudArchiveStorage
 from .cloud_identity import cloud_subject
-from .integration_store import IntegrationStore
+from .integration_store import ExternalIntegration, IntegrationStore
 from .local_archive_storage import LocalArchiveStorage
 from .secret_vault import EncryptedSecretVault, SecretVaultError
 from .setup_store import SetupStore
@@ -18,35 +20,45 @@ class IntegrationRuntimeError(RuntimeError):
     pass
 
 
-def _single_bobi_storage(integrations: IntegrationStore):
-    matches = integrations.list(integration_type="bobi_storage", enabled_only=True)
+def _single_storage(
+    integrations: IntegrationStore,
+    integration_type: str,
+) -> ExternalIntegration:
+    matches = integrations.list(integration_type=integration_type, enabled_only=True)
     if not matches:
-        raise IntegrationRuntimeError("bobi_storage_not_configured")
+        raise IntegrationRuntimeError(f"{integration_type}_not_configured")
     if len(matches) != 1:
-        raise IntegrationRuntimeError("bobi_storage_ambiguous")
+        raise IntegrationRuntimeError(f"{integration_type}_ambiguous")
     return matches[0]
 
 
 def _resolve_storage_token(
-    integration,
+    integration: ExternalIntegration,
     vault: EncryptedSecretVault,
 ) -> str:
     if not integration.secret_ref:
-        raise IntegrationRuntimeError("bobi_storage_secret_missing")
+        raise IntegrationRuntimeError(f"{integration.integration_type}_secret_missing")
     try:
         return vault.resolve(integration.secret_ref)
     except SecretVaultError as exc:
-        raise IntegrationRuntimeError("bobi_storage_secret_unavailable") from exc
+        raise IntegrationRuntimeError(f"{integration.integration_type}_secret_unavailable") from exc
 
 
-def build_archive_storage(data_dir: str | Path):
+def build_archive_storage(
+    data_dir: str | Path,
+    *,
+    client: httpx.AsyncClient | None = None,
+):
     """Build the configured archive blob provider without network I/O.
 
     Local storage is the safe zero-configuration default. Cloud storage is used
     only after setup explicitly selects ``archive_storage_mode=cloud`` *and* the
-    enabled Bobi Storage integration advertises ``archive_enabled=true``. An
-    explicit cloud selection fails closed instead of silently persisting bytes
-    locally when its integration or secret is unavailable.
+    enabled integration advertises ``archive_enabled=true``. A dedicated
+    ``bobi_archive`` integration takes precedence even when disabled; Bobi never
+    silently switches its endpoint/token to a voucher integration. Existing
+    explicit archive-capable ``bobi_storage`` configurations remain compatible
+    when no dedicated archive integration has been configured. Cloud selection
+    fails closed when its provider or secret is unavailable.
     """
 
     root = Path(data_dir)
@@ -60,9 +72,14 @@ def build_archive_storage(data_dir: str | Path):
         if mode != "cloud":
             raise IntegrationRuntimeError("archive_storage_mode_invalid")
 
-        integration = _single_bobi_storage(integrations)
+        archive_type = (
+            "bobi_archive"
+            if integrations.list(integration_type="bobi_archive")
+            else "bobi_storage"
+        )
+        integration = _single_storage(integrations, archive_type)
         if integration.config.get("archive_enabled") is not True:
-            raise IntegrationRuntimeError("bobi_storage_archive_not_enabled")
+            raise IntegrationRuntimeError(f"{archive_type}_archive_not_enabled")
 
         vault = EncryptedSecretVault(
             root / "bobi-next-secrets.db",
@@ -73,10 +90,11 @@ def build_archive_storage(data_dir: str | Path):
         finally:
             vault.close()
 
-        storage = BobiStorageClient(integration.endpoint, token)
+        storage = BobiStorageClient(integration.endpoint, token, client=client)
         return BobiCloudArchiveStorage(
             storage,
             installation_id=setup.installation_id(),
+            client=client,
         )
     finally:
         setup.close()
@@ -99,7 +117,7 @@ def build_voucher_wallet(data_dir: str | Path, *, user_key: str) -> VoucherWalle
         root / "bobi-next-secrets.key",
     )
     try:
-        integration = _single_bobi_storage(integrations)
+        integration = _single_storage(integrations, "bobi_storage")
         token = _resolve_storage_token(integration, vault)
 
         subject = cloud_subject(setup.installation_id(), user_key)

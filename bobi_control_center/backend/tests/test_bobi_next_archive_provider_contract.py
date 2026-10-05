@@ -15,11 +15,16 @@ from pathlib import Path
 
 import httpx
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from app.bobi_next.archive_capture import ArchiveCaptureRequest, ArchiveCaptureService
 from app.bobi_next.archive_store import ArchiveStore
 from app.bobi_next.cloud_archive_storage import BobiCloudArchiveStorage
+from app.bobi_next.integration_api import create_integration_setup_router
+from app.bobi_next.integration_runtime import build_archive_storage
 from app.bobi_next.media_pipeline import LoadedMedia, MediaDescriptor
+from app.bobi_next.setup_store import SetupStore
 from app.bobi_next.supabase_storage import BobiStorageClient, BobiStorageError
 
 pytestmark = pytest.mark.skipif(
@@ -31,6 +36,10 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture
 def archive_endpoint(tmp_path):
     root = Path(__file__).resolve().parents[3]
+    setup = SetupStore(tmp_path / "bobi-next-setup.db")
+    installation = setup.installation_id()
+    setup.update_settings({"archive_storage_mode": "cloud"})
+    setup.close()
     with (tmp_path / "provider-test.log").open("w+") as log:
         process = subprocess.Popen(
             ["node", "--experimental-strip-types", "supabase/tests/contract-server.ts"],
@@ -38,6 +47,7 @@ def archive_endpoint(tmp_path):
             stdout=subprocess.PIPE,
             stderr=log,
             text=True,
+            env={**os.environ, "BOBI_ARCHIVE_TEST_INSTALLATION_ID": installation},
         )
         try:
             assert process.stdout is not None
@@ -73,9 +83,20 @@ async def test_capture_dedupe_and_signed_retrieval_with_actual_provider(
     )
     archive = ArchiveStore(tmp_path / "archive.db")
     try:
+        app = FastAPI()
+        app.include_router(create_integration_setup_router(tmp_path / "bobi-next-setup.db"))
+        with TestClient(app) as setup_client:
+            response = setup_client.post("/api/next/setup/integrations", json={
+                "integration_key": "archive", "integration_type": "bobi_archive",
+                "display_name": "Archive dev", "endpoint": archive_endpoint,
+                "secret_value": "a" * 40, "config": {"archive_enabled": True},
+            })
+            assert response.status_code == 200
+            assert "a" * 40 not in response.text
         async with httpx.AsyncClient(trust_env=False) as client:
-            storage = BobiStorageClient(archive_endpoint, "a" * 40, client=client)
-            adapter = BobiCloudArchiveStorage(storage, installation_id="installation-a", client=client)
+            adapter = build_archive_storage(tmp_path, client=client)
+            assert isinstance(adapter, BobiCloudArchiveStorage)
+            assert adapter.storage.endpoint == archive_endpoint
             capture = ArchiveCaptureService(archive, adapter)
             request = ArchiveCaptureRequest("user-a", "document", "Insurance", category="insurance")
             record = await capture.capture(request, media=media)

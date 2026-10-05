@@ -9,6 +9,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, SecretStr
@@ -20,7 +21,7 @@ from .supabase_storage import BobiStorageClient
 
 class IntegrationInput(BaseModel):
     integration_key: str = Field(min_length=1, max_length=128)
-    integration_type: Literal["bobi_storage"]
+    integration_type: Literal["bobi_storage", "bobi_archive"]
     display_name: str = Field(min_length=1, max_length=128)
     enabled: bool = True
     endpoint: str = Field(min_length=1, max_length=1000)
@@ -81,14 +82,29 @@ def create_integration_setup_router(database_path: str | Path) -> APIRouter:
             endpoint = _validate_bobi_storage_endpoint(body.endpoint)
             with _store(path) as store:
                 existing = store.get(body.integration_key)
+                if existing is not None and existing.integration_type != body.integration_type:
+                    raise ValueError("integration_type_change_requires_new_key")
+                if (
+                    existing is not None
+                    and existing.endpoint != endpoint
+                    and body.secret_value is None
+                ):
+                    raise ValueError("integration_endpoint_change_requires_secret")
                 secret_ref = existing.secret_ref if existing is not None else ""
             if body.secret_value is not None:
                 secret = body.secret_value.get_secret_value()
                 if len(secret) < 32:
                     raise ValueError("storage_token_invalid")
+                if body.integration_type == "bobi_archive" and (
+                    len(secret) > 512 or any(not "!" <= character <= "~" for character in secret)
+                ):
+                    raise ValueError("storage_token_invalid")
                 with _vault(vault_path, vault_key_path) as vault:
                     secret_ref = vault.put(
-                        f"integration:{body.integration_key}",
+                        # Each configuration points to an immutable credential
+                        # version. A rejected/racing update cannot replace the
+                        # token referenced by the previously committed config.
+                        f"integration:{body.integration_key}:{uuid4().hex}",
                         secret,
                     )
             if not secret_ref:

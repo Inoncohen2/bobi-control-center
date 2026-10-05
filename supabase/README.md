@@ -37,8 +37,8 @@ BOBI_ARCHIVE_PROVIDER_CONTRACT=1 python -m pytest -q tests/test_bobi_next_archiv
 Node 22+ is required. PGlite evaluates the actual migration/RLS/claim functions in
 embedded Postgres. The actual TypeScript handler and REST backend run against
 that database with mocked Storage HTTP. CI also checks the Edge entrypoint with
-Deno 2.9.6. The Python test uses the real client,
-ArchiveCapture and ArchiveStore over loopback. These are isolated contract tests,
+Deno 2.9.6. The Python test uses the Setup API, encrypted vault, runtime factory,
+real client, ArchiveCapture and ArchiveStore over loopback. These are isolated contract tests,
 not a hosted Supabase, WAHA, Home Assistant or Deno runtime E2E proof.
 
 ## Controlled development rollout (still pending)
@@ -54,8 +54,17 @@ not a hosted Supabase, WAHA, Home Assistant or Deno runtime E2E proof.
    installation ID from Bobi SetupStore. Never place plaintext tokens in SQL,
    source, command arguments, migration files, logs, issue text or CI secrets.
    Token provisioning/onboarding automation is a separate remaining task.
-4. Configure the development Bobi archive endpoint/token, explicitly enable its
-   archive capability and select cloud mode. Keep the voucher integration separate.
+4. Configure a new integration key of type `bobi_archive` using the development
+   function endpoint and installation token. Set `config.archive_enabled=true`
+   explicitly and select `archive_storage_mode=cloud` in SetupStore settings.
+   Archive integration takes precedence over archive-capable legacy storage;
+   disabling it, ambiguous providers or missing secrets fail closed without
+   changing providers. Local remains the default. The voucher wallet uses only
+   `bobi_storage`, with its own endpoint/token. Integration types are immutable;
+   changing an endpoint requires an explicit token. Credential versions are
+   immutable; a rejected or racing config update cannot overwrite an active
+   token. Optional cloud controls in
+   the Setup Wizard remain pending.
 5. Verify hosted upload/read/hash, private-bucket denial, owner/installation
    isolation, duplicate requests, interrupted uploads, disabled token, outage and
    signed URL expiry. Run actual Deno/Storage tests before claiming cloud parity.

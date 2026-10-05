@@ -1,8 +1,8 @@
-"""Typed client for the existing Bobi Supabase Edge storage boundary.
+"""Typed client for Bobi's narrow Supabase Edge storage boundaries.
 
 Bobi Next never receives a generic Supabase client or service-role key. It talks
-only to the narrow ``bobi-storage`` Edge Function using the installation token
-resolved from Bobi's encrypted local secret vault.
+only to its configured voucher or archive Edge Function using the installation
+token resolved from Bobi's encrypted local secret vault.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ def _validated_endpoint(value: str) -> str:
 
 
 class BobiStorageClient:
-    """Minimal authenticated client for ``bobi-storage`` operations."""
+    """Minimal authenticated client for the typed Bobi storage operations."""
 
     def __init__(
         self,
@@ -124,7 +124,7 @@ class BobiStorageClient:
         sha256: str,
         idempotency_key: str,
     ) -> dict[str, Any]:
-        """Upload one archive blob through the future narrow archive operation."""
+        """Upload one archive blob through the narrow archive operation."""
 
         return await self._call(
             "archive.media.upload",
