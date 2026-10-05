@@ -142,13 +142,36 @@ def _secret_vault(database_path: Path, key_path: Path):
 def _combined_snapshot(setup: SetupStore, ai: AIProviderStore) -> dict[str, Any]:
     snapshot = setup.safe_snapshot()
     ai_snapshot = ai.safe_snapshot()
-    active = ai.active()
-    ai_ready = bool(active and "intent" in active.capabilities)
     missing = list(snapshot["setup"]["missing_steps"])
-    if not ai_ready:
+
+    messaging = setup.list_providers(enabled_only=True)
+    messaging_configured = any(
+        provider.provider_type == "waha" and bool(provider.endpoint.strip())
+        for provider in messaging
+    )
+    if messaging and not messaging_configured:
+        missing.append("messaging_provider_config")
+
+    active = ai.active()
+    ai_selected = active is not None and "intent" in active.capabilities
+    ai_configured = bool(
+        ai_selected
+        and active is not None
+        and active.provider_type in {"openai-compatible", "openai_compatible"}
+        and active.endpoint.strip()
+        and active.model.strip()
+    )
+    if not ai_selected:
         missing.append("ai_provider")
-    snapshot["setup"]["ready"] = bool(snapshot["setup"]["ready"] and ai_ready)
+    elif not ai_configured:
+        missing.append("ai_provider_config")
+
+    snapshot["setup"]["ready"] = bool(
+        snapshot["setup"]["ready"] and messaging_configured and ai_configured
+    )
     snapshot["setup"]["missing_steps"] = missing
+    snapshot["messaging_configured"] = messaging_configured
+    ai_snapshot["configured"] = ai_configured
     snapshot["ai"] = ai_snapshot
     return snapshot
 
