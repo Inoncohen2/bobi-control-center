@@ -17,6 +17,7 @@ from .archive_retrieval import ArchiveRetrievalResult
 from .archive_retrieval_commands import parse_archive_retrieval
 from .archive_subsystem import ArchiveSubsystem
 from .conversation_handler import build_conversation_handler
+from .integration_runtime import build_archive_storage
 from .media_analyzers import MediaAnalyzerRegistry
 from .media_pipeline import MediaPipeline
 from .messaging import InboundMessage, MessageResponse, MessageStore
@@ -65,7 +66,10 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.archive = ArchiveSubsystem(self.data_dir)
+        self.archive = ArchiveSubsystem(
+            self.data_dir,
+            storage=build_archive_storage(self.data_dir),
+        )
         self.archive_tasks: dict[str, asyncio.Task[None]] = {}
 
     def _archive_retrieval_handler(
