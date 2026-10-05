@@ -1,0 +1,14 @@
+{
+  "name": "bobi-next-archive-provider",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck && node --experimental-strip-types --test --test-timeout=60000 tests/*.test.ts"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.8",
+    "@types/node": "22.20.5",
+    "typescript": "7.0.2"
+  }
+}

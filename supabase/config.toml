@@ -1,0 +1,10 @@
+# Local development only; no production project is linked.
+project_id = "bobi-next-archive-dev"
+
+[db]
+major_version = 17
+
+[functions.bobi-archive-next]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/bobi-archive-next/index.ts"

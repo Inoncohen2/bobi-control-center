@@ -55,7 +55,7 @@ The following V2 foundations are implemented on `chatgpt/bobi-next-generic-core`
 | Calendar/To-do | native HA response client and productivity engine without Bobi scripts/helpers | live parity |
 | Activity/Undo | durable activity ledger and safe exactly-once undo runtime | live mutation parity |
 | Archive/Documents | explicit-save authority, semantic archive index, SHA-256 dedupe, private local blob storage, deterministic natural-language retrieval before AI, search/ambiguity fail-closed, retrieval dispatch, runtime wiring, WAHA `sendFile`, crash-safe outbound-media journal | live E2E |
-| Vouchers/Supabase | typed storage client and voucher wallet exist; current production Edge contract audited | generic document cloud provider optional; no production Supabase mutation yet |
+| Vouchers/Supabase | typed client, voucher wallet and optional archive client; independent generic archive Edge API/schema prepared with isolation, integrity, retry and Python contract tests | provider undeployed; hosted Storage/Deno E2E and onboarding pending; no production Supabase mutation |
 | Setup/Integrations | setup store/wizard foundations, roles/policies, secret vault, integration framework | Control Center UX + migration E2E |
 
 ### Archive/Documents safety contract
