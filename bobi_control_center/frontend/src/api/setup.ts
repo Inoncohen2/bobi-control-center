@@ -48,11 +48,13 @@ export interface SetupSnapshot {
     ready: boolean;
     missing_steps: string[];
   };
+  messaging_configured: boolean;
   providers: SetupProvider[];
   users: SetupUser[];
   linked_identities: number;
   ai: {
     active_provider: string;
+    configured: boolean;
     providers: SetupAIProvider[];
   };
 }
