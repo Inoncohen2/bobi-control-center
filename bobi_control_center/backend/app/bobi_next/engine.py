@@ -8,6 +8,7 @@ It contains no household entity ids and does not know about WhatsApp directly.
 
 from __future__ import annotations
 
+import hashlib
 import time
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
@@ -27,6 +28,7 @@ from .memory import BobiMemory
 from .models import ActionPlan, DeviceRecord, TargetResolution
 from .pending_approval import PendingApprovalStore
 from .planner import PlanError, build_plan
+from .reminders import ReminderStore
 from .request_ledger import RequestLedger
 from .resolver import resolve_target
 from .routing import RoutedIntent, RoutingError, route_intent
@@ -63,6 +65,8 @@ class EngineRequest:
     owner_token: str
     message_id: str = ""
     now_ts: int = 0
+    provider_key: str = ""
+    chat_id: str = ""
 
 
 @dataclass(slots=True, frozen=True)
@@ -132,6 +136,137 @@ def _build_plans(
     )
 
 
+def _reminder_policy_reason(policy: UserPolicy) -> str:
+    capability = "reminder.create"
+    if "*" not in policy.allowed_capabilities and capability not in policy.allowed_capabilities:
+        return "capability_not_allowed"
+    if capability in policy.denied_capabilities:
+        return "capability_denied"
+    if "*" not in policy.allowed_domains and "reminder" not in policy.allowed_domains:
+        return "domain_not_allowed"
+    if capability in policy.denied_actions:
+        return "action_denied"
+    return ""
+
+
+def _reminder_id(request_id: str) -> str:
+    digest = hashlib.sha256(str(request_id).encode()).hexdigest()[:32]
+    return f"rem-{digest}"
+
+
+async def _create_reminder(
+    request: EngineRequest,
+    intent: SemanticIntent,
+    *,
+    policy_for: PolicyProvider,
+    reminders: ReminderStore | None,
+    requests: RequestLedger,
+    now: int,
+    dry_run: bool,
+) -> EngineResult:
+    if intent.canonical_operation != "create":
+        return EngineResult(request.request_id, "unsupported", "unsupported_reminder_operation")
+    if bool(intent.metadata.get("question", False)):
+        requests.ignore(
+            request.request_id,
+            owner_token=request.owner_token,
+            terminal_kind="non_execution_question",
+            now_ts=now,
+        )
+        return EngineResult(request.request_id, "ignored", "source_question")
+    if reminders is None:
+        raise RuntimeError("reminder_store_not_configured")
+    if not request.provider_key.strip() or not request.chat_id.strip():
+        raise ValueError("reminder_delivery_target_missing")
+
+    text = str(intent.target_text or intent.metadata.get("reminder_text") or "").strip()
+    if not text:
+        requests.complete(
+            request.request_id,
+            owner_token=request.owner_token,
+            terminal_kind="clarification",
+            now_ts=now,
+        )
+        return EngineResult(request.request_id, "clarification", "reminder_text_missing")
+    try:
+        run_at, recurrence = _schedule_time(intent, now)
+    except (TypeError, ValueError) as exc:
+        requests.complete(
+            request.request_id,
+            owner_token=request.owner_token,
+            terminal_kind="clarification",
+            now_ts=now,
+        )
+        return EngineResult(request.request_id, "clarification", str(exc))
+
+    policy = await policy_for(request.user_key)
+    if policy.user_key != request.user_key:
+        requests.fail_terminal(
+            request.request_id,
+            owner_token=request.owner_token,
+            error="policy_user_mismatch",
+            now_ts=now,
+        )
+        return EngineResult(request.request_id, "blocked", "policy_user_mismatch")
+    blocked = _reminder_policy_reason(policy)
+    if blocked:
+        requests.complete(
+            request.request_id,
+            owner_token=request.owner_token,
+            terminal_kind="blocked",
+            now_ts=now,
+        )
+        return EngineResult(request.request_id, "blocked", blocked)
+
+    identifier = _reminder_id(request.request_id)
+    if dry_run:
+        requests.complete(
+            request.request_id,
+            owner_token=request.owner_token,
+            terminal_kind="shadow",
+            now_ts=now,
+        )
+        return EngineResult(
+            request.request_id,
+            "shadow",
+            "dry_run",
+            metadata={
+                "would_create_reminder": True,
+                "reminder_id": identifier,
+                "run_at_ts": run_at,
+                "recurrence_seconds": recurrence,
+            },
+        )
+
+    reminder = reminders.create(
+        reminder_id=identifier,
+        user_key=request.user_key,
+        provider_key=request.provider_key,
+        chat_id=request.chat_id,
+        text=text,
+        run_at_ts=run_at,
+        recurrence_seconds=recurrence,
+        source_message_id=request.message_id,
+        now_ts=now,
+    )
+    requests.complete(
+        request.request_id,
+        owner_token=request.owner_token,
+        terminal_kind="reminder_created",
+        now_ts=now,
+    )
+    return EngineResult(
+        request.request_id,
+        "reminder_created",
+        "reminder_created",
+        metadata={
+            "reminder_id": reminder.reminder_id,
+            "run_at_ts": reminder.run_at_ts,
+            "recurrence_seconds": reminder.recurrence_seconds,
+        },
+    )
+
+
 async def process_request(
     request: EngineRequest,
     *,
@@ -142,6 +277,7 @@ async def process_request(
     memory: BobiMemory,
     requests: RequestLedger,
     schedules: ScheduleStore | None = None,
+    reminders: ReminderStore | None = None,
     conditional_rules: ConditionalRuleStore | None = None,
     pending_approvals: PendingApprovalStore | None = None,
     dry_run: bool = False,
@@ -185,6 +321,17 @@ async def process_request(
                 now_ts=now,
             )
             return EngineResult(request.request_id, "ignored", "source_negated")
+
+        if intent.family.casefold() == "reminder" or intent.canonical_domain == "reminder":
+            return await _create_reminder(
+                request,
+                intent,
+                policy_for=policy_for,
+                reminders=reminders,
+                requests=requests,
+                now=now,
+                dry_run=dry_run,
+            )
 
         try:
             routed = route_intent(intent)
