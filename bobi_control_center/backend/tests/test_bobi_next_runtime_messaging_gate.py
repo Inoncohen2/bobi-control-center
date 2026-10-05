@@ -6,6 +6,7 @@ import pytest
 
 import app.bobi_next.runtime_service as runtime_service_module
 from app.bobi_next.conditional import StateChangeEvent
+from app.bobi_next.event_reminders import EventReminderStore
 from app.bobi_next.pending_approval import PendingApprovalStore
 from app.bobi_next.reminders import ReminderStore
 from app.bobi_next.runtime_service import BobiNextRuntimeService
@@ -41,7 +42,6 @@ async def test_messaging_gate_disabled_does_not_construct_runtime(tmp_path, monk
         await service._start_messaging_if_enabled()
         assert service.messaging is None
         assert service.event_reminder_runtime is None
-        assert service.event_reminder_definitions is None
     finally:
         await service.aclose()
 
@@ -72,6 +72,7 @@ async def test_messaging_gate_starts_shadow_runtime_with_shared_dependencies(
             self.kwargs = kwargs
             self.closed = False
             self.reminders = ReminderStore(tmp_path / "runtime-reminders.db")
+            self.event_reminders = EventReminderStore(tmp_path / "runtime-event-reminders.db")
             constructed.append(self)
 
         async def start(self):
@@ -79,6 +80,7 @@ async def test_messaging_gate_starts_shadow_runtime_with_shared_dependencies(
 
         async def aclose(self):
             if not self.closed:
+                self.event_reminders.close()
                 self.reminders.close()
                 self.closed = True
 
@@ -96,8 +98,8 @@ async def test_messaging_gate_starts_shadow_runtime_with_shared_dependencies(
         assert runtime.kwargs["list_devices"].__self__ is catalog
         assert runtime.kwargs["pending_approvals"] is pending
         assert runtime.kwargs["dry_run"] is True
-        assert service.event_reminder_definitions is not None
         assert service.event_reminder_runtime is not None
+        assert service.event_reminder_runtime.definitions is runtime.event_reminders
         assert service.event_reminder_runtime.reminders is runtime.reminders
         assert service.event_reminder_runtime.list_devices.__self__ is catalog
     finally:
@@ -173,7 +175,6 @@ async def test_messaging_not_ready_fails_closed_without_becoming_active(
         await service._start_messaging_if_enabled()
         assert service.messaging is None
         assert service.event_reminder_runtime is None
-        assert service.event_reminder_definitions is None
         assert len(instances) == 1
         assert instances[0].closed is True
     finally:
