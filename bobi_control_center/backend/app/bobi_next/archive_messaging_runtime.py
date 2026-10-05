@@ -17,6 +17,7 @@ from .archive_retrieval import ArchiveRetrievalResult
 from .archive_retrieval_commands import parse_archive_retrieval
 from .archive_subsystem import ArchiveSubsystem
 from .conversation_handler import build_conversation_handler
+from .event_reminders import EventReminderStore
 from .integration_runtime import build_archive_storage
 from .media_analyzers import MediaAnalyzerRegistry
 from .media_pipeline import MediaPipeline
@@ -72,6 +73,9 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
             storage=build_archive_storage(self.data_dir),
         )
         self.reminders = ReminderStore(self.data_dir / "bobi-next-reminders.db")
+        self.event_reminders = EventReminderStore(
+            self.data_dir / "bobi-next-event-reminders.db"
+        )
         self.archive_tasks: dict[str, asyncio.Task[None]] = {}
         self.reminder_task: asyncio.Task[None] | None = None
 
@@ -160,6 +164,7 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
             approval_tokens=self.approvals,
             schedules=self.schedules,
             reminders=self.reminders,
+            event_reminders=self.event_reminders,
             conditional_rules=self.conditional_rules,
             media_pipeline=media_pipeline,
             archive_capture=self.archive.capture,
@@ -277,5 +282,6 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
         self.archive_tasks.clear()
 
         await super().aclose()
+        self.event_reminders.close()
         self.reminders.close()
         self.archive.close()
