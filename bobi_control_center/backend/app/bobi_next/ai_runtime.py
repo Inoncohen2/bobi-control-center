@@ -34,6 +34,18 @@ target_scopes, aggregate_scope, value_kind, value, delta, scheduled, conditional
 contextual, reference_only, multi_target, exclusion, negated, schedule_kind,
 schedule_payload, condition_payload, metadata.
 
+Reminder contract:
+- For a request to remind the user, use family='reminder', domain='reminder',
+  operation='create', target_text equal only to what the user wants to be reminded
+  about, scheduled=true, and schedule_payload containing either run_at_ts or
+  delay_seconds. Include recurrence_seconds only when the user explicitly asks for
+  recurrence.
+- A reminder about an action is NOT permission to perform that action. For example,
+  'remind me to turn off the boiler in 20 minutes' is a reminder. It must never be
+  parsed as a future device-control mutation.
+- Only parse a scheduled device action when the user explicitly asks Bobi to perform
+  the action, for example 'turn off the boiler in 20 minutes'.
+
 confidence must be 0..1. Use metadata.question=true for questions. Preserve
 negation. If the request cannot be safely interpreted, use family='unresolved',
 empty domain/operation/target_text and low confidence.
