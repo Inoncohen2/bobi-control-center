@@ -9,7 +9,8 @@ from app.bobi_next.setup_discovery_api import create_setup_discovery_router
 
 
 class FakeSnapshot:
-    areas = [{"area_id": "living"}, {"area_id": "bedroom"}]
+    def __init__(self) -> None:
+        self.areas = [{"area_id": "living"}, {"area_id": "bedroom"}]
 
     def semantic_devices(self):
         light = EntityRecord(
