@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import pytest
 
+from app.bobi_next.cloud_archive_storage import BobiCloudArchiveStorage
 from app.bobi_next.cloud_identity import cloud_subject
-from app.bobi_next.integration_runtime import IntegrationRuntimeError, build_voucher_wallet
+from app.bobi_next.integration_runtime import (
+    IntegrationRuntimeError,
+    build_archive_storage,
+    build_voucher_wallet,
+)
 from app.bobi_next.integration_store import IntegrationStore
+from app.bobi_next.local_archive_storage import LocalArchiveStorage
 from app.bobi_next.secret_vault import EncryptedSecretVault
 from app.bobi_next.setup_store import SetupStore
 
@@ -18,7 +24,13 @@ def test_cloud_subject_is_stable_and_does_not_embed_identity() -> None:
     assert "install-1" not in value
 
 
-def _configure_storage(data_dir, *, key: str = "supabase", enabled: bool = True) -> None:
+def _configure_storage(
+    data_dir,
+    *,
+    key: str = "supabase",
+    enabled: bool = True,
+    config: dict | None = None,
+) -> None:
     setup_path = data_dir / "bobi-next-setup.db"
     # Ensure installation identity exists before runtime construction.
     setup = SetupStore(setup_path)
@@ -39,8 +51,50 @@ def _configure_storage(data_dir, *, key: str = "supabase", enabled: bool = True)
         enabled=enabled,
         endpoint="https://example.supabase.co/functions/v1/bobi-storage",
         secret_ref=ref,
+        config=config,
     )
     integrations.close()
+
+
+def _set_archive_mode(data_dir, mode: str) -> None:
+    setup = SetupStore(data_dir / "bobi-next-setup.db")
+    setup.update_settings({"archive_storage_mode": mode})
+    setup.close()
+
+
+def test_archive_storage_defaults_to_local_without_cloud_configuration(tmp_path) -> None:
+    storage = build_archive_storage(tmp_path)
+    assert isinstance(storage, LocalArchiveStorage)
+
+
+def test_archive_cloud_selection_fails_closed_when_storage_missing(tmp_path) -> None:
+    _set_archive_mode(tmp_path, "cloud")
+    with pytest.raises(IntegrationRuntimeError, match="bobi_storage_not_configured"):
+        build_archive_storage(tmp_path)
+
+
+def test_archive_cloud_selection_requires_explicit_archive_capability(tmp_path) -> None:
+    _configure_storage(tmp_path)
+    _set_archive_mode(tmp_path, "cloud")
+    with pytest.raises(IntegrationRuntimeError, match="bobi_storage_archive_not_enabled"):
+        build_archive_storage(tmp_path)
+
+
+def test_archive_cloud_selection_builds_adapter_without_network_io(tmp_path) -> None:
+    _configure_storage(tmp_path, config={"archive_enabled": True})
+    _set_archive_mode(tmp_path, "cloud")
+
+    storage = build_archive_storage(tmp_path)
+
+    assert isinstance(storage, BobiCloudArchiveStorage)
+    assert storage.storage.endpoint == "https://example.supabase.co/functions/v1/bobi-storage"
+    assert storage.storage.token == "s" * 40
+
+
+def test_archive_storage_rejects_unknown_mode(tmp_path) -> None:
+    _set_archive_mode(tmp_path, "elsewhere")
+    with pytest.raises(IntegrationRuntimeError, match="archive_storage_mode_invalid"):
+        build_archive_storage(tmp_path)
 
 
 def test_runtime_factory_fails_closed_when_storage_missing(tmp_path) -> None:
