@@ -124,6 +124,7 @@ def test_complete_is_rejected_when_everything_except_ai_exists(tmp_path):
             "provider_key": "waha:primary",
             "provider_type": "waha",
             "display_name": "WhatsApp",
+            "endpoint": "http://waha.internal:3000",
         },
     )
     client.post(
