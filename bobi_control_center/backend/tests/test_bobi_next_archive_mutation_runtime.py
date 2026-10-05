@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 
 import pytest
 import pytest_asyncio
@@ -10,7 +11,7 @@ from app.bobi_next.archive_messaging_runtime import ArchiveMessagingRuntime
 from app.bobi_next.authorization import UserPolicy
 from app.bobi_next.interaction_dispatch import InteractionSelection
 from app.bobi_next.media_pipeline import LoadedMedia, MediaAnalysis, MediaDescriptor
-from app.bobi_next.messaging import InboundMessage, MessageResponse
+from app.bobi_next.messaging import InboundMessage, MessageResponse, OutboundMessage
 from app.bobi_next.pending_approval import PendingApprovalStore
 from app.bobi_next.setup_store import SetupStore
 
@@ -300,3 +301,49 @@ async def test_receipt_details_do_not_disclose_foreign_deleted_or_ambiguous_fina
     runtime.archive.index.soft_delete(another.object_id, owner_key="u1", now_ts=103)
     assert "לא מצאתי" in (await handler(message("מה פרטי הקבלה איקאה?", "deleted"))).text
     assert runtime.archive.index.get(foreign.object_id, owner_key="u2")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["user_disabled", "provider_disabled", "unlink", "relink", "scope"])
+async def test_private_financial_dispatch_requires_the_current_enabled_actor_link(runtime, change):
+    runtime.setup.upsert_provider(provider_key="waha", provider_type="waha", display_name="WAHA")
+    runtime.setup.create_user(display_name="Owner", role="owner", user_key="u1")
+    runtime.setup.link_identity(provider_key="waha", external_id="111@c.us", user_key="u1")
+    actor = runtime.setup.identity_fingerprint("waha", "111@c.us")
+    request = replace(message("מה פרטי הקבלה איקאה?"), chat_id="group@g.us", metadata={
+        "sender_fingerprint": actor, "sender_fingerprint_scope": "waha",
+    })
+    reply = OutboundMessage("key", "waha", request.chat_id, request.message_id, "private", "prepared")
+    assert await runtime._private_financial_reply_allowed(request, reply)
+    if change == "user_disabled":
+        runtime.setup.set_user_enabled("u1", False)
+    elif change == "provider_disabled":
+        runtime.setup.upsert_provider(
+            provider_key="waha", provider_type="waha", display_name="WAHA", enabled=False,
+        )
+    elif change == "unlink":
+        runtime.setup.unlink_identity(provider_key="waha", external_id="111@c.us")
+    elif change == "relink":
+        runtime.setup.unlink_identity(provider_key="waha", external_id="111@c.us")
+        runtime.setup.create_user(display_name="Other", role="owner", user_key="u2")
+        runtime.setup.link_identity(provider_key="waha", external_id="111@c.us", user_key="u2")
+    else:
+        request = replace(request, metadata={**request.metadata, "sender_fingerprint_scope": "other"})
+    assert not await runtime._private_financial_reply_allowed(request, reply)
+
+
+@pytest.mark.asyncio
+async def test_older_private_inbox_rechecks_link_and_older_group_inbox_fails_closed(runtime):
+    runtime.setup.upsert_provider(provider_key="waha", provider_type="waha", display_name="WAHA")
+    runtime.setup.create_user(display_name="Owner", role="owner", user_key="u1")
+    runtime.setup.link_identity(provider_key="waha", external_id="111@c.us", user_key="u1")
+    request = replace(message("מה פרטי הקבלה איקאה?"), chat_id="111@c.us")
+    reply = OutboundMessage("key", "waha", request.chat_id, request.message_id, "private", "prepared")
+    assert await runtime._private_financial_reply_allowed(request, reply)
+    group_request = replace(request, chat_id="group@g.us")
+    assert not await runtime._private_financial_reply_allowed(group_request, reply)
+    runtime.setup.unlink_identity(provider_key="waha", external_id="111@c.us")
+    assert not await runtime._private_financial_reply_allowed(request, reply)
+    # A static denial remains deliverable and contains no saved financial data.
+    denied = replace(reply, text="אין הרשאה לקרוא את פרטי המסמך בארכיון.")
+    assert await runtime._private_financial_reply_allowed(request, denied)

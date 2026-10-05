@@ -43,7 +43,13 @@ from .interaction_dispatch import (
 from .media_analyzers import AudioAnalyzer, ImageAnalyzer, MediaAnalyzerRegistry
 from .media_pipeline import MediaPipeline
 from .memory import BobiMemory
-from .messaging import InboundMessage, MessageStore, MessageTransport, process_next_message
+from .messaging import (
+    InboundMessage,
+    MessageStore,
+    MessageTransport,
+    ReplyAuthorizer,
+    process_next_message,
+)
 from .models import DeviceRecord
 from .pending_approval import PendingApprovalStore
 from .poll_dispatch_bridge import reconcile_poll_dispatches
@@ -70,6 +76,7 @@ class ProviderBoundary:
     messages: MessageStore
     transport: MessageTransport
     handler: Callable[[InboundMessage], Awaitable]
+    reply_allowed: ReplyAuthorizer | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -412,6 +419,7 @@ class BobiNextMessagingRuntime:
                     owner_token=owner_token,
                     now_ts=int(time.time()),
                     reaction_for=_reaction_for,
+                    reply_allowed=boundary.reply_allowed,
                 )
             except Exception as exc:
                 # A queue/SQLite/provider boundary failure must not kill other

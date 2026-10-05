@@ -552,6 +552,14 @@ class SetupStore:
 
     def resolve_user(self, provider_key: str, external_id: str) -> BobiUser | None:
         identity_hash = self._identity_hash(provider_key, external_id)
+        return self.resolve_user_fingerprint(provider_key, identity_hash)
+
+    def identity_fingerprint(self, provider_key: str, external_id: str) -> str:
+        """Salted provider-scoped actor binding without persisting a raw sender ID."""
+        return self._identity_hash(provider_key, external_id)
+
+    def resolve_user_fingerprint(self, provider_key: str, identity_hash: str) -> BobiUser | None:
+        """Recheck the current enabled identity link issued at trusted ingress."""
         row = self._db.execute(
             """
             SELECT u.user_key

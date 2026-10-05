@@ -71,6 +71,11 @@ class MessageTransport(Protocol):
 
 MessageHandler = Callable[[InboundMessage], Awaitable[MessageResponse]]
 ReactionSelector = Callable[[InboundMessage], str]
+ReplyAuthorizer = Callable[[InboundMessage, OutboundMessage], Awaitable[bool]]
+
+
+class _ReplyNotAuthorized(ValueError):
+    """A revoked private reply is terminal; another retry must not disclose it."""
 
 
 def _response_key(message: InboundMessage, role: str = "primary") -> str:
@@ -455,6 +460,7 @@ async def process_next_message(
     owner_token: str,
     now_ts: int,
     reaction_for: ReactionSelector | None = None,
+    reply_allowed: ReplyAuthorizer | None = None,
     retry_delay_seconds: int = 15,
     max_attempts: int = 3,
 ) -> InboundMessage | None:
@@ -477,6 +483,8 @@ async def process_next_message(
             response = await handler(message)
             outbound = store.prepare_outbound(message, text=response.text, now_ts=now_ts)
         if outbound.state != "sent":
+            if reply_allowed is not None and not await reply_allowed(message, outbound):
+                raise _ReplyNotAuthorized("reply_authorization_denied")
             provider_id = await transport.send_text(
                 message.chat_id,
                 outbound.text,
@@ -490,7 +498,9 @@ async def process_next_message(
             )
         return store.complete(message, owner_token=owner_token, now_ts=now_ts)
     except Exception as exc:
-        retry = message.attempts < max(1, int(max_attempts))
+        retry = not isinstance(exc, _ReplyNotAuthorized) and message.attempts < max(
+            1, int(max_attempts),
+        )
         store.fail(
             message,
             owner_token=owner_token,

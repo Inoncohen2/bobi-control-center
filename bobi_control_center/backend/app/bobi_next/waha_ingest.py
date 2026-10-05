@@ -100,6 +100,7 @@ def ingest_waha_event(
     metadata: dict[str, Any] = {
         "session": parsed.session,
         "sender_fingerprint_scope": provider_key,
+        "sender_fingerprint": setup.identity_fingerprint(provider_key, parsed.sender_id),
     }
     if parsed.has_media:
         metadata["media"] = {

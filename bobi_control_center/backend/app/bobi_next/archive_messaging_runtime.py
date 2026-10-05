@@ -13,6 +13,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 
+from .archive_commands import archive_write_allowed
 from .archive_mutation_commands import parse_archive_mutation
 from .archive_mutations import ArchiveMutationService
 from .archive_retrieval import ArchiveRetrievalResult, archive_read_allowed
@@ -29,7 +30,7 @@ from .integration_runtime import RoutedArchiveStorage
 from .interaction_dispatch import InteractionHandlerResult
 from .media_analyzers import MediaAnalyzerRegistry
 from .media_pipeline import MediaPipeline
-from .messaging import InboundMessage, MessageResponse, MessageStore
+from .messaging import InboundMessage, MessageResponse, MessageStore, OutboundMessage
 from .messaging_runtime import (
     BobiNextMessagingRuntime,
     MessagingRuntimeStatus,
@@ -227,6 +228,42 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
         )
         return MessageResponse(text)
 
+    async def _private_financial_reply_allowed(
+        self, message: InboundMessage, outbound: OutboundMessage,
+    ) -> bool:
+        """Reauthorize fresh/cached financial replies without regenerating their payload."""
+        details = parse_receipt_details(message.text) if message.kind == "text" else None
+        review = parse_receipt_review(message.text) if message.kind == "text" else None
+        if details is None and review is None:
+            return True
+        if outbound.text in {
+            "אין הרשאה לקרוא את פרטי המסמך בארכיון.",
+            "אין הרשאה לשנות את המסמך בארכיון.",
+            "הפעולה דורשת אישור של משתמש מורשה.",
+            "לא מצאתי מסמך שמתאים לבקשה הזאת.",
+            "הבקשה נבדקה במצב Shadow. הארכיון לא שונה.",
+            "✅ נשמרו פרטי המסמך שכתבת ואישרת. יתר הפרטים שחולצו עדיין דורשים בדיקה.",
+        }:
+            return True
+        actor = message.metadata.get("sender_fingerprint")
+        if isinstance(actor, str) and actor:
+            if message.metadata.get("sender_fingerprint_scope") != message.provider:
+                return False
+            user = self.setup.resolve_user_fingerprint(message.provider, actor)
+        elif message.chat_id.endswith("@g.us"):
+            # Older group inboxes lack a trustworthy participant binding.
+            return False
+        else:
+            user = self.setup.resolve_user(message.provider, message.chat_id)
+        if user is None or user.user_key != message.user_key:
+            return False
+        policy = await self.policy_for(message.user_key)
+        if details is not None:
+            return archive_read_allowed(policy, user_key=message.user_key, action="details")
+        return archive_write_allowed(
+            policy, user_key=message.user_key, action="review",
+        ) and policy.can_approve
+
     def _waha_boundary(
         self,
         provider: MessagingProvider,
@@ -276,7 +313,10 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
             dry_run=self.dry_run,
         )
         handler = self._archive_retrieval_handler(provider.provider_key, base_handler)
-        return ProviderBoundary(provider, messages, transport, handler)
+        return ProviderBoundary(
+            provider, messages, transport, handler,
+            reply_allowed=self._private_financial_reply_allowed,
+        )
 
     def _reminder_user_enabled(self, user_key: str) -> bool:
         user = self.setup.get_user(user_key)

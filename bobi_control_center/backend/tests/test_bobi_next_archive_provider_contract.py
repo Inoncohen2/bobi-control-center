@@ -330,6 +330,7 @@ class _WhatsAppFlow:
             owner_token="contract-worker",
             now_ts=self.now,
             reaction_for=lambda message: "📄",
+            reply_allowed=self.boundary.reply_allowed,
         )
 
     async def send(self, key, text, **kwargs):
@@ -495,6 +496,59 @@ async def test_whatsapp_cloud_receipt_review_restart_reply_recovery_and_revoked_
             assert "123.45" not in waha.replies[-1]["text"]
             assert not waha.files and understanding.texts == []
             assert len([request for request in waha.requests if request.method == "GET"]) == 1
+        finally:
+            await flow.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["read_policy", "identity_relinked", "review_policy"])
+async def test_private_financial_reply_retry_rechecks_current_policy_and_identity(
+    archive_endpoint, tmp_path, monkeypatch, case,
+):
+    _configure_archive(tmp_path / "bobi-next-setup.db", archive_endpoint)
+    waha = _WahaHTTP()
+    understanding = _Understanding()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(waha.request)) as client:
+        _inject_waha_http(monkeypatch, client)
+        flow = _WhatsAppFlow(tmp_path, understanding)
+        try:
+            await flow.send("save", "שמור את הקבלה", media=True)
+            text = "עדכן את פרטי הקבלה insurance: ספק=IKEA; סכום=123.45 ILS"
+            if case != "review_policy":
+                await flow.send("review", text)
+                await flow.send("approve", "כן")
+                text = "מה פרטי הקבלה IKEA?"
+            event = flow.event("private-reply", text)
+            assert flow.ingest(event).accepted
+            waha.fail_reply_once = True
+            assert (await flow.process()).state == "retry"
+            message = flow.boundary.messages.get_inbound("waha", "private-reply")
+            assert "sender_fingerprint" in message.metadata
+            assert "111@c.us" not in str(message.metadata)
+            cached = flow.boundary.messages.outbound_for(message)
+            assert "123.45 ILS" in cached.text
+            sends_before = sum(request.url.path == "/api/sendText" for request in waha.requests)
+            if case == "identity_relinked":
+                flow.setup.unlink_identity(provider_key="waha", external_id="111@c.us")
+                flow.setup.create_user(display_name="Other", role="owner", user_key="other")
+                flow.setup.link_identity(
+                    provider_key="waha", external_id="111@c.us", user_key="other",
+                )
+            else:
+                policy = flow.setup.get_user("owner").policy
+                action = "archive.details" if case == "read_policy" else "archive.review"
+                flow.setup.update_user_policy(
+                    "owner", replace(policy, denied_actions=frozenset({action})),
+                )
+            await flow.close()
+            flow.open()
+            blocked = await flow.process()
+            assert blocked.state == "failed"
+            assert blocked.last_error.endswith("reply_authorization_denied")
+            assert sum(request.url.path == "/api/sendText" for request in waha.requests) == sends_before
+            assert flow.boundary.messages.outbound_for(blocked).text == cached.text
+            assert await flow.process() is None  # No automatic retry after explicit revocation.
+            assert understanding.texts == [] and not waha.files
         finally:
             await flow.close()
 

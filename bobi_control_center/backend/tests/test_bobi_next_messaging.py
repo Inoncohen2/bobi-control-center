@@ -260,6 +260,82 @@ async def test_cached_reply_cannot_resume_in_a_different_chat(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_cached_private_reply_is_terminally_blocked_after_authorization_revocation(tmp_path):
+    path = tmp_path / "messages.db"
+    store = MessageStore(path)
+    store.enqueue(
+        provider="waha", message_id="private", chat_id="chat-a", user_key="u1",
+        text="private read", received_ts=10,
+    )
+    claimed = store.claim_next(owner_token="old", now_ts=20)
+    cached = store.prepare_outbound(claimed, text="private financial fields", now_ts=20)
+    store.fail(claimed, owner_token="old", error="outage", retry_at_ts=21)
+    store.close()
+    restarted = MessageStore(path)
+    transport = FakeTransport()
+    checks = []
+
+    async def no_handler(message):
+        raise AssertionError("cached reply may not reenter its handler")
+
+    async def denied(message, outbound):
+        checks.append((message.message_id, outbound.response_key))
+        return False
+
+    try:
+        result = await process_next_message(
+            restarted, transport, no_handler, reply_allowed=denied,
+            owner_token="new", now_ts=21,
+        )
+        assert result.state == "failed" and result.last_error.endswith("reply_authorization_denied")
+        assert checks == [("private", cached.response_key)]
+        assert transport.send_count == 0
+        assert transport.events[-1] == ("typing", "chat-a", False)
+        assert restarted.outbound_for(result).text == cached.text
+        assert await process_next_message(
+            restarted, transport, no_handler, reply_allowed=denied,
+            owner_token="new", now_ts=22,
+        ) is None
+    finally:
+        restarted.close()
+
+
+@pytest.mark.asyncio
+async def test_transient_reply_authorizer_failure_preserves_exact_payload_for_safe_retry(tmp_path):
+    store = MessageStore(tmp_path / "messages.db")
+    store.enqueue(
+        provider="waha", message_id="private", chat_id="chat-a", user_key="u1",
+        text="private read", received_ts=10,
+    )
+    transport = FakeTransport()
+    executions = []
+
+    async def handler(message):
+        executions.append(message.message_id)
+        return MessageResponse("original private reply")
+
+    async def unavailable(message, outbound):
+        raise TimeoutError("policy_unavailable")
+
+    async def allowed(message, outbound):
+        assert outbound.text == "original private reply"
+        return True
+
+    try:
+        first = await process_next_message(
+            store, transport, handler, reply_allowed=unavailable, owner_token="old", now_ts=20,
+        )
+        assert first.state == "retry" and transport.send_count == 0
+        recovered = await process_next_message(
+            store, transport, handler, reply_allowed=allowed, owner_token="new", now_ts=40,
+        )
+        assert recovered.state == "completed" and executions == ["private"]
+        assert transport.send_count == 1
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
 async def test_handler_failure_retries_without_sending_and_clears_typing(tmp_path):
     store = MessageStore(tmp_path / "messages.db")
     try:
