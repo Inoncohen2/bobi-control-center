@@ -1,9 +1,9 @@
-"""Lifecycle composition for the opt-in Bobi Next conditional runtime.
+"""Lifecycle composition for the opt-in Bobi Next runtime.
 
 The service is intentionally dormant unless the application explicitly enables
-it.  When enabled it still starts only after onboarding is complete, a
-Supervisor token exists and an initial Home Assistant discovery succeeds.
-Unknown or disabled users receive a deny-all policy.
+it. When enabled it starts only after onboarding is complete, a Supervisor token
+exists and an initial Home Assistant discovery succeeds. Messaging remains a
+separate narrower gate and is shadow-only by default.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from app.config import Settings
 
+from .archive_messaging_runtime import ArchiveMessagingRuntime
 from .authorization import RiskLevel, UserPolicy
 from .conditional import ConditionalRuleStore, StateChangeEvent
 from .conditional_duration import ConditionalDurationRuntime, DurationCheckStore
@@ -57,6 +58,7 @@ class BobiNextRuntimeService:
         self.native: HomeAssistantNativeClient | None = None
         self.catalog: LiveDeviceCatalog | None = None
         self.runtime: ConditionalEventRuntime | None = None
+        self.messaging: ArchiveMessagingRuntime | None = None
         self.stop_event: asyncio.Event | None = None
         self.task: asyncio.Task[None] | None = None
         self.duration_task: asyncio.Task[None] | None = None
@@ -77,6 +79,48 @@ class BobiNextRuntimeService:
             approvals,
             failed,
         )
+
+    async def _start_messaging_if_enabled(self) -> None:
+        if not self.settings.next_messaging_enabled:
+            return
+        if self.native is None or self.catalog is None or self.pending_approvals is None:
+            logger.warning("Bobi Next messaging not started: runtime_dependencies_missing")
+            return
+
+        runtime: ArchiveMessagingRuntime | None = None
+        try:
+            runtime = ArchiveMessagingRuntime(
+                data_dir=self.settings.data_dir,
+                setup=self.setup,
+                ha=self.native,
+                list_devices=self.catalog.get_devices,
+                policy_for=self.policy_for,
+                pending_approvals=self.pending_approvals,
+                conditional_rules=self.rules,
+                dry_run=self.settings.next_messaging_dry_run,
+            )
+            status = await runtime.start()
+            if not status.ready:
+                logger.warning(
+                    "Bobi Next messaging not ready: reason=%s",
+                    status.reason,
+                )
+                await runtime.aclose()
+                return
+            self.messaging = runtime
+            logger.info(
+                "Bobi Next messaging started: providers=%s dry_run=%s",
+                len(status.providers),
+                self.settings.next_messaging_dry_run,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Bobi Next messaging failed closed: type=%s",
+                type(exc).__name__,
+            )
+            if runtime is not None:
+                with suppress(Exception):
+                    await runtime.aclose()
 
     async def start_if_ready(self) -> RuntimeStartStatus:
         if self.task is not None and not self.task.done():
@@ -165,6 +209,7 @@ class BobiNextRuntimeService:
         )
         self.task.add_done_callback(self._runtime_done)
         self.duration_task.add_done_callback(self._runtime_done)
+        await self._start_messaging_if_enabled()
         return RuntimeStartStatus(True, "started")
 
     @staticmethod
@@ -176,6 +221,11 @@ class BobiNextRuntimeService:
             logger.error("Bobi Next conditional runtime stopped: %s", type(exc).__name__)
 
     async def aclose(self) -> None:
+        if self.messaging is not None:
+            with suppress(Exception):
+                await self.messaging.aclose()
+            self.messaging = None
+
         if self.stop_event is not None:
             self.stop_event.set()
         for task in (self.task, self.duration_task):
