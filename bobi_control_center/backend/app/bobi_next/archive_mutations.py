@@ -24,6 +24,13 @@ from .authorization import (
 )
 from .models import ActionPlan
 from .pending_approval import PendingApproval, PendingApprovalStore
+from .receipt_review import (
+    display_financial_text,
+    format_financial_fields,
+    merge_review_fields,
+    parse_receipt_review,
+    reviewed_financial_fields,
+)
 from .request_ledger import RequestLedger
 
 
@@ -47,6 +54,8 @@ def _receipt_reply(receipt: ArchiveMutationReceipt) -> str:
         return f"✅ העברתי את המסמך לתיקיית {receipt.record.category}."
     if receipt.operation == "delete":
         return "✅ המסמך הועבר לסל המחזור. אפשר לשחזר אותו."
+    if receipt.operation == "review":
+        return "✅ נשמרו פרטי המסמך שכתבת ואישרת. יתר הפרטים שחולצו עדיין דורשים בדיקה."
     return "✅ שחזרתי את המסמך לארכיון."
 
 
@@ -82,6 +91,8 @@ class ArchiveMutationService:
     ) -> str:
         if not archive_write_allowed(policy, user_key=user_key, action=command.operation):
             return "אין הרשאה לשנות את המסמך בארכיון."
+        if command.operation == "review" and parse_receipt_review(input_text) != command:
+            return "נדרשים ערכים מפורשים בהודעה הנוכחית. פרטי המסמך לא שונו."
         if dry_run:
             return "הבקשה נבדקה במצב Shadow. הארכיון לא שונה."
         prior = self.requests.get(request_id)
@@ -139,6 +150,11 @@ class ArchiveMutationService:
                 error=str(exc),
                 now_ts=now_ts,
             )
+            if str(exc) == "archive_review_currency_conflict":
+                return (
+                    "יש סכום שנבדק קודם במטבע אחר. כדי להחליף מטבע יש לציין מחדש "
+                    "את הסכום ואת המע״מ שכבר נבדקו. לא בוצע שינוי."
+                )
             return "מצב המסמך השתנה או שהבקשה אינה תקפה. לא בוצע שינוי."
         except BaseException:
             self.requests.retry(
@@ -187,6 +203,15 @@ class ArchiveMutationService:
                 "clarification",
             )
         record = records[0]
+        if command.operation == "review":
+            if record.kind not in {"receipt", "bill"}:
+                raise ValueError("archive_review_kind_invalid")
+            merge_review_fields(
+                reviewed_financial_fields(
+                    record.metadata, owner_key=user_key, media_sha256=record.sha256,
+                ),
+                command.financial_fields,
+            )
         guard = archive_state_guard(record)
         plan = ActionPlan(
             request_id=request_id,
@@ -201,9 +226,11 @@ class ArchiveMutationService:
                 "category": command.category,
                 "provider": provider,
                 "chat_hash": _chat_hash(chat_id),
+                **({"financial_fields": dict(command.financial_fields)}
+                   if command.operation == "review" else {}),
             },
             expected=guard,
-            requires_confirmation=command.operation == "delete",
+            requires_confirmation=command.operation in {"delete", "review"},
         )
         provenance = RequestProvenance(explicit_target_ids=frozenset({plan.entity_id}))
         decision = authorize_plan(plan, policy=policy, provenance=provenance)
@@ -215,6 +242,12 @@ class ArchiveMutationService:
                 if command.operation == "delete"
                 else f'לאשר שינוי של המסמך "{record.title}"?'
             )
+            if command.operation == "review":
+                summary = (
+                    f'לעדכן במסמך "{display_financial_text(record.title)}" את הפרטים שכתבת?\n'
+                    + format_financial_fields(command.financial_fields)
+                    + "\nרק השדות המפורשים האלה מתעדכנים. יתר החילוץ דורש בדיקה."
+                )
             pending = self.pending.create(
                 approval_request_id=self._approval_id(request_id),
                 source_request_id=request_id,
@@ -237,12 +270,13 @@ class ArchiveMutationService:
         if (
             plan.domain != "archive"
             or plan.capability != "archive.write"
-            or plan.action not in {"move", "delete", "restore"}
+            or plan.action not in {"move", "delete", "restore", "review"}
             or plan.data.get("owner_key") != user_key
             or plan.device_id != object_id
             or plan.entity_id != f"archive:{object_id}"
             or plan.expected.get("owner_key") != user_key
             or plan.expected.get("object_id") != object_id
+            or (plan.action == "review" and not plan.requires_confirmation)
         ):
             raise ValueError("archive_plan_invalid")
         return self.archive.apply_mutation_once(
@@ -253,6 +287,7 @@ class ArchiveMutationService:
             operation=plan.action,
             expected_revision=int(plan.expected["revision"]),
             category=str(plan.data.get("category", "")),
+            financial_fields=plan.data.get("financial_fields"),
             now_ts=now_ts,
         )
 

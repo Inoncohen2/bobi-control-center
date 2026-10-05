@@ -35,6 +35,14 @@ from .messaging_runtime import (
     MessagingRuntimeStatus,
     ProviderBoundary,
 )
+from .receipt_review import (
+    display_financial_text,
+    parse_receipt_details,
+    parse_receipt_review,
+    receipt_details_reply,
+    receipt_review_help,
+    receipt_review_requested,
+)
 from .reminders import ReminderStore, process_next_reminder
 from .setup_store import MessagingProvider
 from .understanding import ResilientUnderstandingProvider
@@ -127,11 +135,14 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
 
         async def handler(message: InboundMessage) -> MessageResponse:
             if message.kind == "text":
-                mutation = parse_archive_mutation(message.text)
+                review = parse_receipt_review(message.text)
+                mutation = review or parse_archive_mutation(message.text)
                 normalized = _normalize_confirmation(message.text)
                 now = int(time.time())
                 mutation_text = None
-                if mutation is not None:
+                if review is None and receipt_review_requested(message.text):
+                    mutation_text = receipt_review_help()
+                elif mutation is not None:
                     policy = await self.policy_for(message.user_key)
                     mutation_text = self.archive_mutations.execute_command(
                         mutation,
@@ -157,21 +168,29 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
                         dry_run=self.dry_run,
                     )
                 if mutation_text is not None:
-                    self.memory.store_turn(
-                        message.user_key,
-                        message.text,
-                        direction="inbound",
-                        message_id=message.message_id,
-                        created_ts=now,
-                    )
-                    self.memory.store_turn(
-                        message.user_key,
-                        mutation_text,
-                        direction="outbound",
-                        message_id=f"reply:{message.message_id}",
-                        created_ts=now,
-                    )
-                    return MessageResponse(mutation_text)
+                    return self._remember_archive_reply(message, mutation_text, now_ts=now)
+                details = parse_receipt_details(message.text)
+                if details is not None:
+                    policy = await self.policy_for(message.user_key)
+                    if not archive_read_allowed(
+                        policy, user_key=message.user_key, action="details",
+                    ):
+                        text = "אין הרשאה לקרוא את פרטי המסמך בארכיון."
+                    else:
+                        records = self.archive.index.search(
+                            owner_key=message.user_key, query=details.query,
+                            kind=details.kind, limit=6,
+                        )
+                        if not records:
+                            text = "לא מצאתי מסמך שמתאים לבקשה הזאת."
+                        elif len(records) != 1:
+                            titles = " | ".join(
+                                display_financial_text(record.title) for record in records[:5]
+                            )
+                            text = f"מצאתי כמה מסמכים מתאימים: {titles}. כתבו פרט נוסף."
+                        else:
+                            text = receipt_details_reply(records[0])
+                    return self._remember_archive_reply(message, text, now_ts=now)
                 command = parse_archive_retrieval(message.text)
                 if command is not None:
                     if self.dry_run:
@@ -190,24 +209,23 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
                         now_ts=now,
                     )
                     text = _retrieval_reply(result)
-                    self.memory.store_turn(
-                        message.user_key,
-                        message.text,
-                        direction="inbound",
-                        message_id=message.message_id,
-                        created_ts=now,
-                    )
-                    self.memory.store_turn(
-                        message.user_key,
-                        text,
-                        direction="outbound",
-                        message_id=f"reply:{message.message_id}",
-                        created_ts=now,
-                    )
-                    return MessageResponse(text)
+                    return self._remember_archive_reply(message, text, now_ts=now)
             return await base_handler(message)
 
         return handler
+
+    def _remember_archive_reply(
+        self, message: InboundMessage, text: str, *, now_ts: int,
+    ) -> MessageResponse:
+        self.memory.store_turn(
+            message.user_key, message.text, direction="inbound",
+            message_id=message.message_id, created_ts=now_ts,
+        )
+        self.memory.store_turn(
+            message.user_key, text, direction="outbound",
+            message_id=f"reply:{message.message_id}", created_ts=now_ts,
+        )
+        return MessageResponse(text)
 
     def _waha_boundary(
         self,

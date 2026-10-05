@@ -146,7 +146,8 @@ def _amount(value: str) -> int | None:
         return None
 
 
-def _money(value: str, *, currency: str | None) -> tuple[int, str] | None:
+def parse_financial_money(value: str, *, currency: str | None = None) -> tuple[int, str] | None:
+    """Parse a bounded amount and explicit currency without float rounding."""
     codes = {_CODES[m.group().casefold()] for m in _CURRENCY.finditer(value)}
     if len(codes) > 1:
         return None
@@ -158,7 +159,8 @@ def _money(value: str, *, currency: str | None) -> tuple[int, str] | None:
     return (amount, code) if amount is not None and code else None
 
 
-def _date(value: str, *, hebrew: bool) -> str | None:
+def parse_financial_date(value: str, *, hebrew: bool = False) -> str | None:
+    """Parse a calendar date without guessing ambiguous English day/month order."""
     text = value.strip().strip("*")
     try:
         if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
@@ -212,7 +214,9 @@ def extract_financial_document(
                 continue
             raw = match[1].strip().strip("*")
             if name.endswith("date"):
-                value = _date(raw, hebrew=bool(re.search(r"[א-ת]", line[: match.start(1)])))
+                value = parse_financial_date(
+                    raw, hebrew=bool(re.search(r"[א-ת]", line[: match.start(1)]))
+                )
                 if value is None:
                     warnings.append(f"ambiguous_or_invalid_{name}")
                 else:
@@ -244,7 +248,7 @@ def extract_financial_document(
         amounts = []
         invalid = False
         for raw in candidates[name]:
-            value = _money(raw, currency=currency)
+            value = parse_financial_money(raw, currency=currency)
             if value is None:
                 warnings.append(f"ambiguous_or_invalid_{name}")
                 invalid = True

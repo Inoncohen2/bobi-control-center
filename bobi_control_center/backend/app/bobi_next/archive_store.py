@@ -19,6 +19,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .receipt_review import merge_review_fields, reviewed_financial_fields, validate_review_fields
+
 _MAX_TEXT = 16_000
 _MAX_TITLE = 300
 _MAX_CATEGORY = 160
@@ -451,9 +453,19 @@ class ArchiveStore:
                 "OR filename LIKE ? ESCAPE '\\' COLLATE NOCASE "
                 "OR category LIKE ? ESCAPE '\\' COLLATE NOCASE "
                 "OR tags_json LIKE ? ESCAPE '\\' COLLATE NOCASE "
-                "OR text_excerpt LIKE ? ESCAPE '\\' COLLATE NOCASE)"
+                "OR text_excerpt LIKE ? ESCAPE '\\' COLLATE NOCASE "
+                "OR (CASE WHEN json_valid(metadata_json) THEN ("
+                "json_extract(metadata_json, '$.financial_review.schema_version')=1 AND "
+                "json_extract(metadata_json, '$.financial_review.source')="
+                "'explicit_user_approved_fields' AND "
+                "json_extract(metadata_json, '$.financial_review.user_key')=owner_key AND "
+                "json_extract(metadata_json, '$.financial_review.media_sha256')=sha256 AND ("
+                "json_extract(metadata_json, '$.financial_review.fields.merchant') "
+                "LIKE ? ESCAPE '\\' COLLATE NOCASE OR "
+                "json_extract(metadata_json, '$.financial_review.fields.document_number') "
+                "LIKE ? ESCAPE '\\' COLLATE NOCASE)) ELSE 0 END))"
             )
-            params.extend([pattern] * 5)
+            params.extend([pattern] * 7)
         params.append(max(1, min(int(limit), 200)))
         rows = self._db.execute(
             f"SELECT * FROM archive_objects WHERE {' AND '.join(clauses)} "
@@ -493,13 +505,15 @@ class ArchiveStore:
         operation: str,
         expected_revision: int,
         category: str = "",
+        financial_fields: dict[str, str | int] | None = None,
         now_ts: int | None = None,
     ) -> ArchiveMutationReceipt:
         """CAS the exact object and persist its verified receipt in one transaction."""
         if not request_id or not owner_key or not plan_hash:
             raise ValueError("archive_mutation_identity_required")
-        if operation not in {"move", "delete", "restore"}:
+        if operation not in {"move", "delete", "restore", "review"}:
             raise ValueError("archive_mutation_invalid")
+        explicit_fields = validate_review_fields(financial_fields) if operation == "review" else {}
         normalized = " ".join(category.strip().split())
         if operation == "move" and (not normalized or len(normalized) > _MAX_CATEGORY):
             raise ValueError("archive_category_invalid")
@@ -528,16 +542,39 @@ class ArchiveStore:
                     raise ValueError("archive_active_duplicate")
             target_status = "deleted" if operation == "delete" else "active"
             target_category = normalized if operation == "move" else record.category
+            target_metadata = dict(record.metadata)
+            if operation == "review":
+                if record.kind not in {"receipt", "bill"}:
+                    raise ValueError("archive_review_kind_invalid")
+                previous_fields = reviewed_financial_fields(
+                    record.metadata, owner_key=owner_key, media_sha256=record.sha256,
+                )
+                target_metadata["financial_review"] = {
+                    "schema_version": 1,
+                    "source": "explicit_user_approved_fields",
+                    "fields": merge_review_fields(previous_fields, explicit_fields),
+                    "user_key": owner_key,
+                    "media_sha256": record.sha256,
+                    "request_id": request_id,
+                    "plan_hash": plan_hash,
+                    "reviewed_ts": int(now_ts or time.time()),
+                }
+            metadata_json = json.dumps(
+                _safe_metadata(target_metadata), ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"),
+            )
             updated = self._db.execute(
-                "UPDATE archive_objects SET status=?, category=?, updated_ts=?, "
+                "UPDATE archive_objects SET status=?, category=?, metadata_json=?, updated_ts=?, "
                 "revision=revision+1 "
                 "WHERE object_id=? AND owner_key=? AND revision=? AND status=?",
-                (target_status, target_category, int(now_ts or time.time()), object_id,
+                (target_status, target_category, metadata_json, int(now_ts or time.time()),
+                 object_id,
                  owner_key, expected_revision, expected_status),
             )
             verified = self.get(object_id, owner_key=owner_key, include_deleted=True)
             if updated.rowcount != 1 or verified is None or (
                 verified.status != target_status or verified.category != target_category
+                or verified.metadata != target_metadata
                 or verified.revision != expected_revision + 1
             ):
                 raise RuntimeError("archive_mutation_not_verified")

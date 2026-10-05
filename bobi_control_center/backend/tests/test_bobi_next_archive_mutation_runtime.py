@@ -9,7 +9,7 @@ from app.bobi_next.archive_capture import ArchiveCaptureRequest
 from app.bobi_next.archive_messaging_runtime import ArchiveMessagingRuntime
 from app.bobi_next.authorization import UserPolicy
 from app.bobi_next.interaction_dispatch import InteractionSelection
-from app.bobi_next.media_pipeline import LoadedMedia, MediaDescriptor
+from app.bobi_next.media_pipeline import LoadedMedia, MediaAnalysis, MediaDescriptor
 from app.bobi_next.messaging import InboundMessage, MessageResponse
 from app.bobi_next.pending_approval import PendingApprovalStore
 from app.bobi_next.setup_store import SetupStore
@@ -152,3 +152,151 @@ async def test_ha_approval_path_rejects_archive_before_any_ha_call(runtime):
     )
     assert result.reason == "non_ha_approval_plan"
     assert runtime.archive.index.get(item.object_id, owner_key="u1")
+
+
+async def saved_receipt(runtime):
+    return await runtime.archive.capture.capture(
+        ArchiveCaptureRequest(
+            owner_key="u1", kind="receipt", title="איקאה", category="קבלות",
+            metadata={"financial_review": {"source": "explicit_user_approved_fields"}},
+        ),
+        media=LoadedMedia(
+            descriptor=MediaDescriptor(
+                provider="waha", message_id="receipt", kind="document",
+                mimetype="application/pdf", filename="receipt.pdf",
+            ), content=b"%PDF receipt bytes", sha256="",
+        ),
+        analysis=MediaAnalysis("Receipt\nMerchant: OCR merchant\nTotal: ILS 999.00\nTax: ILS 99.00"),
+        now_ts=100,
+    )
+
+
+@pytest.mark.asyncio
+async def test_receipt_details_and_typed_review_keep_unreviewed_fields_advisory(runtime):
+    item = await saved_receipt(runtime)
+    assert "financial_review" not in item.metadata  # Reserved capture metadata cannot forge review.
+
+    async def base(msg):
+        raise AssertionError("receipt details or edits must not reach AI")
+
+    handler = runtime._archive_retrieval_handler("waha", base)
+    details = (await handler(message("מה פרטי הקבלה של איקאה?", "details"))).text
+    assert "דורש בדיקה" in details and "999.00 ILS" in details
+    prompt = (await handler(message(
+        "עדכן את פרטי הקבלה של איקאה: סכום=123.45 ILS; ספק=איקאה", "review",
+    ))).text
+    assert "123.45 ILS" in prompt and "999.00" not in prompt and "כן או לא" in prompt
+    assert runtime.archive.index.get(item.object_id, owner_key="u1") == item
+    await handler(message("כן", "approved"))
+    details = (await handler(message("מה פרטי הקבלה של איקאה?", "reviewed-details"))).text
+    assert "פרטים שכתבת ואישרת" in details and "סכום: 123.45 ILS" in details
+    assert "מע״מ: 99.00 ILS" in details and "דורש בדיקה" in details
+    assert "999.00" not in details
+    reviewed = runtime.archive.index.get(item.object_id, owner_key="u1")
+    assert reviewed.metadata["financial_document"] == item.metadata["financial_document"]
+    assert reviewed.revision == 1 and reviewed.storage_uri == item.storage_uri
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "denied",
+    [
+        UserPolicy("u1", denied_capabilities=frozenset({"archive.read"})),
+        UserPolicy("u1", allowed_capabilities=frozenset({"archive.write"})),
+        UserPolicy("u1", allowed_domains=frozenset({"light"})),
+        UserPolicy("u1", denied_actions=frozenset({"archive.details"})),
+        UserPolicy("u2"),
+    ],
+)
+async def test_receipt_details_require_permission_before_any_private_search(runtime, monkeypatch, denied):
+    await saved_receipt(runtime)
+
+    async def policy_for(user):
+        return denied
+
+    async def base(msg):
+        raise AssertionError("private read must not reach AI")
+
+    def forbidden_search(**kwargs):
+        raise AssertionError("denied read searched private data")
+
+    runtime.policy_for = policy_for
+    monkeypatch.setattr(runtime.archive.index, "search", forbidden_search)
+    response = await runtime._archive_retrieval_handler("waha", base)(
+        message("מה פרטי הקבלה של איקאה?"),
+    )
+    assert response.text == "אין הרשאה לקרוא את פרטי המסמך בארכיון."
+
+
+@pytest.mark.asyncio
+async def test_media_quote_or_unspecified_values_cannot_create_receipt_review(runtime):
+    item = await saved_receipt(runtime)
+    calls = []
+
+    async def base(msg):
+        calls.append(msg)
+        return MessageResponse("normal context")
+
+    handler = runtime._archive_retrieval_handler("waha", base)
+    edit = "עדכן את פרטי הקבלה איקאה: סכום=12 ILS"
+    await handler(message(edit, "voice", kind="voice"))
+    await handler(message(edit, "document", kind="document"))
+    await handler(message("תסביר", "quoted", metadata={"quoted": {"text": edit}}))
+    assert len(calls) == 3
+    help_reply = await handler(message("עדכן את פרטי הקבלה איקאה: לפי הקובץ", "implicit"))
+    assert "ערכים מפורשים" in help_reply.text
+    assert len(calls) == 3
+    assert runtime.pending_approvals.peek_latest(user_key="u1") is None
+    assert runtime.archive.index.get(item.object_id, owner_key="u1") == item
+
+
+@pytest.mark.asyncio
+async def test_receipt_poll_approval_uses_only_exact_current_typed_values(runtime):
+    item = await saved_receipt(runtime)
+
+    async def base(msg):
+        raise AssertionError("receipt review must not reach AI")
+
+    await runtime._archive_retrieval_handler("waha", base)(message(
+        "עדכן את פרטי הקבלה איקאה: סכום=12.34 ILS",
+        metadata={"quoted": {"text": "עדכן את פרטי הקבלה איקאה: סכום=999 ILS"}},
+    ))
+    pending = runtime.pending_approvals.peek_latest(user_key="u1")
+    selection = InteractionSelection(
+        dispatch_id="review-dispatch", provider="waha", interaction_id="poll",
+        poll_message_id="poll-id", chat_id="chat", user_key="u1",
+        context_key=f"approval:{pending.approval_request_id}", selected_keys=("approve",),
+        source_event_id="vote", provider_timestamp=100,
+    )
+    handler = runtime.interaction_handlers["approval"]
+    assert "שכתבת ואישרת" in (await handler(selection)).response_text
+    assert "שכתבת ואישרת" in (await handler(selection)).response_text
+    reviewed = runtime.archive.index.get(item.object_id, owner_key="u1")
+    assert reviewed.revision == 1
+    assert reviewed.metadata["financial_review"]["fields"] == {"total_minor": 1234, "currency": "ILS"}
+
+
+@pytest.mark.asyncio
+async def test_receipt_details_do_not_disclose_foreign_deleted_or_ambiguous_financial_fields(runtime):
+    item = await saved_receipt(runtime)
+    foreign = runtime.archive.index.register(
+        owner_key="u2", kind="receipt", title="איקאה סודי", filename="foreign.pdf",
+        sha256="b" * 64, text_excerpt="סוד פרטי", now_ts=101,
+    )
+
+    async def base(msg):
+        raise AssertionError("details must not reach AI")
+
+    handler = runtime._archive_retrieval_handler("waha", base)
+    details = (await handler(message("מה פרטי הקבלה איקאה?"))).text
+    assert "999.00 ILS" in details and "סודי" not in details
+    another = runtime.archive.index.register(
+        owner_key="u1", kind="receipt", title="איקאה אחר", filename="other.pdf",
+        sha256="c" * 64, now_ts=102,
+    )
+    ambiguity = (await handler(message("מה פרטי הקבלה איקאה?", "ambiguous"))).text
+    assert "כמה מסמכים" in ambiguity and "999.00" not in ambiguity and "סודי" not in ambiguity
+    runtime.archive.index.soft_delete(item.object_id, owner_key="u1", now_ts=103)
+    runtime.archive.index.soft_delete(another.object_id, owner_key="u1", now_ts=103)
+    assert "לא מצאתי" in (await handler(message("מה פרטי הקבלה איקאה?", "deleted"))).text
+    assert runtime.archive.index.get(foreign.object_id, owner_key="u2")

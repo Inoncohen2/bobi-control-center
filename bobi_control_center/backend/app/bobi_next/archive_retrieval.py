@@ -30,7 +30,7 @@ class ArchiveRetrievalResult:
     candidates: tuple[ArchiveCandidate, ...] = ()
 
 
-def archive_read_allowed(policy: UserPolicy, *, user_key: str) -> bool:
+def archive_read_allowed(policy: UserPolicy, *, user_key: str, action: str = "send") -> bool:
     if not policy.user_key.strip() or policy.user_key != user_key:
         return False
     capability = "archive.read"
@@ -40,7 +40,7 @@ def archive_read_allowed(policy: UserPolicy, *, user_key: str) -> bool:
         return False
     if "*" not in policy.allowed_domains and "archive" not in policy.allowed_domains:
         return False
-    return "archive.send" not in policy.denied_actions
+    return not {f"archive.{action}", action}.intersection(policy.denied_actions)
 
 
 def _candidate(record: ArchiveRecord) -> ArchiveCandidate:

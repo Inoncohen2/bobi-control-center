@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .archive_retrieval_commands import parse_archive_target
 
@@ -14,6 +14,7 @@ class ArchiveMutationCommand:
     query: str
     kind: str = ""
     category: str = ""
+    financial_fields: dict[str, str | int] = field(default_factory=dict)
 
 
 _LEAD = re.compile(

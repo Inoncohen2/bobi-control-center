@@ -429,6 +429,77 @@ async def test_whatsapp_cloud_archive_retry_restart_approval_and_delivery(
 
 
 @pytest.mark.asyncio
+async def test_whatsapp_cloud_receipt_review_restart_reply_recovery_and_revoked_permission(
+    archive_endpoint, tmp_path, monkeypatch,
+):
+    _configure_archive(tmp_path / "bobi-next-setup.db", archive_endpoint)
+    waha = _WahaHTTP()
+    understanding = _Understanding()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(waha.request)) as client:
+        _inject_waha_http(monkeypatch, client)
+        flow = _WhatsAppFlow(tmp_path, understanding)
+        try:
+            await flow.send("receipt-save", "שמור את הקבלה", media=True)
+            item, = flow.runtime.archive.index.search(owner_key="owner", kind="receipt")
+            assert item.metadata["financial_document"]["requires_review"] is True
+            await flow.send("receipt-details", "מה פרטי הקבלה insurance?")
+            assert "אין פרטים כספיים זמינים" in waha.replies[-1]["text"]
+            await flow.send(
+                "receipt-review",
+                "עדכן את פרטי הקבלה insurance: סכום=123.45 ILS; ספק=IKEA; תאריך=2026-10-05",
+                quoted=True,
+            )
+            assert "123.45 ILS" in waha.replies[-1]["text"]
+            assert "כן או לא" in waha.replies[-1]["text"]
+            assert "financial_review" not in flow.runtime.archive.index.get(
+                item.object_id, owner_key="owner",
+            ).metadata
+            await flow.close()
+            flow.open()
+            confirmation = flow.event("receipt-confirm", "כן")
+            assert flow.ingest(confirmation).accepted
+            waha.fail_reply_once = True
+            assert (await flow.process()).state == "retry"
+            reviewed = flow.runtime.archive.index.get(item.object_id, owner_key="owner")
+            assert reviewed.revision == 1
+            assert reviewed.metadata["financial_review"]["fields"] == {
+                "total_minor": 12345, "currency": "ILS", "merchant": "IKEA",
+                "document_date": "2026-10-05",
+            }
+            await flow.close()
+            flow.open()
+            assert (await flow.process()).state == "completed"
+            assert "שכתבת ואישרת" in waha.replies[-1]["text"]
+            assert flow.ingest(confirmation).duplicate
+            await flow.send("receipt-reviewed-details", "מה פרטי הקבלה IKEA?")
+            assert "פרטים שכתבת ואישרת" in waha.replies[-1]["text"]
+            assert "123.45 ILS" in waha.replies[-1]["text"]
+            current = flow.runtime.archive.index.get(item.object_id, owner_key="owner")
+            assert current.revision == 1 and current.storage_uri == item.storage_uri
+            assert current.metadata["financial_document"] == item.metadata["financial_document"]
+            assert await flow.runtime.archive.storage.read(current.storage_uri, max_bytes=1024)
+
+            await flow.send("receipt-next-review", "עדכן את פרטי הקבלה insurance: מע״מ=12 ILS")
+            user_policy = flow.setup.get_user("owner").policy
+            flow.setup.update_user_policy(
+                "owner", replace(user_policy, denied_actions=frozenset({"archive.review"})),
+            )
+            await flow.send("receipt-revoked-confirm", "כן")
+            assert "✅" not in waha.replies[-1]["text"]
+            assert flow.runtime.archive.index.get(item.object_id, owner_key="owner").revision == 1
+            flow.setup.update_user_policy(
+                "owner", replace(user_policy, denied_capabilities=frozenset({"archive.read"})),
+            )
+            await flow.send("receipt-denied-details", "מה פרטי הקבלה insurance?")
+            assert "אין הרשאה" in waha.replies[-1]["text"]
+            assert "123.45" not in waha.replies[-1]["text"]
+            assert not waha.files and understanding.texts == []
+            assert len([request for request in waha.requests if request.method == "GET"]) == 1
+        finally:
+            await flow.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("case", ["no_instruction", "quote_only", "denied", "shadow"])
 async def test_cloud_whatsapp_requires_current_explicit_authority_and_permission(
     archive_endpoint,

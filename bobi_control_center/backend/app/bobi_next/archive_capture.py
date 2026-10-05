@@ -114,6 +114,8 @@ class ArchiveCaptureService:
             analysis_text = analysis.text
         extraction = extract_financial_document(analysis_text, requested_kind=request.kind)
         metadata.pop("financial_document", None)
+        # Only a separate direct-text, approved mutation may populate this key.
+        metadata.pop("financial_review", None)
         kind = request.kind
         if extraction is not None:
             # Advisory metadata cannot replace explicit save/category authority
