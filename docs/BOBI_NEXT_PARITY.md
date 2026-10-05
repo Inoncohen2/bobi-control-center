@@ -40,7 +40,7 @@ The counts are inventory, not the desired V2 architecture. Legacy, temporary, pr
 | `script.bobi_conversation_context_store` | per-user turns, idempotency, typed semantics, expiry | SQLite conversation/context | implemented + unit tested |
 | `script.bobi_instinct_rescue` | one rescue per request, RESOLVE/CLARIFY/UNRESOLVED, re-entry through guards | fallback/instinct | implemented; deterministic guards retained |
 
-## Bobi Next implementation snapshot — 2026-10-04
+## Bobi Next implementation snapshot — 2026-10-05
 
 The following V2 foundations are implemented on `chatgpt/bobi-next-generic-core` and covered by automated tests. This is not permission to replace production: shadow/live/rollback gates still apply.
 
@@ -50,11 +50,11 @@ The following V2 foundations are implemented on `chatgpt/bobi-next-generic-core`
 | Scheduling | persistent schedules, recurrence, retry/cancel, leases, live re-resolution, secure scheduled execution | migration + live E2E |
 | Conditional rules | HA state stream, threshold/state rules, cooldown/dedupe, `for X seconds` durable recheck, secure execution | live shadow/E2E |
 | Permissions/approval | typed policy, fail-closed authority, exact one-time approvals, state guard, race protection, restart-safe continuation | user-policy migration + live E2E |
-| WhatsApp messaging | durable inbox/outbox, dedupe, per-chat ordering, reaction/typing, media ingest, quote context, polls, exact approval polls, crash-safe poll reconciliation | WAHA live shadow/E2E |
+| WhatsApp messaging | durable inbox/outbox, dedupe, per-chat ordering, reaction/typing, media ingest, quote context, polls, exact approval polls, crash-safe poll reconciliation; opt-in runtime composition behind `next_messaging_enabled` | WAHA live shadow/E2E |
 | AI/Understanding | structured semantic intent, context, provider runtime, Instinct rescue that re-enters deterministic guards | adversarial/live parity |
 | Calendar/To-do | native HA response client and productivity engine without Bobi scripts/helpers | live parity |
 | Activity/Undo | durable activity ledger and safe exactly-once undo runtime | live mutation parity |
-| Archive/Documents | explicit-save authority, semantic archive index, SHA-256 dedupe, private local blob storage, search/ambiguity handling, retrieval dispatch, WAHA `sendFile`, crash-safe outbound-media journal | natural-language/runtime wiring + live E2E |
+| Archive/Documents | explicit-save authority, semantic archive index, SHA-256 dedupe, private local blob storage, deterministic natural-language retrieval before AI, search/ambiguity fail-closed, retrieval dispatch, runtime wiring, WAHA `sendFile`, crash-safe outbound-media journal | live E2E |
 | Vouchers/Supabase | typed storage client and voucher wallet exist; current production Edge contract audited | generic document cloud provider optional; no production Supabase mutation yet |
 | Setup/Integrations | setup store/wizard foundations, roles/policies, secret vault, integration framework | Control Center UX + migration E2E |
 
@@ -62,10 +62,12 @@ The following V2 foundations are implemented on `chatgpt/bobi-next-generic-core`
 
 - Receiving a file does **not** save it automatically. Save is a separate side effect and requires an explicit non-negated user instruction plus `archive.write` permission.
 - OCR/transcription/AI-derived text cannot authorize a save. Only the user's original message/caption may do so.
+- Archive retrieval is recognized deterministically from an explicit user request before AI; generic send/show requests that do not clearly refer to saved/archive content stay in the normal Bobi pipeline.
 - Archive search is isolated by `owner_key`; ambiguous results require clarification rather than guessing.
 - Bobi can use private local storage under its own data directory without Supabase. Supabase/cloud storage remains an optional provider.
 - Outbound WhatsApp files use WAHA `sendFile` with private bytes (Base64), so no public document URL is required.
 - Because the current WAHA `sendFile` schema has no caller-defined message id, a crash after provider acceptance but before local acknowledgement is marked `uncertain`; Bobi does not automatically resend and risk a duplicate.
+- Messaging remains independently gated by `next_messaging_enabled`; enabling the HA/event runtime alone cannot start Bobi Next WhatsApp workers. First trials remain `next_messaging_dry_run=true` by default.
 
 ## Runtime families requiring parity
 
