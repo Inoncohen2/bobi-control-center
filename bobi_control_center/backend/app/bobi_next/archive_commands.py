@@ -70,7 +70,7 @@ def archive_save_category(text: str) -> str:
     return category
 
 
-def archive_write_allowed(policy: UserPolicy, *, user_key: str) -> bool:
+def archive_write_allowed(policy: UserPolicy, *, user_key: str, action: str = "save") -> bool:
     """Apply the same allow/deny semantics to the non-HA archive domain."""
 
     if not policy.user_key.strip() or policy.user_key != user_key:
@@ -82,7 +82,7 @@ def archive_write_allowed(policy: UserPolicy, *, user_key: str) -> bool:
         return False
     if "*" not in policy.allowed_domains and "archive" not in policy.allowed_domains:
         return False
-    return not {"archive.save", "save"}.intersection(policy.denied_actions)
+    return not {f"archive.{action}", action}.intersection(policy.denied_actions)
 
 
 def infer_archive_kind(caption: str, media: LoadedMedia) -> str:

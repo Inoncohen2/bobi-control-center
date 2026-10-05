@@ -152,6 +152,8 @@ def classify_risk(plan: ActionPlan) -> RiskLevel:
     """Conservative generic defaults; per-user policy can require more approval."""
 
     exact = (plan.domain, plan.action)
+    if plan.domain == "archive" and plan.action in {"move", "delete", "restore"}:
+        return RiskLevel.MEDIUM
     if exact in {
         ("lock", "unlock"),
         ("alarm_control_panel", "alarm_disarm"),

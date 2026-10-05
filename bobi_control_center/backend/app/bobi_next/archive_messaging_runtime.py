@@ -13,12 +13,20 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 
-from .archive_retrieval import ArchiveRetrievalResult
+from .archive_mutation_commands import parse_archive_mutation
+from .archive_mutations import ArchiveMutationService
+from .archive_retrieval import ArchiveRetrievalResult, archive_read_allowed
 from .archive_retrieval_commands import parse_archive_retrieval
 from .archive_subsystem import ArchiveSubsystem
-from .conversation_handler import build_conversation_handler
+from .conversation_handler import (
+    _NEGATIVE_APPROVALS,
+    _POSITIVE_APPROVALS,
+    _normalize_confirmation,
+    build_conversation_handler,
+)
 from .event_reminders import EventReminderStore
 from .integration_runtime import build_archive_storage
+from .interaction_dispatch import InteractionHandlerResult
 from .media_analyzers import MediaAnalyzerRegistry
 from .media_pipeline import MediaPipeline
 from .messaging import InboundMessage, MessageResponse, MessageStore
@@ -73,11 +81,42 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
             storage=build_archive_storage(self.data_dir),
         )
         self.reminders = ReminderStore(self.data_dir / "bobi-next-reminders.db")
-        self.event_reminders = EventReminderStore(
-            self.data_dir / "bobi-next-event-reminders.db"
-        )
+        self.event_reminders = EventReminderStore(self.data_dir / "bobi-next-event-reminders.db")
         self.archive_tasks: dict[str, asyncio.Task[None]] = {}
         self.reminder_task: asyncio.Task[None] | None = None
+        self.archive_mutations = ArchiveMutationService(
+            self.archive.index,
+            self.requests,
+            self.pending_approvals,
+            self.approvals,
+        )
+        previous_approval_handler = self.interaction_handlers.get("approval")
+
+        async def approval_handler(selection):
+            namespace, _, request_id = selection.context_key.partition(":")
+            pending = self.pending_approvals.get(request_id) if namespace == "approval" else None
+            if pending and pending.plans and pending.plans[0].domain == "archive":
+                if len(selection.selected_keys) != 1:
+                    return InteractionHandlerResult(
+                        "invalid_selection", "יש לבחור אפשרות אחת בלבד."
+                    )
+                policy = await self.policy_for(selection.user_key)
+                text = self.archive_mutations.continue_exact(
+                    request_id,
+                    choice=selection.selected_keys[0],
+                    user_key=selection.user_key,
+                    provider=selection.provider,
+                    chat_id=selection.chat_id,
+                    policy=policy,
+                    now_ts=int(time.time()),
+                    dry_run=self.dry_run,
+                )
+                return InteractionHandlerResult("archive_approval_handled", text)
+            if previous_approval_handler:
+                return await previous_approval_handler(selection)
+            return InteractionHandlerResult("invalid_approval", "האישור אינו תקף. לא בוצעה פעולה.")
+
+        self.register_interaction_handler("approval", approval_handler)
 
     def _archive_retrieval_handler(
         self,
@@ -88,6 +127,51 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
 
         async def handler(message: InboundMessage) -> MessageResponse:
             if message.kind == "text":
+                mutation = parse_archive_mutation(message.text)
+                normalized = _normalize_confirmation(message.text)
+                now = int(time.time())
+                mutation_text = None
+                if mutation is not None:
+                    policy = await self.policy_for(message.user_key)
+                    mutation_text = self.archive_mutations.execute_command(
+                        mutation,
+                        request_id=f"archive-mutate:{message.provider}:{message.message_id}",
+                        user_key=message.user_key,
+                        provider=message.provider,
+                        chat_id=message.chat_id,
+                        input_text=message.text,
+                        policy=policy,
+                        now_ts=now,
+                        dry_run=self.dry_run,
+                    )
+                elif normalized in _POSITIVE_APPROVALS | _NEGATIVE_APPROVALS:
+                    policy = await self.policy_for(message.user_key)
+                    mutation_text = self.archive_mutations.continue_latest(
+                        confirmation_id=f"archive-confirm:{message.provider}:{message.message_id}",
+                        choice="approve" if normalized in _POSITIVE_APPROVALS else "reject",
+                        user_key=message.user_key,
+                        provider=message.provider,
+                        chat_id=message.chat_id,
+                        policy=policy,
+                        now_ts=now,
+                        dry_run=self.dry_run,
+                    )
+                if mutation_text is not None:
+                    self.memory.store_turn(
+                        message.user_key,
+                        message.text,
+                        direction="inbound",
+                        message_id=message.message_id,
+                        created_ts=now,
+                    )
+                    self.memory.store_turn(
+                        message.user_key,
+                        mutation_text,
+                        direction="outbound",
+                        message_id=f"reply:{message.message_id}",
+                        created_ts=now,
+                    )
+                    return MessageResponse(mutation_text)
                 command = parse_archive_retrieval(message.text)
                 if command is not None:
                     if self.dry_run:
@@ -152,8 +236,7 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
             analyzer_for=analyzers.get,
         )
         messages = MessageStore(
-            self.data_dir
-            / f"bobi-next-messages-{_provider_storage_key(provider.provider_key)}.db"
+            self.data_dir / f"bobi-next-messages-{_provider_storage_key(provider.provider_key)}.db"
         )
         base_handler = build_conversation_handler(
             understanding=understanding,
@@ -219,6 +302,11 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
             api_key=transport.api_key,
         )
         owner_token = f"bobi-next-archive-media:{provider_key}"
+
+        async def read_allowed(dispatch):
+            policy = await self.policy_for(dispatch.owner_key)
+            return archive_read_allowed(policy, user_key=dispatch.owner_key)
+
         while not stop_event.is_set():
             try:
                 result = await self.archive.process_next(
@@ -226,6 +314,7 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
                     outbound,
                     owner_token=owner_token,
                     now_ts=int(time.time()),
+                    dispatch_allowed=read_allowed,
                 )
             except Exception as exc:
                 # Archive failures must not kill messaging or leak document data.
@@ -257,9 +346,7 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
 
         # Shadow mode must never emit proactive reminders. Reminder creation is
         # also dry-run in the engine, so no live reminder row is produced there.
-        if not self.dry_run and (
-            self.reminder_task is None or self.reminder_task.done()
-        ):
+        if not self.dry_run and (self.reminder_task is None or self.reminder_task.done()):
             self.reminder_task = asyncio.create_task(
                 self._reminder_worker(self.stop_event),
                 name="bobi-next-reminder-worker",

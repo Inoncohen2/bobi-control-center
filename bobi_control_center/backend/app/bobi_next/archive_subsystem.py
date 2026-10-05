@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Protocol
 
@@ -71,7 +72,18 @@ class ArchiveSubsystem:
         now_ts: int | None = None,
         lease_seconds: int = 90,
         max_bytes: int = 25 * 1024 * 1024,
+        dispatch_allowed: Callable[[OutboundMediaDispatch], Awaitable[bool]] | None = None,
     ) -> OutboundMediaDispatch | None:
+        async def active_dispatch(dispatch):
+            if dispatch_allowed is not None and not await dispatch_allowed(dispatch):
+                return False
+            record = self.index.get(dispatch.object_id, owner_key=dispatch.owner_key)
+            return record is not None and (
+                record.storage_uri == dispatch.storage_uri and record.sha256 == dispatch.sha256
+                and record.size_bytes == dispatch.size_bytes
+                and record.mime_type == dispatch.mime_type
+            )
+
         return await process_next_outbound_media(
             self.outbox(provider),
             self.storage,
@@ -80,6 +92,7 @@ class ArchiveSubsystem:
             now_ts=now_ts,
             lease_seconds=lease_seconds,
             max_bytes=max_bytes,
+            dispatch_allowed=active_dispatch,
         )
 
     def close(self) -> None:

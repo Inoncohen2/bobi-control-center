@@ -113,7 +113,11 @@ def parse_archive_retrieval(text: str) -> ArchiveRetrievalCommand | None:
     match = _HEBREW_LEAD.match(value) or _ENGLISH_LEAD.match(value)
     if match is None:
         return None
-    body = value[match.end() :].strip()
+    return parse_archive_target(value[match.end() :].strip())
+
+
+def parse_archive_target(body: str) -> ArchiveRetrievalCommand | None:
+    """Parse an archive-specific noun and its search detail without an action."""
     if not body or _ARCHIVE_SIGNAL.search(body) is None:
         return None
     kind = _kind_for(body)

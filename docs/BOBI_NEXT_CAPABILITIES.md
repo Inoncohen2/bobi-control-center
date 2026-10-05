@@ -86,7 +86,7 @@ implemented; `ready` = code/tests exist; `verified` = accepted live shadow/E2E.
 | image_inbox | image inbox | planned |
 | exit_check | presence/checklist evaluator | planned |
 | receipts | explicit media ingest/archive; structured extraction pending | partial |
-| documents | trusted explicit save/category + private storage/retrieval; live/cloud/mutation gates pending | partial |
+| documents | explicit save/retrieval + category move/soft-delete/restore; exact approval/state guard/atomic receipts; hosted cloud + live parity pending | partial |
 | notes | personal notes | planned |
 | products | product/warranty store | planned |
 | expenses | expense/budget module | planned |

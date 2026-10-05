@@ -359,6 +359,19 @@ class PendingApprovalStore:
             raise
         return self.get(pending.approval_request_id)
 
+    def peek_latest(self, *, user_key: str) -> PendingApproval | None:
+        """Inspect the latest open prompt, including an in-progress or expired one.
+
+        Routing must not skip a running prompt and approve an older operation.
+        Expiry is enforced by the exact claim, never by switching targets.
+        """
+        row = self._db.execute(
+            "SELECT * FROM pending_approval_requests WHERE user_key=? "
+            "AND state IN ('pending','running') ORDER BY created_ts DESC, rowid DESC LIMIT 1",
+            (user_key,),
+        ).fetchone()
+        return self._row(row)
+
     def complete(
         self,
         approval_request_id: str,

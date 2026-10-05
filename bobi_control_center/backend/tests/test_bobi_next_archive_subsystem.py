@@ -117,3 +117,44 @@ def test_archive_subsystem_close_is_idempotent(tmp_path) -> None:
 
     with pytest.raises(RuntimeError, match="archive_subsystem_closed"):
         subsystem.outbox("waha-main")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("when", ["before_read", "during_read", "permission_revoked"])
+async def test_deleted_or_revoked_archive_dispatch_cannot_send(tmp_path, when):
+    subsystem = ArchiveSubsystem(tmp_path)
+    media = loaded()
+    saved = await subsystem.capture.capture(
+        ArchiveCaptureRequest(owner_key="u1", kind="document", title="Insurance"),
+        media=media, now_ts=100,
+    )
+    subsystem.retrieval("waha").prepare_object(
+        owner_key="u1", policy=UserPolicy("u1"), provider="waha", chat_id="chat",
+        request_id="send", object_id=saved.object_id, now_ts=101,
+    )
+    original = subsystem.storage
+
+    class Reader:
+        async def read(self, uri, *, max_bytes):
+            data = await original.read(uri, max_bytes=max_bytes)
+            if when == "during_read":
+                subsystem.index.soft_delete(saved.object_id, owner_key="u1", now_ts=102)
+            return data
+
+    subsystem.storage = Reader()
+    if when == "before_read":
+        subsystem.index.soft_delete(saved.object_id, owner_key="u1", now_ts=102)
+
+    async def allowed(dispatch):
+        return when != "permission_revoked"
+
+    transport = RecordingTransport()
+    try:
+        result = await subsystem.process_next(
+            "waha", transport, owner_token="worker", now_ts=103, dispatch_allowed=allowed,
+        )
+        assert result.state == "failed"
+        assert result.last_error == "archive_delivery_not_authorized"
+        assert transport.calls == []
+    finally:
+        subsystem.close()

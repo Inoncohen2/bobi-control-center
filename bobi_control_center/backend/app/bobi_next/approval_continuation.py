@@ -45,6 +45,11 @@ async def _approve_claimed_pending(
     executed_count = 0
     verified_count = 0
     try:
+        if any(plan.domain == "archive" for plan in pending.plans):
+            pending_store.fail(
+                request_id, owner_token=owner_token, error="non_ha_approval_plan", now_ts=now_ts,
+            )
+            return ApprovalContinuationResult("rejected", "non_ha_approval_plan", request_id)
         if pending.user_key != user_key:
             pending_store.fail(
                 request_id,

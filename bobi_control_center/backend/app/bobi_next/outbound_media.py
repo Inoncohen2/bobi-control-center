@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -461,6 +462,7 @@ async def process_next_outbound_media(
     now_ts: int | None = None,
     lease_seconds: int = 90,
     max_bytes: int = 25 * 1024 * 1024,
+    dispatch_allowed: Callable[[OutboundMediaDispatch], Awaitable[bool]] | None = None,
 ) -> OutboundMediaDispatch | None:
     """Process one dispatch without automatically repeating an ambiguous send."""
 
@@ -472,6 +474,10 @@ async def process_next_outbound_media(
     )
     if dispatch is None:
         return None
+    if dispatch_allowed is not None and not await dispatch_allowed(dispatch):
+        return store.fail_before_send(
+            dispatch, owner_token=owner_token, error="archive_delivery_not_authorized", now_ts=now,
+        )
     if dispatch.size_bytes > max_bytes:
         return store.fail_before_send(
             dispatch,
@@ -512,6 +518,12 @@ async def process_next_outbound_media(
             now_ts=now,
         )
 
+    # The blob read may await network I/O. Recheck authority and active identity
+    # immediately before committing the send, after any deletion/revocation.
+    if dispatch_allowed is not None and not await dispatch_allowed(dispatch):
+        return store.fail_before_send(
+            dispatch, owner_token=owner_token, error="archive_delivery_not_authorized", now_ts=now,
+        )
     sending = store.begin_send(
         dispatch,
         owner_token=owner_token,

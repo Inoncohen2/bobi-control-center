@@ -15,7 +15,7 @@ import re
 import sqlite3
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +60,16 @@ class ArchiveRecord:
     status: str = "active"
     created_ts: int = 0
     updated_ts: int = 0
+    revision: int = 0
+
+
+@dataclass(slots=True, frozen=True)
+class ArchiveMutationReceipt:
+    request_id: str
+    owner_key: str
+    plan_hash: str
+    operation: str
+    record: ArchiveRecord
 
 
 def sha256_hex(data: bytes) -> str:
@@ -153,8 +163,26 @@ class ArchiveStore:
                 ON archive_objects(owner_key, category, status, updated_ts DESC);
             CREATE INDEX IF NOT EXISTS ix_archive_owner_sha
                 ON archive_objects(owner_key, sha256, status);
+            CREATE TABLE IF NOT EXISTS archive_mutation_receipts (
+                request_id TEXT PRIMARY KEY,
+                owner_key TEXT NOT NULL,
+                plan_hash TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                record_json TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS archive_confirmation_bindings (
+                request_id TEXT PRIMARY KEY,
+                owner_key TEXT NOT NULL,
+                approval_request_id TEXT NOT NULL,
+                choice TEXT NOT NULL
+            );
             """
         )
+        columns = {row["name"] for row in self._db.execute("PRAGMA table_info(archive_objects)")}
+        if "revision" not in columns:
+            self._db.execute(
+                "ALTER TABLE archive_objects ADD COLUMN revision INTEGER NOT NULL DEFAULT 0"
+            )
         self._db.commit()
 
     @staticmethod
@@ -179,6 +207,7 @@ class ArchiveStore:
             status=str(row["status"]),
             created_ts=int(row["created_ts"]),
             updated_ts=int(row["updated_ts"]),
+            revision=int(row["revision"]),
         )
 
     def register(
@@ -217,6 +246,9 @@ class ArchiveStore:
         safe_metadata = _safe_metadata(metadata)
         now = int(now_ts or time.time())
 
+        # Serialize the digest check with insertion, including different message
+        # ids/workers saving identical bytes. Restores use the same write lock.
+        self._db.execute("BEGIN IMMEDIATE")
         if digest:
             existing = self._db.execute(
                 """
@@ -228,6 +260,7 @@ class ArchiveStore:
             ).fetchone()
             record = self._record(existing)
             if record is not None:
+                self._db.commit()
                 return record
 
         identifier = str(object_id or "").strip() or str(uuid.uuid4())
@@ -296,7 +329,7 @@ class ArchiveStore:
         with self._db:
             result = self._db.execute(
                 """
-                UPDATE archive_objects SET category=?, updated_ts=?
+                UPDATE archive_objects SET category=?, updated_ts=?, revision=revision+1
                 WHERE object_id=? AND owner_key=? AND status='active'
                 """,
                 (normalized, now, object_id, owner_key),
@@ -321,7 +354,7 @@ class ArchiveStore:
         with self._db:
             result = self._db.execute(
                 """
-                UPDATE archive_objects SET tags_json=?, updated_ts=?
+                UPDATE archive_objects SET tags_json=?, updated_ts=?, revision=revision+1
                 WHERE object_id=? AND owner_key=? AND status='active'
                 """,
                 (
@@ -368,7 +401,7 @@ class ArchiveStore:
         with self._db:
             result = self._db.execute(
                 (
-                    "UPDATE archive_objects SET status=?, updated_ts=? "
+                    "UPDATE archive_objects SET status=?, updated_ts=?, revision=revision+1 "
                     "WHERE object_id=? AND owner_key=?"
                 ),
                 (status, now, object_id, owner_key),
@@ -388,11 +421,17 @@ class ArchiveStore:
         kind: str = "",
         category: str = "",
         include_deleted: bool = False,
+        status: str = "",
         limit: int = 50,
     ) -> tuple[ArchiveRecord, ...]:
         clauses = ["owner_key=?"]
         params: list[Any] = [str(owner_key)]
-        if not include_deleted:
+        if status:
+            if status not in {"active", "deleted"}:
+                raise ValueError("archive_status_invalid")
+            clauses.append("status=?")
+            params.append(status)
+        elif not include_deleted:
             clauses.append("status='active'")
         if kind:
             normalized_kind = str(kind).strip().lower()
@@ -405,11 +444,14 @@ class ArchiveStore:
             params.append(" ".join(str(category).strip().split())[:_MAX_CATEGORY])
         needle = " ".join(str(query or "").strip().split())
         if needle:
-            pattern = f"%{needle[:300]}%"
+            literal = needle[:300].replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{literal}%"
             clauses.append(
-                "(title LIKE ? COLLATE NOCASE OR filename LIKE ? COLLATE NOCASE "
-                "OR category LIKE ? COLLATE NOCASE OR tags_json LIKE ? COLLATE NOCASE "
-                "OR text_excerpt LIKE ? COLLATE NOCASE)"
+                "(title LIKE ? ESCAPE '\\' COLLATE NOCASE "
+                "OR filename LIKE ? ESCAPE '\\' COLLATE NOCASE "
+                "OR category LIKE ? ESCAPE '\\' COLLATE NOCASE "
+                "OR tags_json LIKE ? ESCAPE '\\' COLLATE NOCASE "
+                "OR text_excerpt LIKE ? ESCAPE '\\' COLLATE NOCASE)"
             )
             params.extend([pattern] * 5)
         params.append(max(1, min(int(limit), 200)))
@@ -419,3 +461,113 @@ class ArchiveStore:
             tuple(params),
         ).fetchall()
         return tuple(record for row in rows if (record := self._record(row)) is not None)
+
+    def mutation_receipt(self, request_id: str, *, owner_key: str) -> ArchiveMutationReceipt | None:
+        row = self._db.execute(
+            "SELECT * FROM archive_mutation_receipts WHERE request_id=?", (request_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        if row["owner_key"] != owner_key:
+            raise ValueError("archive_request_owner_mismatch")
+        payload = json.loads(row["record_json"])
+        payload["tags"] = tuple(payload["tags"])
+        return ArchiveMutationReceipt(
+            request_id, owner_key, str(row["plan_hash"]), str(row["operation"]),
+            ArchiveRecord(**payload),
+        )
+
+    def apply_mutation_once(
+        self,
+        *,
+        request_id: str,
+        owner_key: str,
+        plan_hash: str,
+        object_id: str,
+        operation: str,
+        expected_revision: int,
+        category: str = "",
+        now_ts: int | None = None,
+    ) -> ArchiveMutationReceipt:
+        """CAS the exact object and persist its verified receipt in one transaction."""
+        if not request_id or not owner_key or not plan_hash:
+            raise ValueError("archive_mutation_identity_required")
+        if operation not in {"move", "delete", "restore"}:
+            raise ValueError("archive_mutation_invalid")
+        normalized = " ".join(category.strip().split())
+        if operation == "move" and (not normalized or len(normalized) > _MAX_CATEGORY):
+            raise ValueError("archive_category_invalid")
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            previous = self.mutation_receipt(request_id, owner_key=owner_key)
+            if previous is not None:
+                if previous.plan_hash != plan_hash:
+                    raise ValueError("archive_request_plan_changed")
+                self._db.commit()
+                return previous
+            record = self.get(object_id, owner_key=owner_key, include_deleted=True)
+            expected_status = "deleted" if operation == "restore" else "active"
+            if (
+                record is None or record.status != expected_status
+                or record.revision != expected_revision
+            ):
+                raise ValueError("archive_state_changed")
+            if operation == "restore" and record.sha256:
+                duplicate = self._db.execute(
+                    "SELECT 1 FROM archive_objects WHERE owner_key=? AND sha256=? "
+                    "AND status='active' AND object_id!=? LIMIT 1",
+                    (owner_key, record.sha256, object_id),
+                ).fetchone()
+                if duplicate:
+                    raise ValueError("archive_active_duplicate")
+            target_status = "deleted" if operation == "delete" else "active"
+            target_category = normalized if operation == "move" else record.category
+            updated = self._db.execute(
+                "UPDATE archive_objects SET status=?, category=?, updated_ts=?, "
+                "revision=revision+1 "
+                "WHERE object_id=? AND owner_key=? AND revision=? AND status=?",
+                (target_status, target_category, int(now_ts or time.time()), object_id,
+                 owner_key, expected_revision, expected_status),
+            )
+            verified = self.get(object_id, owner_key=owner_key, include_deleted=True)
+            if updated.rowcount != 1 or verified is None or (
+                verified.status != target_status or verified.category != target_category
+                or verified.revision != expected_revision + 1
+            ):
+                raise RuntimeError("archive_mutation_not_verified")
+            self._db.execute(
+                "INSERT INTO archive_mutation_receipts VALUES(?,?,?,?,?)",
+                (request_id, owner_key, plan_hash, operation,
+                 json.dumps(asdict(verified), ensure_ascii=False, sort_keys=True)),
+            )
+            self._db.commit()
+        except BaseException:
+            self._db.rollback()
+            raise
+        receipt = self.mutation_receipt(request_id, owner_key=owner_key)
+        if receipt is None:
+            raise RuntimeError("archive_mutation_receipt_missing")
+        return receipt
+
+    def confirmation_binding(self, request_id: str, *, owner_key: str) -> tuple[str, str] | None:
+        row = self._db.execute(
+            "SELECT * FROM archive_confirmation_bindings WHERE request_id=?", (request_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        if row["owner_key"] != owner_key:
+            raise ValueError("archive_request_owner_mismatch")
+        return str(row["approval_request_id"]), str(row["choice"])
+
+    def bind_confirmation(
+        self, request_id: str, *, owner_key: str, approval_request_id: str, choice: str,
+    ) -> tuple[str, str]:
+        with self._db:
+            self._db.execute(
+                "INSERT OR IGNORE INTO archive_confirmation_bindings VALUES(?,?,?,?)",
+                (request_id, owner_key, approval_request_id, choice),
+            )
+        binding = self.confirmation_binding(request_id, owner_key=owner_key)
+        if binding != (approval_request_id, choice):
+            raise ValueError("archive_confirmation_changed")
+        return binding
