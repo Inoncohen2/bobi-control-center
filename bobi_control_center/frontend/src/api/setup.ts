@@ -31,7 +31,6 @@ export interface SetupAIProvider {
   enabled: boolean;
   capabilities: AICapability[];
   has_secret_ref: boolean;
-  selected?: boolean;
 }
 
 export interface SetupUser {
@@ -53,8 +52,8 @@ export interface SetupSnapshot {
   users: SetupUser[];
   linked_identities: number;
   ai: {
+    active_provider: string;
     providers: SetupAIProvider[];
-    selected_provider_key?: string;
   };
 }
 
