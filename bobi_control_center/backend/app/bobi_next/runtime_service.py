@@ -20,7 +20,7 @@ from .authorization import RiskLevel, UserPolicy
 from .conditional import ConditionalRuleStore, StateChangeEvent
 from .conditional_duration import ConditionalDurationRuntime, DurationCheckStore
 from .conditional_runtime import ConditionalEventRuntime
-from .event_reminders import EventReminderRuntime, EventReminderStore
+from .event_reminders import EventReminderRuntime
 from .ha_control import HomeAssistantNativeClient
 from .ha_discovery import HomeAssistantDiscoveryClient
 from .ha_events import HomeAssistantEventStream
@@ -60,7 +60,6 @@ class BobiNextRuntimeService:
         self.catalog: LiveDeviceCatalog | None = None
         self.runtime: ConditionalEventRuntime | None = None
         self.messaging: ArchiveMessagingRuntime | None = None
-        self.event_reminder_definitions: EventReminderStore | None = None
         self.event_reminder_runtime: EventReminderRuntime | None = None
         self.stop_event: asyncio.Event | None = None
         self.task: asyncio.Task[None] | None = None
@@ -131,11 +130,8 @@ class BobiNextRuntimeService:
                 await runtime.aclose()
                 return
             self.messaging = runtime
-            self.event_reminder_definitions = EventReminderStore(
-                self.settings.data_dir / "bobi-next-event-reminders.db"
-            )
             self.event_reminder_runtime = EventReminderRuntime(
-                definitions=self.event_reminder_definitions,
+                definitions=runtime.event_reminders,
                 reminders=runtime.reminders,
                 list_devices=self.catalog.get_devices,
                 user_enabled=self._user_enabled,
@@ -151,9 +147,6 @@ class BobiNextRuntimeService:
                 type(exc).__name__,
             )
             self.event_reminder_runtime = None
-            if self.event_reminder_definitions is not None:
-                self.event_reminder_definitions.close()
-                self.event_reminder_definitions = None
             if runtime is not None:
                 with suppress(Exception):
                     await runtime.aclose()
@@ -259,9 +252,6 @@ class BobiNextRuntimeService:
 
     async def aclose(self) -> None:
         self.event_reminder_runtime = None
-        if self.event_reminder_definitions is not None:
-            self.event_reminder_definitions.close()
-            self.event_reminder_definitions = None
 
         if self.messaging is not None:
             with suppress(Exception):
