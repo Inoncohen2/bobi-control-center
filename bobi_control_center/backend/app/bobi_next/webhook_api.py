@@ -10,21 +10,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Protocol
+from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from .messaging_runtime import BobiNextMessagingRuntime
 from .secret_vault import EncryptedSecretVault, SecretVaultError
 from .setup_store import SetupStore
 from .webhook_auth import provider_webhook_secret, verify_waha_webhook_hmac
 
 _MAX_WEBHOOK_BYTES = 2 * 1024 * 1024
-
-
-class MessagingRuntimeHolder(Protocol):
-    bobi_next_messaging_runtime: BobiNextMessagingRuntime | None
 
 
 def _reply(status: int, *, accepted: bool, reason: str, duplicate: bool = False) -> JSONResponse:
@@ -36,6 +31,16 @@ def _reply(status: int, *, accepted: bool, reason: str, duplicate: bool = False)
             "duplicate": duplicate,
         },
     )
+
+
+def _messaging_runtime(app_state: Any):
+    """Resolve the live messaging runtime without keeping a stale startup copy."""
+
+    direct = getattr(app_state, "bobi_next_messaging_runtime", None)
+    if direct is not None:
+        return direct
+    service = getattr(app_state, "next_runtime", None)
+    return getattr(service, "messaging", None) if service is not None else None
 
 
 def create_messaging_webhook_router(
@@ -94,7 +99,7 @@ def create_messaging_webhook_router(
         if not isinstance(event, dict):
             return _reply(400, accepted=False, reason="invalid_webhook_payload")
 
-        runtime = getattr(request.app.state, "bobi_next_messaging_runtime", None)
+        runtime = _messaging_runtime(request.app.state)
         if runtime is None:
             return _reply(503, accepted=False, reason="messaging_runtime_unavailable")
 
