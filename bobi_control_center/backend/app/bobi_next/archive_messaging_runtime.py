@@ -26,6 +26,7 @@ from .messaging_runtime import (
     MessagingRuntimeStatus,
     ProviderBoundary,
 )
+from .reminders import ReminderStore, process_next_reminder
 from .setup_store import MessagingProvider
 from .understanding import ResilientUnderstandingProvider
 from .waha_adapter import WahaMediaLoader, WahaTransport
@@ -62,7 +63,7 @@ def _retrieval_reply(result: ArchiveRetrievalResult) -> str:
 
 
 class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
-    """Messaging runtime with private document capture and outbound delivery."""
+    """Messaging runtime with archive capture, delivery and proactive reminders."""
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -70,7 +71,9 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
             self.data_dir,
             storage=build_archive_storage(self.data_dir),
         )
+        self.reminders = ReminderStore(self.data_dir / "bobi-next-reminders.db")
         self.archive_tasks: dict[str, asyncio.Task[None]] = {}
+        self.reminder_task: asyncio.Task[None] | None = None
 
     def _archive_retrieval_handler(
         self,
@@ -156,6 +159,7 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
             pending_approvals=self.pending_approvals,
             approval_tokens=self.approvals,
             schedules=self.schedules,
+            reminders=self.reminders,
             conditional_rules=self.conditional_rules,
             media_pipeline=media_pipeline,
             archive_capture=self.archive.capture,
@@ -165,6 +169,31 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
         )
         handler = self._archive_retrieval_handler(provider.provider_key, base_handler)
         return ProviderBoundary(provider, messages, transport, handler)
+
+    def _reminder_user_enabled(self, user_key: str) -> bool:
+        user = self.setup.get_user(user_key)
+        return user is not None and user.enabled
+
+    async def _reminder_worker(self, stop_event: asyncio.Event) -> None:
+        owner_token = "bobi-next-reminder-worker"
+        while not stop_event.is_set():
+            try:
+                result = await process_next_reminder(
+                    self.reminders,
+                    self._transport_for,
+                    owner_token=owner_token,
+                    now_ts=int(time.time()),
+                    user_enabled=self._reminder_user_enabled,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Bobi Next reminder worker error type=%s",
+                    type(exc).__name__,
+                )
+                await self._idle(stop_event)
+                continue
+            if result is None:
+                await self._idle(stop_event)
 
     async def _archive_worker(
         self,
@@ -216,11 +245,29 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
                 self._archive_worker(provider_key, boundary, self.stop_event),
                 name=f"bobi-next-archive-{_provider_storage_key(provider_key)}",
             )
+
+        # Shadow mode must never emit proactive reminders. Reminder creation is
+        # also dry-run in the engine, so no live reminder row is produced there.
+        if not self.dry_run and (
+            self.reminder_task is None or self.reminder_task.done()
+        ):
+            self.reminder_task = asyncio.create_task(
+                self._reminder_worker(self.stop_event),
+                name="bobi-next-reminder-worker",
+            )
         return status
 
     async def aclose(self) -> None:
         if self.stop_event is not None:
             self.stop_event.set()
+
+        reminder_task = self.reminder_task
+        if reminder_task is not None and not reminder_task.done():
+            reminder_task.cancel()
+        if reminder_task is not None:
+            await asyncio.gather(reminder_task, return_exceptions=True)
+        self.reminder_task = None
+
         tasks = list(self.archive_tasks.values())
         for task in tasks:
             if not task.done():
@@ -228,5 +275,7 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self.archive_tasks.clear()
+
         await super().aclose()
+        self.reminders.close()
         self.archive.close()
