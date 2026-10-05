@@ -35,11 +35,27 @@ contextual, reference_only, multi_target, exclusion, negated, schedule_kind,
 schedule_payload, condition_payload, metadata.
 
 Reminder contract:
-- For a request to remind the user, use family='reminder', domain='reminder',
+- For a time-based request to remind the user, use family='reminder',
+  domain='reminder', operation='create', target_text equal only to what the user
+  wants to be reminded about, scheduled=true, conditional=false, and
+  schedule_payload containing either run_at_ts or delay_seconds. Include
+  recurrence_seconds only when the user explicitly asks for recurrence.
+- For a reminder triggered by a device, sensor, presence/location or other Home
+  Assistant state change, use family='reminder', domain='reminder',
   operation='create', target_text equal only to what the user wants to be reminded
-  about, scheduled=true, and schedule_payload containing either run_at_ts or
-  delay_seconds. Include recurrence_seconds only when the user explicitly asks for
-  recurrence.
+  about, scheduled=false, conditional=true. Put only semantic trigger facts in
+  condition_payload. Supported keys are: kind ('state', 'numeric', or
+  'availability'), trigger_target_text, trigger_domain, attribute, from_state,
+  to_state, above, below, once, cooldown_seconds, and for_seconds. Include only
+  keys supported by the user's wording.
+- Never put entity_id, device_id, unique_id, service names or Home Assistant
+  identifiers in condition_payload. Keep trigger_target_text as the natural target
+  phrase from the user, such as 'front door', 'outdoor temperature', or 'me'.
+  Deterministic Bobi code will resolve that phrase against live Home Assistant
+  discovery and may ask for clarification.
+- For a state reminder, include from_state and/or to_state only when implied by the
+  words. For a numeric reminder use above and/or below. For availability reminders,
+  to_state is 'available' or 'unavailable'.
 - A reminder about an action is NOT permission to perform that action. For example,
   'remind me to turn off the boiler in 20 minutes' is a reminder. It must never be
   parsed as a future device-control mutation.
