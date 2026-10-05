@@ -217,15 +217,20 @@ def create_setup_router(database_path: str | Path) -> APIRouter:
     async def upsert_provider(body: ProviderInput) -> dict[str, Any]:
         values = body.model_dump(exclude={"secret_value"})
         try:
-            values["secret_ref"] = _store_secret_if_supplied(
-                secret_value=body.secret_value,
-                current_ref=str(values["secret_ref"]),
-                scope=f"messaging:{body.provider_key}",
-                vault_database_path=vault_path,
-                vault_key_path=vault_key_path,
-            )
             with _request_store(path) as store:
                 existing = store.get_provider(body.provider_key)
+                current_ref = str(values["secret_ref"]).strip()
+                if not current_ref and existing is not None:
+                    current_ref = existing.secret_ref
+                values["secret_ref"] = _store_secret_if_supplied(
+                    secret_value=body.secret_value,
+                    current_ref=current_ref,
+                    scope=f"messaging:{body.provider_key}",
+                    vault_database_path=vault_path,
+                    vault_key_path=vault_key_path,
+                )
+                if existing is not None and not str(values["endpoint"]).strip():
+                    values["endpoint"] = existing.endpoint
                 values["config"] = _ensure_waha_webhook_hmac(
                     provider_key=body.provider_key,
                     provider_type=body.provider_type,
@@ -246,14 +251,20 @@ def create_setup_router(database_path: str | Path) -> APIRouter:
         values = body.model_dump(exclude={"secret_value"})
         values["capabilities"] = frozenset(values["capabilities"])
         try:
-            values["secret_ref"] = _store_secret_if_supplied(
-                secret_value=body.secret_value,
-                current_ref=str(values["secret_ref"]),
-                scope=f"ai:{body.provider_key}",
-                vault_database_path=vault_path,
-                vault_key_path=vault_key_path,
-            )
             with _ai_store(ai_path) as ai:
+                existing = ai.get(body.provider_key)
+                current_ref = str(values["secret_ref"]).strip()
+                if not current_ref and existing is not None:
+                    current_ref = existing.secret_ref
+                values["secret_ref"] = _store_secret_if_supplied(
+                    secret_value=body.secret_value,
+                    current_ref=current_ref,
+                    scope=f"ai:{body.provider_key}",
+                    vault_database_path=vault_path,
+                    vault_key_path=vault_key_path,
+                )
+                if existing is not None and not str(values["endpoint"]).strip():
+                    values["endpoint"] = existing.endpoint
                 provider = ai.upsert(**values)
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
