@@ -39,6 +39,7 @@ from .memory import BobiMemory
 from .messaging import InboundMessage, MessageResponse
 from .pending_approval import PendingApprovalStore
 from .quoted_context import QuotedContextUnderstanding, quote_from_metadata
+from .reminders import ReminderStore
 from .request_ledger import RequestLedger
 from .scheduler import ScheduleStore
 
@@ -108,6 +109,7 @@ def _terminal_recovery_message(terminal_kind: str) -> str:
         "executed": "✅ בוצע.",
         "shadow": "הפקודה נבדקה במצב Shadow ולא בוצעה בפועל.",
         "scheduled": "✅ הפעולה כבר תוזמנה.",
+        "reminder_created": "✅ התזכורת כבר נקבעה.",
         "conditional_created": "✅ הכלל כבר נשמר.",
         "approval_required": "הפעולה כבר ממתינה לאישור. להשיב כן או לא.",
         "blocked": "הפעולה נחסמה לפי מדיניות הבטיחות.",
@@ -124,6 +126,8 @@ def _engine_response(result: EngineResult, requests: RequestLedger) -> MessageRe
         return MessageResponse("הפקודה נבדקה במצב Shadow ולא בוצעה בפועל.")
     if result.outcome == "scheduled":
         return MessageResponse("✅ הפעולה תוזמנה.")
+    if result.outcome == "reminder_created":
+        return MessageResponse("✅ קבעתי את התזכורת.")
     if result.outcome == "conditional_created":
         return MessageResponse("✅ הכלל נשמר ויפעל כשהתנאי יתקיים.")
     if result.outcome == "approval_required":
@@ -197,6 +201,7 @@ def build_conversation_handler(
     pending_approvals: PendingApprovalStore,
     approval_tokens: ApprovalStore,
     schedules: ScheduleStore | None = None,
+    reminders: ReminderStore | None = None,
     conditional_rules: ConditionalRuleStore | None = None,
     media_pipeline: MediaPipeline | None = None,
     archive_capture: ArchiveCaptureService | None = None,
@@ -393,6 +398,8 @@ def build_conversation_handler(
                 owner_token=f"engine:{message.provider}:{message.message_id}",
                 message_id=message.message_id,
                 now_ts=message.received_ts,
+                provider_key=message.provider,
+                chat_id=message.chat_id,
             ),
             understanding=request_understanding,
             list_devices=list_devices,
@@ -401,6 +408,7 @@ def build_conversation_handler(
             memory=memory,
             requests=requests,
             schedules=schedules,
+            reminders=reminders,
             conditional_rules=conditional_rules,
             pending_approvals=pending_approvals,
             dry_run=dry_run,
