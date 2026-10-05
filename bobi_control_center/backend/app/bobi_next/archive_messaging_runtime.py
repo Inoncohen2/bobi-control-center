@@ -25,7 +25,7 @@ from .conversation_handler import (
     build_conversation_handler,
 )
 from .event_reminders import EventReminderStore
-from .integration_runtime import build_archive_storage
+from .integration_runtime import RoutedArchiveStorage
 from .interaction_dispatch import InteractionHandlerResult
 from .media_analyzers import MediaAnalyzerRegistry
 from .media_pipeline import MediaPipeline
@@ -78,7 +78,7 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
         super().__init__(*args, **kwargs)
         self.archive = ArchiveSubsystem(
             self.data_dir,
-            storage=build_archive_storage(self.data_dir),
+            storage=RoutedArchiveStorage(self.data_dir),
         )
         self.reminders = ReminderStore(self.data_dir / "bobi-next-reminders.db")
         self.event_reminders = EventReminderStore(self.data_dir / "bobi-next-event-reminders.db")

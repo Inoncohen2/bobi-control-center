@@ -477,6 +477,12 @@ class ArchiveStore:
             ArchiveRecord(**payload),
         )
 
+    def has_cloud_objects(self) -> bool:
+        # Trash also retains immutable bytes and must remain restorable.
+        return self._db.execute(
+            "SELECT 1 FROM archive_objects WHERE storage_uri LIKE 'bobi-storage://%' LIMIT 1"
+        ).fetchone() is not None
+
     def apply_mutation_once(
         self,
         *,

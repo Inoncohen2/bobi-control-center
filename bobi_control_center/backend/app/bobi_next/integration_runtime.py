@@ -6,6 +6,7 @@ from pathlib import Path
 
 import httpx
 
+from .archive_capture import StoredArchiveBlob
 from .cloud_archive_storage import BobiCloudArchiveStorage
 from .cloud_identity import cloud_subject
 from .integration_store import ExternalIntegration, IntegrationStore
@@ -71,34 +72,90 @@ def build_archive_storage(
             return LocalArchiveStorage(root / "bobi-next-archive-files")
         if mode != "cloud":
             raise IntegrationRuntimeError("archive_storage_mode_invalid")
-
-        archive_type = (
-            "bobi_archive"
-            if integrations.list(integration_type="bobi_archive")
-            else "bobi_storage"
-        )
-        integration = _single_storage(integrations, archive_type)
-        if integration.config.get("archive_enabled") is not True:
-            raise IntegrationRuntimeError(f"{archive_type}_archive_not_enabled")
-
-        vault = EncryptedSecretVault(
-            root / "bobi-next-secrets.db",
-            root / "bobi-next-secrets.key",
-        )
-        try:
-            token = _resolve_storage_token(integration, vault)
-        finally:
-            vault.close()
-
-        storage = BobiStorageClient(integration.endpoint, token, client=client)
-        return BobiCloudArchiveStorage(
-            storage,
-            installation_id=setup.installation_id(),
-            client=client,
-        )
+        return _cloud_archive(root, setup, integrations, client=client)
     finally:
         setup.close()
         integrations.close()
+
+
+def _cloud_archive(
+    root: Path,
+    setup: SetupStore,
+    integrations: IntegrationStore,
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> BobiCloudArchiveStorage:
+    archive_type = (
+        "bobi_archive" if integrations.list(integration_type="bobi_archive") else "bobi_storage"
+    )
+    integration = _single_storage(integrations, archive_type)
+    if integration.config.get("archive_enabled") is not True:
+        raise IntegrationRuntimeError(f"{archive_type}_archive_not_enabled")
+    vault = EncryptedSecretVault(root / "bobi-next-secrets.db", root / "bobi-next-secrets.key")
+    try:
+        token = _resolve_storage_token(integration, vault)
+    finally:
+        vault.close()
+    storage = BobiStorageClient(integration.endpoint, token, client=client)
+    return BobiCloudArchiveStorage(storage, installation_id=setup.installation_id(), client=client)
+
+
+def build_cloud_archive_storage(
+    data_dir: str | Path,
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> BobiCloudArchiveStorage:
+    """Resolve existing cloud reads even when new uploads are explicitly local."""
+    root = Path(data_dir)
+    setup = SetupStore(root / "bobi-next-setup.db")
+    integrations = IntegrationStore(root / "bobi-next-setup.db")
+    try:
+        return _cloud_archive(root, setup, integrations, client=client)
+    finally:
+        setup.close()
+        integrations.close()
+
+
+class RoutedArchiveStorage:
+    """Choose new uploads by setting and existing reads by their exact URI kind.
+
+    Reading a pre-existing local blob in cloud mode is a routed read, never an
+    outage fallback. A failed cloud upload/read cannot switch provider or URI.
+    """
+
+    def __init__(self, data_dir: str | Path, *, client: httpx.AsyncClient | None = None):
+        self.root = Path(data_dir)
+        self.client = client
+        # Validate the selected writer at construction without network I/O.
+        build_archive_storage(self.root, client=client)
+
+    async def upload(
+        self,
+        *,
+        owner_key: str,
+        content: bytes,
+        filename: str,
+        mime_type: str,
+        sha256: str,
+        idempotency_key: str,
+    ) -> StoredArchiveBlob:
+        return await build_archive_storage(self.root, client=self.client).upload(
+            owner_key=owner_key,
+            content=content,
+            filename=filename,
+            mime_type=mime_type,
+            sha256=sha256,
+            idempotency_key=idempotency_key,
+        )
+
+    async def read(self, storage_uri: str, *, max_bytes: int) -> bytes:
+        if storage_uri.startswith("local-archive://"):
+            reader = LocalArchiveStorage(self.root / "bobi-next-archive-files")
+        elif storage_uri.startswith("bobi-storage://"):
+            reader = build_cloud_archive_storage(self.root, client=self.client)
+        else:
+            raise ValueError("archive_provider_uri_invalid")
+        return await reader.read(storage_uri, max_bytes=max_bytes)
 
 
 def build_voucher_wallet(data_dir: str | Path, *, user_key: str) -> VoucherWallet:

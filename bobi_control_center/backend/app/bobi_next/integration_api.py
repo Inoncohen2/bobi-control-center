@@ -6,7 +6,7 @@ local secret vault. API responses never contain the secret value or vault ref.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -14,6 +14,11 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, SecretStr
 
+from .archive_configuration import (
+    ArchiveConfigurationConflict,
+    archive_configuration_guard,
+    archive_provider_change_allowed,
+)
 from .integration_store import ExternalIntegration, IntegrationStore
 from .secret_vault import EncryptedSecretVault, SecretVaultError
 from .supabase_storage import BobiStorageClient
@@ -82,44 +87,55 @@ def create_integration_setup_router(database_path: str | Path) -> APIRouter:
             endpoint = _validate_bobi_storage_endpoint(body.endpoint)
             with _store(path) as store:
                 existing = store.get(body.integration_key)
-                if existing is not None and existing.integration_type != body.integration_type:
-                    raise ValueError("integration_type_change_requires_new_key")
-                if (
-                    existing is not None
-                    and existing.endpoint != endpoint
-                    and body.secret_value is None
-                ):
-                    raise ValueError("integration_endpoint_change_requires_secret")
-                secret_ref = existing.secret_ref if existing is not None else ""
-            if body.secret_value is not None:
-                secret = body.secret_value.get_secret_value()
-                if len(secret) < 32:
-                    raise ValueError("storage_token_invalid")
-                if body.integration_type == "bobi_archive" and (
-                    len(secret) > 512 or any(not "!" <= character <= "~" for character in secret)
-                ):
-                    raise ValueError("storage_token_invalid")
-                with _vault(vault_path, vault_key_path) as vault:
-                    secret_ref = vault.put(
-                        # Each configuration points to an immutable credential
-                        # version. A rejected/racing update cannot replace the
-                        # token referenced by the previously committed config.
-                        f"integration:{body.integration_key}:{uuid4().hex}",
-                        secret,
+                affects_archive = body.integration_type == "bobi_archive" or (
+                    not store.list(integration_type="bobi_archive")
+                    and (
+                        body.config.get("archive_enabled") is True
+                        or (existing and existing.config.get("archive_enabled") is True)
                     )
-            if not secret_ref:
-                raise ValueError("integration_secret_required")
-
-            with _store(path) as store:
-                item = store.upsert(
-                    integration_key=body.integration_key,
-                    integration_type=body.integration_type,
-                    display_name=body.display_name,
-                    enabled=body.enabled,
-                    endpoint=endpoint,
-                    secret_ref=secret_ref,
-                    config=body.config,
                 )
+            guard = archive_configuration_guard(path) if affects_archive else nullcontext()
+            with guard:
+                with _store(path) as store:
+                    existing = store.get(body.integration_key)
+                    if existing is not None and existing.integration_type != body.integration_type:
+                        raise ValueError("integration_type_change_requires_new_key")
+                    if (
+                        existing is not None
+                        and existing.endpoint != endpoint
+                        and body.secret_value is None
+                    ):
+                        raise ValueError("integration_endpoint_change_requires_secret")
+                    secret_ref = existing.secret_ref if existing is not None else ""
+                if affects_archive:
+                    archive_provider_change_allowed(path, endpoint)
+                if body.secret_value is not None:
+                    secret = body.secret_value.get_secret_value()
+                    if len(secret) < 32:
+                        raise ValueError("storage_token_invalid")
+                    if body.integration_type == "bobi_archive" and (
+                        len(secret) > 512 or any(not "!" <= c <= "~" for c in secret)
+                    ):
+                        raise ValueError("storage_token_invalid")
+                    with _vault(vault_path, vault_key_path) as vault:
+                        secret_ref = vault.put(
+                            f"integration:{body.integration_key}:{uuid4().hex}",
+                            secret,
+                        )
+                if not secret_ref:
+                    raise ValueError("integration_secret_required")
+                with _store(path) as store:
+                    item = store.upsert(
+                        integration_key=body.integration_key,
+                        integration_type=body.integration_type,
+                        display_name=body.display_name,
+                        enabled=body.enabled,
+                        endpoint=endpoint,
+                        secret_ref=secret_ref,
+                        config=body.config,
+                    )
+        except ArchiveConfigurationConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except SecretVaultError as exc:
@@ -130,7 +146,16 @@ def create_integration_setup_router(database_path: str | Path) -> APIRouter:
     async def set_enabled(integration_key: str, enabled: bool) -> dict[str, Any]:
         with _store(path) as store:
             try:
-                item = store.set_enabled(integration_key, enabled)
+                existing = store.get(integration_key)
+                affects_archive = existing and (
+                    existing.integration_type == "bobi_archive"
+                    or existing.config.get("archive_enabled") is True
+                )
+                guard = archive_configuration_guard(path) if affects_archive else nullcontext()
+                with guard:
+                    item = store.set_enabled(integration_key, enabled)
+            except ArchiveConfigurationConflict as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
             except KeyError as exc:
                 raise HTTPException(status_code=404, detail="integration_not_found") from exc
         return _view(item)
