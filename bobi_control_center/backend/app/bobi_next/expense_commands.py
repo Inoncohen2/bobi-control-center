@@ -4,10 +4,28 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from dataclasses import dataclass
+from typing import ClassVar
 
 from .archive_mutation_commands import ArchiveMutationCommand
 from .archive_retrieval_commands import parse_archive_target
 from .authorization import UserPolicy
+from .receipt_review import parse_explicit_financial_fields, validate_review_fields
+
+
+@dataclass(slots=True, frozen=True)
+class ManualExpenseCommand:
+    financial_fields: dict[str, str | int]
+    category: str
+    operation: ClassVar[str] = "record_manual_expense"
+
+
+_MANUAL_LEAD = re.compile(
+    r"^(?:(?:בובי|bobi)[,:]?\s+)?(?:(?:בבקשה|please)[,:]?\s+)?"
+    r"(?:(?:רשום|רשמי|תרשום|תרשמי|הוסף|הוסיפי|תוסיף|תוסיפי)\s+הוצאה|"
+    r"(?:record|add)\s+(?:an?\s+)?expense)\s*:", re.I,
+)
+_EXPENSE_REQUIRED = frozenset({"merchant", "document_date", "total_minor", "currency"})
 
 _LEAD = re.compile(
     r"^(?:(?:בובי|bobi)[,:]?\s+)?(?:(?:בבקשה|please)[,:]?\s+)?"
@@ -42,6 +60,57 @@ def validate_expense_category(value: object) -> str:
 
 def expense_requested(text: str) -> bool:
     return _LEAD.match(str(text or "").strip()) is not None
+
+
+def validate_expense_fields(fields: object) -> dict[str, str | int]:
+    validated = validate_review_fields(fields)
+    if (
+        not _EXPENSE_REQUIRED.issubset(validated)
+        or set(validated) - (_EXPENSE_REQUIRED | {"document_number"})
+        or validated["total_minor"] <= 0
+    ):
+        raise ValueError("expense_fields_invalid")
+    return validated
+
+
+def manual_expense_requested(text: str) -> bool:
+    return _MANUAL_LEAD.match(str(text or "").strip()) is not None
+
+
+def parse_manual_expense(text: str) -> ManualExpenseCommand | None:
+    original = str(text or "").strip()
+    if len(original) > 1600 or _UNSAFE.search(original) or any(
+        unicodedata.category(c).startswith("C") for c in original
+    ):
+        return None
+    lead = _MANUAL_LEAD.match(original)
+    if lead is None:
+        return None
+    parts = original[lead.end():].split(";")
+    if not 4 <= len(parts) <= 6:
+        return None
+    category = None
+    financial = []
+    for part in parts:
+        pair = re.split(r"\s*[:=]\s*", part.strip(), maxsplit=1)
+        if len(pair) != 2:
+            return None
+        if " ".join(pair[0].casefold().split()) in {"קטגוריה", "category"}:
+            if category is not None:
+                return None
+            try:
+                category = validate_expense_category(pair[1])
+            except ValueError:
+                return None
+        else:
+            financial.append(part)
+    if category is None:
+        return None
+    fields = parse_explicit_financial_fields(";".join(financial))
+    try:
+        return ManualExpenseCommand(validate_expense_fields(fields), category)
+    except ValueError:
+        return None
 
 
 def parse_expense_record(text: str) -> ArchiveMutationCommand | None:
@@ -94,4 +163,12 @@ def expense_help() -> str:
     return (
         "כדי לרשום הוצאה דרושה קבלה שמורה עם סכום, מטבע, ספק ותאריך שכתבת ואישרת. "
         "לדוגמה: רשום הוצאה מהקבלה של איקאה בקטגוריית בית. לפני הרישום אבקש אישור."
+    )
+
+
+def manual_expense_help() -> str:
+    return (
+        "להוצאה ללא קבלה יש לכתוב סכום חיובי ומטבע, ספק, תאריך וקטגוריה. "
+        "הרישום יישמר רק לאחר אישור.\n"
+        "רשום הוצאה: סכום=35 ILS; ספק=מכולת; תאריך=2026-10-05; קטגוריה=מזון"
     )

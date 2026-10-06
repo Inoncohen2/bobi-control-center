@@ -651,3 +651,67 @@ async def test_cloud_whatsapp_requires_current_explicit_authority_and_permission
                 assert not [r for r in waha.requests if r.method == "GET"]
         finally:
             await flow.close()
+
+
+@pytest.mark.asyncio
+async def test_manual_expense_whatsapp_restart_reply_loss_and_cached_prompt_revocation(
+    archive_endpoint, tmp_path, monkeypatch,
+):
+    _configure_archive(tmp_path / "bobi-next-setup.db", archive_endpoint)
+    waha = _WahaHTTP()
+    understanding = _Understanding()
+    text = "רשום הוצאה: סכום=35.01 ILS; ספק=מכולת; תאריך=2026-10-05; קטגוריה=מזון"
+    async with httpx.AsyncClient(transport=httpx.MockTransport(waha.request)) as client:
+        _inject_waha_http(monkeypatch, client)
+        flow = _WhatsAppFlow(tmp_path, understanding)
+        try:
+            policy = flow.setup.get_user("owner").policy
+            flow.setup.update_user_policy("owner", replace(
+                policy, allowed_capabilities=frozenset({"expenses.write", "expenses.read"}),
+                allowed_domains=frozenset({"expenses"}),
+            ))
+            await flow.send("manual-expense", text, quoted=True)
+            prompt = waha.replies[-1]["text"]
+            assert "35.01 ILS" in prompt and "מכולת" in prompt and "מזון" in prompt
+            pending = flow.runtime.pending_approvals.peek_latest(user_key="owner")
+            assert pending.plans[0].data["source_kind"] == "manual"
+            assert flow.runtime.expenses.get(pending.plans[0].device_id, owner_key="owner") is None
+            await flow.close()
+            flow.open()
+            event = flow.event("manual-confirm", "כן")
+            assert flow.ingest(event).accepted
+            waha.fail_reply_once = True
+            assert (await flow.process()).state == "retry"
+            entry = flow.runtime.expenses.get(pending.plans[0].device_id, owner_key="owner")
+            assert entry.amount_minor == 3501 and entry.source_kind == "manual"
+            assert entry.source_sha256 is None and entry.source_review_request_id == ""
+            await flow.close()
+            flow.open()
+            assert (await flow.process()).state == "completed"
+            assert flow.ingest(event).duplicate
+            await flow.send("manual-summary", "הצג הוצאות לחודש 2026-10")
+            assert "35.01 ILS (1 הוצאה)" in waha.replies[-1]["text"]
+            assert flow.runtime.archive.index.search(owner_key="owner") == ()
+
+            assert flow.ingest(flow.event("manual-private-prompt", text.replace("35.01", "99.99"))).accepted
+            waha.fail_reply_once = True
+            assert (await flow.process()).state == "retry"
+            queued = flow.boundary.messages.get_inbound("waha", "manual-private-prompt")
+            cached = flow.boundary.messages.outbound_for(queued)
+            assert "99.99 ILS" in cached.text
+            sends = sum(request.url.path == "/api/sendText" for request in waha.requests)
+            current_policy = flow.setup.get_user("owner").policy
+            flow.setup.update_user_policy("owner", replace(
+                current_policy, denied_capabilities=frozenset({"expenses.write"}),
+            ))
+            await flow.close()
+            flow.open()
+            blocked = await flow.process()
+            assert blocked.state == "failed" and blocked.last_error.endswith("reply_authorization_denied")
+            assert sum(request.url.path == "/api/sendText" for request in waha.requests) == sends
+            assert flow.boundary.messages.outbound_for(blocked).text == cached.text
+            assert "35.01 ILS (1 הוצאה)" in flow.runtime.expenses.month_reply(owner_key="owner", month="2026-10")
+            assert not waha.files and understanding.texts == []
+            assert not [request for request in waha.requests if request.method == "GET"]
+        finally:
+            await flow.close()

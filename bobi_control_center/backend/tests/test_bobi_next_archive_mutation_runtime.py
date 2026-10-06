@@ -138,7 +138,11 @@ async def test_shadow_confirmation_leaves_pending_and_archive_intact(runtime):
 
 
 @pytest.mark.asyncio
-async def test_ha_approval_path_rejects_archive_before_any_ha_call(runtime):
+@pytest.mark.parametrize("command", [
+    "מחק את המסמך ביטוח",
+    "רשום הוצאה: סכום=35 ILS; ספק=מכולת; תאריך=2026-10-05; קטגוריה=מזון",
+])
+async def test_ha_approval_path_rejects_private_plans_before_any_ha_call(runtime, command):
     from app.bobi_next.approval_continuation import approve_latest_pending
 
     item = await saved(runtime)
@@ -146,7 +150,7 @@ async def test_ha_approval_path_rejects_archive_before_any_ha_call(runtime):
     async def base(msg):
         return MessageResponse("base")
 
-    await runtime._archive_retrieval_handler("waha", base)(message("מחק את המסמך ביטוח"))
+    await runtime._archive_retrieval_handler("waha", base)(message(command))
     result = await approve_latest_pending(
         runtime.pending_approvals, runtime.approvals, NeverHA(), user_key="u1",
         policy_for=policy, owner_token="HA-approver", now_ts=int(time.time()),
@@ -413,6 +417,7 @@ async def test_denied_expense_summary_never_queries_the_ledger(runtime, monkeypa
     ("רשום הוצאה מהקבלה איקאה בקטגוריית בית", "archive.read"),
     ("רשום הוצאה מהקבלה איקאה בקטגוריית בית", "expenses.write"),
     ("הצג הוצאות לחודש 2026-10", "expenses.read"),
+    ("רשום הוצאה: סכום=35 ILS; ספק=מכולת; תאריך=2026-10-05; קטגוריה=מזון", "expenses.write"),
 ])
 async def test_expense_private_dispatch_requires_enabled_identity_and_current_permission(runtime, command, revoked):
     runtime.setup.upsert_provider(provider_key="waha", provider_type="waha", display_name="WAHA")
@@ -430,3 +435,59 @@ async def test_expense_private_dispatch_requires_enabled_identity_and_current_pe
     runtime.policy_for = policy
     runtime.setup.unlink_identity(provider_key="waha", external_id="111@c.us")
     assert not await runtime._private_financial_reply_allowed(request, reply)
+
+
+@pytest.mark.asyncio
+async def test_manual_expense_current_text_poll_approval_and_private_summary_without_archive_access(runtime):
+    command = "רשום הוצאה: סכום=35 ILS; ספק=מכולת; תאריך=2026-10-05; קטגוריה=מזון"
+    calls = []
+
+    async def base(msg):
+        calls.append(msg)
+        return MessageResponse("normal context")
+
+    async def expense_policy(user):
+        return UserPolicy(user, allowed_capabilities=frozenset({"expenses.write", "expenses.read"}),
+                          allowed_domains=frozenset({"expenses"}))
+
+    runtime.policy_for = expense_policy
+    handler = runtime._archive_retrieval_handler("waha", base)
+    await handler(message(command, "voice-manual", kind="voice"))
+    await handler(message(command, "document-manual", kind="document"))
+    await handler(message("תסביר", "quote-manual", metadata={"quoted": {"text": command}}))
+    assert len(calls) == 3 and runtime.pending_approvals.peek_latest(user_key="u1") is None
+    await handler(message("רשום הוצאה: לפי הקובץ", "incomplete"))
+    assert len(calls) == 3 and runtime.pending_approvals.peek_latest(user_key="u1") is None
+    prompt = await handler(message(command, "manual", metadata={"quoted": {"text": "סכום=999 ILS"}}))
+    assert "35.00 ILS" in prompt.text and "999" not in prompt.text and "כן או לא" in prompt.text
+    pending = runtime.pending_approvals.peek_latest(user_key="u1")
+    assert pending.plans[0].data["source_kind"] == "manual"
+    selection = InteractionSelection(
+        dispatch_id="manual-dispatch", provider="waha", interaction_id="poll",
+        poll_message_id="manual-poll", chat_id="chat", user_key="u1",
+        context_key=f"approval:{pending.approval_request_id}", selected_keys=("approve",),
+        source_event_id="vote", provider_timestamp=100,
+    )
+    assert "נרשמה ואומתה" in (await runtime.interaction_handlers["approval"](selection)).response_text
+    assert "נרשמה ואומתה" in (await runtime.interaction_handlers["approval"](selection)).response_text
+    summary = (await handler(message("הצג הוצאות לחודש 2026-10", "manual-summary"))).text
+    assert "35.00 ILS (1 הוצאה)" in summary and "מכולת" in summary
+    assert runtime.archive.index.search(owner_key="u1") == ()
+
+
+@pytest.mark.asyncio
+async def test_manual_prompt_dispatch_requires_expense_permission_without_archive_read(runtime):
+    runtime.setup.upsert_provider(provider_key="waha", provider_type="waha", display_name="WAHA")
+    runtime.setup.create_user(display_name="Owner", role="owner", user_key="u1")
+    runtime.setup.link_identity(provider_key="waha", external_id="111@c.us", user_key="u1")
+    request = replace(message(
+        "רשום הוצאה: סכום=35 ILS; ספק=מכולת; תאריך=2026-10-05; קטגוריה=מזון",
+    ), chat_id="111@c.us")
+    reply = OutboundMessage("key", "waha", request.chat_id, request.message_id, "private", "prepared")
+
+    async def expense_policy(user):
+        return UserPolicy(user, allowed_capabilities=frozenset({"expenses.write"}),
+                          allowed_domains=frozenset({"expenses"}))
+
+    runtime.policy_for = expense_policy
+    assert await runtime._private_financial_reply_allowed(request, reply)

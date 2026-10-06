@@ -7,6 +7,7 @@ one transaction. No OCR fallback, currency conversion, HA or cloud writes.
 from __future__ import annotations
 
 import calendar
+import hashlib
 import json
 import re
 import sqlite3
@@ -14,7 +15,7 @@ import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .expense_commands import validate_expense_category
+from .expense_commands import validate_expense_category, validate_expense_fields
 from .receipt_review import (
     display_financial_text,
     format_financial_fields,
@@ -25,6 +26,18 @@ from .receipt_review import (
 ALREADY_RECORDED = "הקבלה כבר רשומה כהוצאה. לא נרשמה הוצאה נוספת."
 EXPENSE_RECORDED = "✅ ההוצאה נרשמה ואומתה."
 _REQUIRED = frozenset({"merchant", "document_date", "total_minor", "currency"})
+_RECORD_COLUMNS = (
+    "expense_id,owner_key,source_object_id,source_sha256,source_revision,"
+    "source_review_request_id,merchant,document_number,document_date,"
+    "amount_minor,currency,category,created_ts"
+)
+
+
+def manual_expense_id(*, owner_key: str, request_id: str) -> str:
+    if not owner_key or not request_id:
+        raise ValueError("expense_identity_required")
+    binding = json.dumps([owner_key, request_id], separators=(",", ":"))
+    return "manual-" + hashlib.sha256(binding.encode()).hexdigest()
 
 
 def expense_source_fields(metadata: dict, *, owner_key: str, sha256: str) -> dict:
@@ -41,7 +54,7 @@ class ExpenseRecord:
     expense_id: str
     owner_key: str
     source_object_id: str
-    source_sha256: str
+    source_sha256: str | None
     source_revision: int
     source_review_request_id: str
     merchant: str
@@ -51,6 +64,7 @@ class ExpenseRecord:
     currency: str
     category: str
     created_ts: int
+    source_kind: str = "receipt"
 
 
 @dataclass(slots=True, frozen=True)
@@ -69,13 +83,28 @@ class ExpenseLedger:
         self._db = sqlite3.connect(archive_path)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL")
-        # ArchiveStore owns the archive schema and must be initialized first.
-        self._db.executescript("""
-            CREATE TABLE IF NOT EXISTS expense_records (
+        try:
+            self._migrate()
+        except BaseException:
+            self._db.close()
+            raise
+
+    def _migrate(self) -> None:
+        # Serialize schema inspection too: two starting workers must not both
+        # attempt the same table rebuild. No executescript implicit commit.
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            columns = {
+                row["name"] for row in self._db.execute("PRAGMA table_info(expense_records)")
+            }
+            legacy = bool(columns) and "source_kind" not in columns
+            if legacy:
+                self._db.execute("ALTER TABLE expense_records RENAME TO expense_records_legacy")
+            self._db.execute("""CREATE TABLE IF NOT EXISTS expense_records (
                 expense_id TEXT PRIMARY KEY,
                 owner_key TEXT NOT NULL,
                 source_object_id TEXT NOT NULL,
-                source_sha256 TEXT NOT NULL,
+                source_sha256 TEXT,
                 source_revision INTEGER NOT NULL,
                 source_review_request_id TEXT NOT NULL,
                 merchant TEXT NOT NULL,
@@ -85,18 +114,47 @@ class ExpenseLedger:
                 currency TEXT NOT NULL CHECK(currency IN ('ILS','USD','EUR','GBP')),
                 category TEXT NOT NULL,
                 created_ts INTEGER NOT NULL,
-                UNIQUE(owner_key, source_sha256)
-            );
-            CREATE INDEX IF NOT EXISTS ix_expense_owner_date
-                ON expense_records(owner_key, document_date, created_ts);
-            CREATE TABLE IF NOT EXISTS expense_receipts (
+                source_kind TEXT NOT NULL DEFAULT 'receipt'
+                    CHECK(source_kind IN ('receipt','manual')),
+                UNIQUE(owner_key, source_sha256),
+                CHECK (
+                    (source_kind='receipt' AND source_sha256 IS NOT NULL
+                        AND length(source_sha256)=64)
+                    OR (source_kind='manual' AND source_sha256 IS NULL AND source_object_id=''
+                        AND source_revision=0 AND source_review_request_id='')
+                )
+            )""")
+            if legacy:
+                self._db.execute(
+                    f"INSERT INTO expense_records({_RECORD_COLUMNS},source_kind) "
+                    f"SELECT {_RECORD_COLUMNS},'receipt' FROM expense_records_legacy"
+                )
+                before = self._db.execute(
+                    "SELECT COUNT(*) FROM expense_records_legacy"
+                ).fetchone()[0]
+                after = self._db.execute("SELECT COUNT(*) FROM expense_records").fetchone()[0]
+                changed = self._db.execute(
+                    f"SELECT {_RECORD_COLUMNS} FROM expense_records_legacy "
+                    f"EXCEPT SELECT {_RECORD_COLUMNS} FROM expense_records LIMIT 1"
+                ).fetchone()
+                if before != after or changed is not None:
+                    raise RuntimeError("expense_migration_not_verified")
+                self._db.execute("DROP TABLE expense_records_legacy")
+            self._db.execute(
+                "CREATE INDEX IF NOT EXISTS ix_expense_owner_date "
+                "ON expense_records(owner_key, document_date, created_ts)"
+            )
+            self._db.execute("""CREATE TABLE IF NOT EXISTS expense_receipts (
                 request_id TEXT PRIMARY KEY,
                 owner_key TEXT NOT NULL,
                 plan_hash TEXT NOT NULL,
                 record_json TEXT NOT NULL,
                 duplicate INTEGER NOT NULL
-            );
-        """)
+            )""")
+            self._db.commit()
+        except BaseException:
+            self._db.rollback()
+            raise
 
     def close(self) -> None:
         self._db.close()
@@ -110,6 +168,41 @@ class ExpenseLedger:
             "SELECT * FROM expense_records WHERE owner_key=? AND source_sha256=?",
             (owner_key, sha256),
         ).fetchone())
+
+    def get(self, expense_id: str, *, owner_key: str) -> ExpenseRecord | None:
+        return self._record(self._db.execute(
+            "SELECT * FROM expense_records WHERE expense_id=? AND owner_key=?",
+            (expense_id, owner_key),
+        ).fetchone())
+
+    def manual_state_guard(self, expense_id: str, *, owner_key: str) -> dict:
+        return {
+            "expense_id": expense_id, "owner_key": owner_key,
+            "status": "exists" if self.get(expense_id, owner_key=owner_key) else "absent",
+        }
+
+    def _insert_verified(self, record: ExpenseRecord) -> None:
+        self._db.execute(
+            f"INSERT INTO expense_records({_RECORD_COLUMNS},source_kind) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(asdict(record).values()),
+        )
+        if self.get(record.expense_id, owner_key=record.owner_key) != record:
+            raise RuntimeError("expense_not_verified")
+
+    def _commit_receipt(
+        self, *, request_id: str, owner_key: str, plan_hash: str, record: ExpenseRecord,
+        duplicate: bool = False,
+    ) -> ExpenseReceipt:
+        self._db.execute(
+            "INSERT INTO expense_receipts VALUES(?,?,?,?,?)",
+            (request_id, owner_key, plan_hash, json.dumps(asdict(record), ensure_ascii=False),
+             int(duplicate)),
+        )
+        receipt = self.receipt(request_id, owner_key=owner_key)
+        if receipt is None or receipt.record != record or receipt.plan_hash != plan_hash:
+            raise RuntimeError("expense_receipt_not_verified")
+        self._db.commit()
+        return receipt
 
     def receipt(self, request_id: str, *, owner_key: str) -> ExpenseReceipt | None:
         row = self._db.execute(
@@ -192,23 +285,46 @@ class ExpenseLedger:
                 category, now_ts,
             )
             if existing is None:
-                self._db.execute(
-                    "INSERT INTO expense_records VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    tuple(asdict(record).values()),
-                )
+                self._insert_verified(record)
             if self.for_source(owner_key=owner_key, sha256=sha256) != record:
                 raise RuntimeError("expense_not_verified")
-            self._db.execute(
-                "INSERT INTO expense_receipts VALUES(?,?,?,?,?)",
-                (request_id, owner_key, plan_hash,
-                 json.dumps(asdict(record), ensure_ascii=False),
-                 int(existing is not None)),
+            return self._commit_receipt(
+                request_id=request_id, owner_key=owner_key, plan_hash=plan_hash, record=record,
+                duplicate=existing is not None,
             )
-            receipt = self.receipt(request_id, owner_key=owner_key)
-            if receipt is None or receipt.record != record or receipt.plan_hash != plan_hash:
-                raise RuntimeError("expense_receipt_not_verified")
-            self._db.commit()
-            return receipt
+        except BaseException:
+            self._db.rollback()
+            raise
+
+    def record_manual_once(
+        self, *, request_id: str, owner_key: str, plan_hash: str, expense_id: str,
+        fields: dict, category: str, now_ts: int,
+    ) -> ExpenseReceipt:
+        if not plan_hash or expense_id != manual_expense_id(
+            owner_key=owner_key, request_id=request_id,
+        ):
+            raise ValueError("expense_identity_required")
+        validated = validate_expense_fields(fields)
+        category = validate_expense_category(category)
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            prior = self.receipt(request_id, owner_key=owner_key)
+            if prior is not None:
+                if prior.plan_hash != plan_hash:
+                    raise ValueError("expense_request_plan_changed")
+                self._db.commit()
+                return prior
+            if self.get(expense_id, owner_key=owner_key) is not None:
+                raise ValueError("expense_state_changed")
+            record = ExpenseRecord(
+                expense_id, owner_key, "", None, 0, "", str(validated["merchant"]),
+                str(validated.get("document_number", "")), str(validated["document_date"]),
+                validated["total_minor"], str(validated["currency"]), category, now_ts, "manual",
+            )
+            self._insert_verified(record)
+            return self._commit_receipt(
+                request_id=request_id, owner_key=owner_key, plan_hash=plan_hash, record=record,
+            )
         except BaseException:
             self._db.rollback()
             raise

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -45,7 +46,13 @@ async def _approve_claimed_pending(
     executed_count = 0
     verified_count = 0
     try:
-        if any(plan.domain == "archive" for plan in pending.plans):
+        # Private Bobi plans have their own executor and state guards. Validate
+        # the entire batch before even reading one target from Home Assistant.
+        if any(
+            plan.domain in {"archive", "expenses"}
+            or re.fullmatch(r"[a-z0-9_]+\.[a-z0-9_]+", plan.entity_id) is None
+            for plan in pending.plans
+        ):
             pending_store.fail(
                 request_id, owner_token=owner_token, error="non_ha_approval_plan", now_ts=now_ts,
             )

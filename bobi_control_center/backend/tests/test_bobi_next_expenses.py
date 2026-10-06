@@ -1,20 +1,28 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import pytest
 
 from app.bobi_next.archive_mutations import ArchiveMutationService
 from app.bobi_next.archive_store import ArchiveStore, sha256_hex
 from app.bobi_next.authorization import ApprovalStore, RiskLevel, UserPolicy
-from app.bobi_next.expense_commands import parse_expense_month, parse_expense_record
+from app.bobi_next.expense_commands import (
+    ManualExpenseCommand,
+    parse_expense_month,
+    parse_expense_record,
+    parse_manual_expense,
+)
 from app.bobi_next.expense_ledger import (
     ALREADY_RECORDED,
     EXPENSE_RECORDED,
     ExpenseLedger,
     expense_source_fields,
+    manual_expense_id,
 )
 from app.bobi_next.pending_approval import PendingApprovalStore
 from app.bobi_next.receipt_review import parse_receipt_review
@@ -22,6 +30,7 @@ from app.bobi_next.request_ledger import RequestLedger
 
 RECORD = "רשום הוצאה מהקבלה של איקאה בקטגוריית בית"
 REVIEW = "עדכן את פרטי הקבלה איקאה: סכום=123.45 ILS; ספק=איקאה; תאריך=2026-10-05"
+MANUAL = "רשום הוצאה: סכום=35.01 ILS; ספק=מכולת; תאריך=2026-10-05; קטגוריה=מזון"
 
 
 def open_system(path):
@@ -55,7 +64,7 @@ def receipt(system, *, owner="u1", title="איקאה", content=b"receipt", metad
 
 
 def request(system, text=RECORD, *, key="expense", policy=None, now=1002, dry_run=False):
-    command = parse_expense_record(text) or parse_receipt_review(text)
+    command = parse_manual_expense(text) or parse_expense_record(text) or parse_receipt_review(text)
     assert command is not None
     return system.execute_command(
         command, request_id=key, user_key="u1", provider="waha", chat_id="chat",
@@ -313,7 +322,9 @@ def test_month_summary_keeps_currencies_separate_and_covers_all_rows(system):
     with system.expenses._db:
         for i in range(23):
             system.expenses._db.execute(
-                "INSERT INTO expense_records VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO expense_records(expense_id,owner_key,source_object_id,source_sha256,"
+                "source_revision,source_review_request_id,merchant,document_number,document_date,"
+                "amount_minor,currency,category,created_ts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (str(i), "u1", str(i), sha256_hex(str(i).encode()), 1, "review", "merchant", "", "2026-10-05",
                  1 if i < 22 else 100, "ILS" if i < 22 else "USD", "home", 1000 + i),
             )
@@ -364,3 +375,232 @@ def test_concurrent_sqlite_executors_commit_one_verified_expense_for_the_same_di
     assert sum(result.duplicate for result in results) == 1
     assert results[0].record == results[1].record
     assert "123.45 ILS (1 הוצאה)" in system.expenses.month_reply(owner_key="u1", month="2026-10")
+
+
+@pytest.mark.parametrize("text", [
+    MANUAL, MANUAL.replace("רשום", "רשמי"),
+    "please record an expense: total=35.01 USD; merchant=shop; date=2026-10-05; category=food",
+    MANUAL.replace("2026-10-05", "5/10/2026"), MANUAL + "; מספר=ABC-12",
+])
+def test_manual_expense_parser_accepts_only_complete_typed_values(text):
+    command = parse_manual_expense(text)
+    assert isinstance(command, ManualExpenseCommand)
+    assert command.financial_fields["total_minor"] == 3501
+    assert command.financial_fields["document_date"] == "2026-10-05"
+    assert command.category in {"מזון", "food"}
+
+
+@pytest.mark.parametrize("text", [
+    "אל " + MANUAL, MANUAL + "?", '"' + MANUAL + '"', "הוא אמר: " + MANUAL,
+    MANUAL + " מחר", MANUAL + " ואז שלם", MANUAL + "\nכן", MANUAL + "\u200b",
+    MANUAL.replace("35.01 ILS", "35.01"), MANUAL.replace("ILS", "AUD"),
+    MANUAL.replace("35.01", "-1"), MANUAL.replace("35.01", "0"),
+    MANUAL.replace("35.01", "1e3"), MANUAL.replace("35.01", "35.012"),
+    MANUAL.replace("35.01", "35,012"),
+    MANUAL.replace("ספק=מכולת; ", ""), MANUAL.replace("תאריך=2026-10-05; ", ""),
+    MANUAL.replace("; קטגוריה=מזון", ""), MANUAL.replace("2026-10-05", "2026-02-30"),
+    MANUAL.replace("2026-10-05", "היום"), MANUAL + "; category=home",
+    MANUAL + "; supplier=other", MANUAL + "; מס=1 ILS", MANUAL + "; due date=2026-10-05",
+    MANUAL + "; unknown=value", MANUAL.replace("מכולת", "https://private.invalid"),
+    "רשום הוצאה: לפי הקובץ", "רשום הוצאה: כמו קודם",
+])
+def test_manual_expense_parser_never_fills_missing_fields_or_accepts_other_authority(text):
+    assert parse_manual_expense(text) is None
+
+
+def test_manual_expense_has_independent_approval_without_archive_access(system, monkeypatch):
+    def forbidden_archive(**kwargs):
+        raise AssertionError("manual expenses must not search receipts")
+
+    monkeypatch.setattr(system.archive, "search", forbidden_archive)
+    policy = UserPolicy(
+        "u1", allowed_capabilities=frozenset({"expenses.write"}),
+        allowed_domains=frozenset({"expenses"}), max_without_approval=RiskLevel.CRITICAL,
+    )
+    prompt = request(system, MANUAL, policy=policy)
+    assert "35.01 ILS" in prompt and "מכולת" in prompt and "מזון" in prompt and "כן או לא" in prompt
+    pending = system.pending.peek_latest(user_key="u1")
+    plan = pending.plans[0]
+    assert plan.data["source_kind"] == "manual" and plan.requires_confirmation
+    assert plan.expected["status"] == "absent"
+    assert confirm(system, policy=policy) == EXPENSE_RECORDED
+    entry = system.expenses.get(plan.device_id, owner_key="u1")
+    assert entry.amount_minor == 3501 and entry.source_kind == "manual"
+    assert entry.source_sha256 is None and entry.source_object_id == ""
+    assert entry.source_review_request_id == "" and entry.source_revision == 0
+    assert "35.01 ILS (1 הוצאה)" in system.expenses.month_reply(owner_key="u1", month="2026-10")
+    assert system.expenses.get(plan.device_id, owner_key="u2") is None
+
+
+@pytest.mark.parametrize("policy", [
+    UserPolicy("u2"), UserPolicy("u1", can_approve=False),
+    UserPolicy("u1", allowed_capabilities=frozenset({"expenses.read"})),
+    UserPolicy("u1", allowed_domains=frozenset({"archive"})),
+    UserPolicy("u1", denied_capabilities=frozenset({"expenses.write"})),
+    UserPolicy("u1", denied_actions=frozenset({"record"})),
+    UserPolicy("u1", denied_actions=frozenset({"expenses.record"})),
+])
+def test_manual_expense_permissions_are_checked_before_pending_creation(system, policy):
+    assert "כן או לא" not in request(system, MANUAL, policy=policy)
+    assert system.pending.peek_latest(user_key="u1") is None
+    assert "אין הוצאות" in system.expenses.month_reply(owner_key="u1", month="2026-10")
+
+
+def test_identical_manual_expenses_are_distinct_only_with_separate_requests_and_approvals(system):
+    assert "כן או לא" in request(system, MANUAL)
+    assert confirm(system) == EXPENSE_RECORDED
+    assert request(system, MANUAL) == EXPENSE_RECORDED  # Same provider request replay.
+    assert confirm(system) == EXPENSE_RECORDED
+    assert "כן או לא" in request(system, MANUAL, key="another", now=1004)
+    confirm(system, now=1005)  # Old yes remains bound to the first exact prompt.
+    assert "35.01 ILS (1 הוצאה)" in system.expenses.month_reply(owner_key="u1", month="2026-10")
+    assert confirm(system, key="another-yes", now=1005) == EXPENSE_RECORDED
+    assert "70.02 ILS (2 הוצאות)" in system.expenses.month_reply(owner_key="u1", month="2026-10")
+
+
+def test_manual_restart_permission_revocation_and_exact_original_values(system, tmp_path):
+    request(system, MANUAL)
+    close_system(system)
+    system.__dict__.update(open_system(tmp_path).__dict__)
+    assert "35.01 ILS" in request(system, MANUAL)
+    denied = UserPolicy("u1", denied_actions=frozenset({"expenses.record"}))
+    assert "✅" not in confirm(system, policy=denied)
+    assert "אין הוצאות" in system.expenses.month_reply(owner_key="u1", month="2026-10")
+    request(system, MANUAL.replace("35.01", "12.34"), key="new", now=1004)
+    assert confirm(system, key="new-yes", now=1005) == EXPENSE_RECORDED
+    assert "12.34 ILS (1 הוצאה)" in system.expenses.month_reply(owner_key="u1", month="2026-10")
+
+
+def test_manual_execution_crash_recovery_skips_a_second_write(system, monkeypatch):
+    request(system, MANUAL)
+    complete = system.pending.complete
+
+    def interrupted(*args, **kwargs):
+        raise RuntimeError("simulated_restart")
+
+    monkeypatch.setattr(system.pending, "complete", interrupted)
+    with pytest.raises(RuntimeError, match="simulated_restart"):
+        confirm(system)
+    monkeypatch.setattr(system.pending, "complete", complete)
+    assert confirm(system, policy=UserPolicy("u1", can_approve=False)) == EXPENSE_RECORDED
+    assert "35.01 ILS (1 הוצאה)" in system.expenses.month_reply(owner_key="u1", month="2026-10")
+
+
+def test_shadow_and_forged_manual_authority_do_not_claim_or_create_a_record(system):
+    command = parse_manual_expense(MANUAL)
+    assert "Shadow" in request(system, MANUAL, dry_run=True)
+    assert system.requests.get("expense") is None
+    response = system.execute_command(
+        command, request_id="forged", user_key="u1", provider="waha", chat_id="chat",
+        input_text="תסביר את התמונה", policy=UserPolicy("u1"), now_ts=1000,
+    )
+    assert "ערכים מפורשים" in response and system.requests.get("forged") is None
+
+
+@pytest.mark.parametrize("change", ["id", "owner", "capability", "confirmation", "receipt", "float"])
+def test_manual_executor_rejects_forged_target_provenance_and_fields(system, change):
+    request(system, MANUAL)
+    plan = system.pending.peek_latest(user_key="u1").plans[0]
+    if change == "confirmation":
+        plan = replace(plan, requires_confirmation=False)
+    elif change == "capability":
+        plan = replace(plan, capability="archive.write")
+    elif change == "id":
+        plan = replace(plan, device_id="another")
+    else:
+        data = {**plan.data, "expense_fields": dict(plan.data["expense_fields"])}
+        if change == "owner":
+            data["owner_key"] = "u2"
+        elif change == "receipt":
+            data["object_id"] = "quoted-file"
+        else:
+            data["expense_fields"]["total_minor"] = 3501.0
+        plan = replace(plan, data=data)
+    with pytest.raises(ValueError):
+        system._execute(plan, user_key="u1", now_ts=1003)
+    assert "אין הוצאות" in system.expenses.month_reply(owner_key="u1", month="2026-10")
+
+
+def test_two_manual_sqlite_executors_replay_one_atomic_request(system):
+    command = parse_manual_expense(MANUAL)
+    barrier = threading.Barrier(2, timeout=10)
+
+    def execute(index):
+        ledger = ExpenseLedger(system.archive.path)
+        try:
+            barrier.wait()
+            return ledger.record_manual_once(
+                request_id="same", owner_key="u1", plan_hash="exact-plan",
+                expense_id=manual_expense_id(owner_key="u1", request_id="same"),
+                fields=command.financial_fields, category=command.category, now_ts=1003,
+            )
+        finally:
+            ledger.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(execute, (1, 2)))
+    assert results[0] == results[1]
+    assert "35.01 ILS (1 הוצאה)" in system.expenses.month_reply(owner_key="u1", month="2026-10")
+
+
+def _legacy_expense_database(path, entry, *, corrupt=False):
+    # Exact v1 shape, including its NOT NULL digest and uniqueness constraint.
+    fields = asdict(entry)
+    fields.pop("source_kind")
+    if corrupt:
+        fields["source_sha256"] = "damaged"
+    with sqlite3.connect(path) as db:
+        db.execute("""CREATE TABLE expense_records (
+            expense_id TEXT PRIMARY KEY,owner_key TEXT NOT NULL,source_object_id TEXT NOT NULL,
+            source_sha256 TEXT NOT NULL,source_revision INTEGER NOT NULL,
+            source_review_request_id TEXT NOT NULL,merchant TEXT NOT NULL,document_number TEXT NOT NULL,
+            document_date TEXT NOT NULL,amount_minor INTEGER NOT NULL CHECK(amount_minor>0),
+            currency TEXT NOT NULL,category TEXT NOT NULL,created_ts INTEGER NOT NULL,
+            UNIQUE(owner_key,source_sha256)
+        )""")
+        db.execute("INSERT INTO expense_records VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(fields.values()))
+        db.execute("""CREATE TABLE expense_receipts (
+            request_id TEXT PRIMARY KEY,owner_key TEXT NOT NULL,plan_hash TEXT NOT NULL,
+            record_json TEXT NOT NULL,duplicate INTEGER NOT NULL
+        )""")
+        db.execute("INSERT INTO expense_receipts VALUES(?,?,?,?,?)", (
+            "old-expense", entry.owner_key, "old-plan", json.dumps(fields), 0,
+        ))
+
+
+def test_v1_upgrade_preserves_all_receipt_fields_receipts_and_digest_uniqueness(system, tmp_path):
+    item = reviewed(system)
+    request(system)
+    confirm(system)
+    entry = system.expenses.for_source(owner_key="u1", sha256=item.sha256)
+    path = tmp_path / "v1.db"
+    _legacy_expense_database(path, entry)
+    for _ in range(2):
+        ledger = ExpenseLedger(path)
+        try:
+            assert ledger.for_source(owner_key="u1", sha256=item.sha256) == entry
+            assert ledger.receipt("old-expense", owner_key="u1").record == entry
+            assert ledger.receipt("old-expense", owner_key="u1").plan_hash == "old-plan"
+            assert ledger.get(entry.expense_id, owner_key="u2") is None
+            with pytest.raises(sqlite3.IntegrityError):
+                ledger._insert_verified(replace(entry, expense_id="duplicate"))
+            ledger._db.rollback()
+            assert "123.45 ILS (1 הוצאה)" in ledger.month_reply(owner_key="u1", month="2026-10")
+        finally:
+            ledger.close()
+
+
+def test_failed_upgrade_rolls_back_the_schema_and_keeps_legacy_data(system, tmp_path):
+    item = reviewed(system)
+    request(system)
+    confirm(system)
+    entry = system.expenses.for_source(owner_key="u1", sha256=item.sha256)
+    path = tmp_path / "damaged-v1.db"
+    _legacy_expense_database(path, entry, corrupt=True)
+    with pytest.raises(sqlite3.IntegrityError):
+        ExpenseLedger(path)
+    with sqlite3.connect(path) as db:
+        assert "source_kind" not in {row[1] for row in db.execute("PRAGMA table_info(expense_records)")}
+        assert db.execute("SELECT source_sha256 FROM expense_records").fetchone()[0] == "damaged"
+        assert db.execute("SELECT COUNT(*) FROM expense_receipts").fetchone()[0] == 1
+        assert db.execute("SELECT 1 FROM sqlite_master WHERE name='expense_records_legacy'").fetchone() is None

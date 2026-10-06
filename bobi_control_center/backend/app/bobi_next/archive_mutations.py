@@ -23,13 +23,21 @@ from .authorization import (
     plan_fingerprint,
     state_fingerprint,
 )
-from .expense_commands import expense_allowed, parse_expense_record, validate_expense_category
+from .expense_commands import (
+    ManualExpenseCommand,
+    expense_allowed,
+    parse_expense_record,
+    parse_manual_expense,
+    validate_expense_category,
+    validate_expense_fields,
+)
 from .expense_ledger import (
     ALREADY_RECORDED,
     EXPENSE_RECORDED,
     ExpenseLedger,
     ExpenseReceipt,
     expense_source_fields,
+    manual_expense_id,
 )
 from .models import ActionPlan
 from .pending_approval import PendingApproval, PendingApprovalStore
@@ -98,8 +106,10 @@ class ArchiveMutationService:
 
     @staticmethod
     def _command_allowed(
-        command: ArchiveMutationCommand, policy: UserPolicy, user_key: str,
+        command: ArchiveMutationCommand | ManualExpenseCommand, policy: UserPolicy, user_key: str,
     ) -> bool:
+        if isinstance(command, ManualExpenseCommand):
+            return expense_allowed(policy, user_key=user_key, action="record")
         if command.operation == "record_expense":
             return expense_allowed(
                 policy, user_key=user_key, action="record",
@@ -110,7 +120,7 @@ class ArchiveMutationService:
 
     def execute_command(
         self,
-        command: ArchiveMutationCommand,
+        command: ArchiveMutationCommand | ManualExpenseCommand,
         *,
         request_id: str,
         user_key: str,
@@ -122,16 +132,22 @@ class ArchiveMutationService:
         dry_run: bool = False,
     ) -> str:
         if not self._command_allowed(command, policy, user_key):
+            if isinstance(command, ManualExpenseCommand):
+                return "אין הרשאה לרשום הוצאה."
             if command.operation == "record_expense":
                 return "אין הרשאה לרשום הוצאה מהקבלה."
             return "אין הרשאה לשנות את המסמך בארכיון."
+        if isinstance(command, ManualExpenseCommand) and (
+            parse_manual_expense(input_text) != command
+        ):
+            return "נדרשים ערכים מפורשים בהודעה הנוכחית. לא נרשמה הוצאה."
         if command.operation == "record_expense" and parse_expense_record(input_text) != command:
             return "נדרשת הוראה מפורשת בהודעה הנוכחית. לא נרשמה הוצאה."
         if command.operation == "review" and parse_receipt_review(input_text) != command:
             return "נדרשים ערכים מפורשים בהודעה הנוכחית. פרטי המסמך לא שונו."
         if dry_run:
             return "הבקשה נבדקה במצב Shadow. לא נרשמה הוצאה." if (
-                command.operation == "record_expense"
+                command.operation in {"record_expense", "record_manual_expense"}
             ) else "הבקשה נבדקה במצב Shadow. הארכיון לא שונה."
         prior = self.requests.get(request_id)
         if prior and (prior.user_key != user_key or prior.input_text != input_text):
@@ -214,7 +230,7 @@ class ArchiveMutationService:
 
     def _prepare_command(
         self,
-        command: ArchiveMutationCommand,
+        command: ArchiveMutationCommand | ManualExpenseCommand,
         *,
         request_id: str,
         user_key: str,
@@ -228,6 +244,31 @@ class ArchiveMutationService:
             if existing.user_key != user_key:
                 raise ValueError("archive_approval_owner_mismatch")
             return _prompt(existing), "archive_approval_required"
+        if isinstance(command, ManualExpenseCommand):
+            if self.expenses is None:
+                raise ValueError("expense_ledger_unavailable")
+            fields = validate_expense_fields(command.financial_fields)
+            category = validate_expense_category(command.category)
+            expense_id = manual_expense_id(owner_key=user_key, request_id=request_id)
+            plan = ActionPlan(
+                request_id=request_id, device_id=expense_id, entity_id=f"expense:{expense_id}",
+                domain="expenses", action="record", capability="expenses.write",
+                data={
+                    "expense_id": expense_id, "owner_key": user_key, "expense_fields": fields,
+                    "category": category, "source_kind": "manual",
+                    "provider": provider, "chat_hash": _chat_hash(chat_id),
+                },
+                expected=self.expenses.manual_state_guard(expense_id, owner_key=user_key),
+                requires_confirmation=True,
+            )
+            if plan.expected["status"] != "absent":
+                raise ValueError("expense_state_changed")
+            summary = (
+                "לרשום הוצאה ללא קבלה עם הפרטים שכתבת?\n"
+                + format_financial_fields(fields)
+                + f"\nקטגוריה: {category}"
+            )
+            return self._prepare_plan(plan, summary=summary, policy=policy, now_ts=now_ts)
         records = self.archive.search(
             owner_key=user_key,
             query=command.query,
@@ -295,35 +336,41 @@ class ArchiveMutationService:
             expected=guard,
             requires_confirmation=command.operation in {"delete", "review", "record_expense"},
         )
+        summary = (
+            f'להעביר את המסמך "{record.title}" לסל המחזור?'
+            if command.operation == "delete"
+            else f'לאשר שינוי של המסמך "{record.title}"?'
+        )
+        if command.operation == "review":
+            summary = (
+                f'לעדכן במסמך "{display_financial_text(record.title)}" את הפרטים שכתבת?\n'
+                + format_financial_fields(command.financial_fields)
+                + "\nרק השדות המפורשים האלה מתעדכנים. יתר החילוץ דורש בדיקה."
+            )
+        if expense_fields:
+            summary = (
+                f'לרשום הוצאה מהקבלה "{display_financial_text(record.title)}"?\n'
+                + format_financial_fields(expense_fields)
+                + f"\nקטגוריה: {command.category}\nהסכום והפרטים האלה יירשמו ביומן ההוצאות."
+            )
+        return self._prepare_plan(plan, summary=summary, policy=policy, now_ts=now_ts)
+
+    def _prepare_plan(
+        self, plan: ActionPlan, *, summary: str, policy: UserPolicy, now_ts: int,
+    ) -> tuple[str, str]:
+        user_key = str(plan.data["owner_key"])
         provenance = RequestProvenance(explicit_target_ids=frozenset({plan.entity_id}))
         decision = authorize_plan(plan, policy=policy, provenance=provenance)
         if decision.requires_approval:
             if not policy.can_approve:
                 return "הפעולה דורשת אישור של משתמש מורשה.", "blocked"
-            summary = (
-                f'להעביר את המסמך "{record.title}" לסל המחזור?'
-                if command.operation == "delete"
-                else f'לאשר שינוי של המסמך "{record.title}"?'
-            )
-            if command.operation == "review":
-                summary = (
-                    f'לעדכן במסמך "{display_financial_text(record.title)}" את הפרטים שכתבת?\n'
-                    + format_financial_fields(command.financial_fields)
-                    + "\nרק השדות המפורשים האלה מתעדכנים. יתר החילוץ דורש בדיקה."
-                )
-            if expense_fields:
-                summary = (
-                    f'לרשום הוצאה מהקבלה "{display_financial_text(record.title)}"?\n'
-                    + format_financial_fields(expense_fields)
-                    + f"\nקטגוריה: {command.category}\nהסכום והפרטים האלה יירשמו ביומן ההוצאות."
-                )
             pending = self.pending.create(
-                approval_request_id=self._approval_id(request_id),
-                source_request_id=request_id,
+                approval_request_id=self._approval_id(plan.request_id),
+                source_request_id=plan.request_id,
                 user_key=user_key,
                 plans=(plan,),
                 provenance=provenance,
-                state_guards=(guard,),
+                state_guards=(plan.expected,),
                 summary=summary,
                 now_ts=now_ts,
             )
@@ -339,6 +386,29 @@ class ArchiveMutationService:
     ) -> ArchiveMutationReceipt | ExpenseReceipt:
         object_id = str(plan.data.get("object_id", ""))
         if plan.domain == "expenses":
+            if plan.data.get("source_kind") == "manual":
+                expense_id = manual_expense_id(owner_key=user_key, request_id=plan.request_id)
+                if (
+                    self.expenses is None or plan.capability != "expenses.write"
+                    or plan.action != "record" or not plan.requires_confirmation
+                    or plan.data.get("owner_key") != user_key
+                    or plan.data.get("expense_id") != expense_id
+                    or plan.device_id != expense_id or plan.entity_id != f"expense:{expense_id}"
+                    or plan.expected != {
+                        "expense_id": expense_id, "owner_key": user_key, "status": "absent",
+                    }
+                    or set(plan.data) - {
+                        "expense_id", "owner_key", "expense_fields", "category", "source_kind",
+                        "provider", "chat_hash",
+                    }
+                ):
+                    raise ValueError("expense_plan_invalid")
+                return self.expenses.record_manual_once(
+                    request_id=plan.request_id, owner_key=user_key,
+                    plan_hash=plan_fingerprint(plan),
+                    expense_id=expense_id, fields=plan.data.get("expense_fields"),
+                    category=plan.data.get("category"), now_ts=now_ts,
+                )
             if (
                 self.expenses is None or plan.capability != "expenses.write"
                 or plan.action != "record"
@@ -431,6 +501,16 @@ class ArchiveMutationService:
             and pending.plans[0].data.get("chat_hash") == _chat_hash(chat_id)
         )
 
+    def _state_guard(self, plan: ActionPlan, *, user_key: str) -> dict:
+        if plan.domain == "expenses" and plan.data.get("source_kind") == "manual":
+            if self.expenses is None:
+                raise ValueError("expense_ledger_unavailable")
+            return self.expenses.manual_state_guard(plan.device_id, owner_key=user_key)
+        record = self.archive.get(plan.device_id, owner_key=user_key, include_deleted=True)
+        if record is None:
+            raise ValueError("archive_approval_state_changed")
+        return archive_state_guard(record)
+
     def continue_exact(
         self,
         approval_request_id: str,
@@ -486,20 +566,19 @@ class ArchiveMutationService:
                 )
                 if (
                     policy.user_key != user_key or not policy.can_approve or not decision.allowed
-                    or (plan.domain == "expenses" and not archive_read_allowed(
+                    or (plan.domain == "expenses" and plan.data.get("source_kind") != "manual"
+                        and not archive_read_allowed(
                         policy, user_key=user_key, action="details",
                     ))
                 ):
                     raise ValueError("archive_approval_policy_denied")
-                record = self.archive.get(plan.device_id, owner_key=user_key, include_deleted=True)
-                if record is None or state_fingerprint(
-                    archive_state_guard(record)
-                ) != state_fingerprint(claimed.state_guards[0]):
+                guard = self._state_guard(plan, user_key=user_key)
+                if state_fingerprint(guard) != state_fingerprint(claimed.state_guards[0]):
                     raise ValueError("archive_approval_state_changed")
                 grant = self.approvals.issue(
                     user_key=user_key,
                     plan=plan,
-                    state_guard=archive_state_guard(record),
+                    state_guard=guard,
                     summary=claimed.summary,
                     now_ts=now_ts,
                 )
@@ -507,7 +586,7 @@ class ArchiveMutationService:
                     token=grant.token,
                     user_key=user_key,
                     plan=plan,
-                    state_guard=archive_state_guard(record),
+                    state_guard=guard,
                     now_ts=now_ts,
                 )
                 if not validation.valid:

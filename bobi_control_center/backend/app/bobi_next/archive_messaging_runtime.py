@@ -30,8 +30,11 @@ from .expense_commands import (
     expense_allowed,
     expense_help,
     expense_requested,
+    manual_expense_help,
+    manual_expense_requested,
     parse_expense_month,
     parse_expense_record,
+    parse_manual_expense,
 )
 from .expense_ledger import ALREADY_RECORDED, EXPENSE_RECORDED, ExpenseLedger
 from .integration_runtime import RoutedArchiveStorage
@@ -147,12 +150,17 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
         async def handler(message: InboundMessage) -> MessageResponse:
             if message.kind == "text":
                 review = parse_receipt_review(message.text)
+                manual_expense = parse_manual_expense(message.text)
                 expense = parse_expense_record(message.text)
-                mutation = expense or review or parse_archive_mutation(message.text)
+                mutation = (
+                    manual_expense or expense or review or parse_archive_mutation(message.text)
+                )
                 normalized = _normalize_confirmation(message.text)
                 now = int(time.time())
                 mutation_text = None
-                if expense is None and expense_requested(message.text):
+                if manual_expense is None and manual_expense_requested(message.text):
+                    mutation_text = manual_expense_help()
+                elif expense is None and expense_requested(message.text):
                     mutation_text = expense_help()
                 elif review is None and receipt_review_requested(message.text):
                     mutation_text = receipt_review_help()
@@ -257,8 +265,11 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
         details = parse_receipt_details(message.text) if message.kind == "text" else None
         review = parse_receipt_review(message.text) if message.kind == "text" else None
         expense = parse_expense_record(message.text) if message.kind == "text" else None
+        manual_expense = parse_manual_expense(message.text) if message.kind == "text" else None
         expense_month = parse_expense_month(message.text) if message.kind == "text" else None
-        if details is None and review is None and expense is None and expense_month is None:
+        if all(value is None for value in (
+            details, review, expense, manual_expense, expense_month,
+        )):
             return True
         if outbound.text in {
             "אין הרשאה לקרוא את פרטי המסמך בארכיון.",
@@ -268,6 +279,7 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
             "הבקשה נבדקה במצב Shadow. הארכיון לא שונה.",
             "✅ נשמרו פרטי המסמך שכתבת ואישרת. יתר הפרטים שחולצו עדיין דורשים בדיקה.",
             "אין הרשאה לרשום הוצאה מהקבלה.",
+            "אין הרשאה לרשום הוצאה.",
             "אין הרשאה לקרוא את יומן ההוצאות.",
             "הבקשה נבדקה במצב Shadow. לא נרשמה הוצאה.",
             ALREADY_RECORDED,
@@ -289,6 +301,10 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
         policy = await self.policy_for(message.user_key)
         if expense_month is not None:
             return expense_allowed(policy, user_key=message.user_key, action="summary")
+        if manual_expense is not None:
+            return expense_allowed(
+                policy, user_key=message.user_key, action="record",
+            ) and policy.can_approve
         if expense is not None:
             return expense_allowed(
                 policy, user_key=message.user_key, action="record",

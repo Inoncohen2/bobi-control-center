@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from app.bobi_next.approval_continuation import (
@@ -241,6 +243,54 @@ async def test_restart_safe_yes_executes_exact_pending_plan_once(tmp_path):
         )
         assert duplicate.outcome == "no_pending"
         assert len(ha.calls) == 1
+    finally:
+        approvals.close()
+        pending.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exact", [False, True])
+@pytest.mark.parametrize(("domain", "entity_id"), [
+    ("archive", "archive:private-file"),
+    ("expenses", "expense:manual-request"),
+    ("expenses", "sensor.expense"),
+    ("lock", "archive:private-file"),
+    ("lock", "lock.front/other"),
+])
+async def test_private_plan_in_mixed_batch_is_rejected_before_any_ha_read(
+    tmp_path, exact, domain, entity_id,
+):
+    class NeverHA:
+        async def get_state(self, entity_id):
+            pytest.fail("Private batch must not read any HA target")
+
+        async def call_service(self, domain, service, data):
+            pytest.fail("Private batch must not call any HA service")
+
+    path = tmp_path / "pending.db"
+    first = PendingApprovalStore(path)
+    ha_plan = _unlock_plan()
+    private_plan = replace(ha_plan, request_id="private", domain=domain, entity_id=entity_id)
+    first.create(
+        approval_request_id="mixed", source_request_id="source", user_key="u1",
+        plans=(ha_plan, private_plan), provenance=_provenance(),
+        state_guards=({"state": "locked"}, {"status": "absent"}),
+        summary="mixed plans", now_ts=100,
+    )
+    first.close()
+    pending = PendingApprovalStore(path)
+    approvals = ApprovalStore(tmp_path / "approvals.db")
+    try:
+        extra = {"approval_request_id": "mixed"} if exact else {}
+        approve = approve_pending_by_id if exact else approve_latest_pending
+        result = await approve(
+            pending, approvals, NeverHA(), user_key="u1", policy_for=_policy,
+            owner_token="worker", now_ts=101, **extra,
+        )
+        assert result.outcome == "rejected"
+        assert result.reason == "non_ha_approval_plan"
+        assert result.executed_count == result.verified_count == 0
+        assert pending.get("mixed").state == "failed"
     finally:
         approvals.close()
         pending.close()

@@ -118,8 +118,20 @@ def parse_receipt_review(text: str) -> ArchiveMutationCommand | None:
         return None
     body, delimiter, values = original[lead.end():].partition(":")
     target = _financial_target(body.strip())
+    if not delimiter or target is None:
+        return None
+    validated = parse_explicit_financial_fields(values)
+    return ArchiveMutationCommand(
+        "review", target.query, target.kind, financial_fields=validated,
+    ) if validated else None
+
+
+def parse_explicit_financial_fields(values: str) -> dict[str, str | int] | None:
+    """Parse typed values only; this helper grants no action or target authority."""
+    if len(values) > 1600 or _has_controls(values) or _UNSAFE.search(values):
+        return None
     parts = values.split(";")
-    if not delimiter or target is None or not 1 <= len(parts) <= 6:
+    if not 1 <= len(parts) <= 6:
         return None
     fields: dict[str, str | int] = {}
     for part in parts:
@@ -132,6 +144,10 @@ def parse_receipt_review(text: str) -> ArchiveMutationCommand | None:
             return None
         raw = raw.strip()
         if name in _MONEY_KEYS:
+            # A single separator followed by three digits can mean grouping
+            # or unsupported fractional cents. Typed authority must not guess.
+            if re.search(r"(?<![\d.,])\d{1,3}[.,]\d{3}(?![\d.,])", raw):
+                return None
             money = parse_financial_money(raw)
             if money is None or fields.get("currency", money[1]) != money[1]:
                 return None
@@ -144,10 +160,9 @@ def parse_receipt_review(text: str) -> ArchiveMutationCommand | None:
         else:
             fields[name] = raw
     try:
-        validated = validate_review_fields(fields)
+        return validate_review_fields(fields)
     except ValueError:
         return None
-    return ArchiveMutationCommand("review", target.query, target.kind, financial_fields=validated)
 
 
 def parse_receipt_details(text: str) -> ArchiveRetrievalCommand | None:

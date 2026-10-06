@@ -89,7 +89,7 @@ implemented; `ready` = code/tests exist; `verified` = accepted live shadow/E2E.
 | documents | explicit save/retrieval + category move/soft-delete/restore; exact approval/state guard/atomic receipts; verified setup choice and isolated WAHA/provider retry/restart contracts; hosted cloud + live parity pending | partial |
 | notes | personal notes | planned |
 | products | product/warranty store | planned |
-| expenses | explicit receipt-linked local ledger; verified reviewed fields, independent exact approval/atomic read-back/dedupe/restart; owner-scoped monthly totals per currency; manual entry/edit/refunds/budgets + live parity pending | partial |
+| expenses | receipt-linked + complete typed manual entries; independent exact approval/atomic read-back/dedupe/restart; source provenance and verified local v1 upgrade; owner-scoped monthly totals per currency; edit/refunds/budgets + live parity pending | partial |
 | object_search | owner-isolated archive search/retrieval; live parity pending | partial |
 | context_authority | typed context authority | partial |
 | parking | personal parking memory | planned |
