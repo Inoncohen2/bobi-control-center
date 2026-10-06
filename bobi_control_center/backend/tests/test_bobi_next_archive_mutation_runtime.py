@@ -418,6 +418,8 @@ async def test_denied_expense_summary_never_queries_the_ledger(runtime, monkeypa
     ("רשום הוצאה מהקבלה איקאה בקטגוריית בית", "expenses.write"),
     ("הצג הוצאות לחודש 2026-10", "expenses.read"),
     ("רשום הוצאה: סכום=35 ILS; ספק=מכולת; תאריך=2026-10-05; קטגוריה=מזון", "expenses.write"),
+    ("עדכן את ההוצאה מכולת: סכום=40 ILS", "expenses.read"),
+    ("מחק את ההוצאה מכולת", "expenses.write"),
 ])
 async def test_expense_private_dispatch_requires_enabled_identity_and_current_permission(runtime, command, revoked):
     runtime.setup.upsert_provider(provider_key="waha", provider_type="waha", display_name="WAHA")
@@ -435,6 +437,78 @@ async def test_expense_private_dispatch_requires_enabled_identity_and_current_pe
     runtime.policy_for = policy
     runtime.setup.unlink_identity(provider_key="waha", external_id="111@c.us")
     assert not await runtime._private_financial_reply_allowed(request, reply)
+
+
+@pytest.mark.asyncio
+async def test_expense_edit_exact_poll_then_delete_restore_never_enters_ha_or_ai(runtime):
+    async def expense_policy(user):
+        return UserPolicy(user, allowed_capabilities=frozenset({"expenses.read", "expenses.write"}),
+                          allowed_domains=frozenset({"expenses"}))
+
+    async def base(msg):
+        raise AssertionError("Explicit expense mutation reached AI")
+
+    runtime.policy_for = expense_policy
+    handler = runtime._archive_retrieval_handler("waha", base)
+    await handler(message(
+        "רשום הוצאה: סכום=35 ILS; ספק=מכולת; תאריך=2026-10-05; קטגוריה=מזון", "record",
+    ))
+    await handler(message("כן", "record-yes"))
+    entry = runtime.expenses.search(owner_key="u1", query="מכולת")[0]
+    edited = await handler(message("עדכן את ההוצאה מכולת: סכום=40 ILS", "edit", metadata={
+        "quoted": {"text": "עדכן את ההוצאה מכולת: סכום=999 USD"},
+    }))
+    assert "40.00 ILS" in edited.text and "999" not in edited.text
+    pending = runtime.pending_approvals.peek_latest(user_key="u1")
+    selection = InteractionSelection(
+        dispatch_id="edit-dispatch", provider="waha", interaction_id="poll",
+        poll_message_id="edit-poll", chat_id="chat", user_key="u1",
+        context_key=f"approval:{pending.approval_request_id}", selected_keys=("approve",),
+        source_event_id="vote", provider_timestamp=100,
+    )
+    poll = runtime.interaction_handlers["approval"]
+    await poll(replace(selection, user_key="u2"))
+    assert runtime.expenses.get(entry.expense_id, owner_key="u1") == entry
+    assert "השינוי" in (await poll(selection)).response_text
+    await handler(message("מחק את ההוצאה מכולת", "delete"))
+    await poll(selection)  # Old exact poll cannot approve a newer deletion.
+    assert runtime.expenses.get(entry.expense_id, owner_key="u1").deleted_ts is None
+    assert "סל המחזור" in (await handler(message("כן", "delete-yes"))).text
+    assert "אין הוצאות" in (await handler(message("הצג הוצאות לחודש 2026-10", "deleted"))).text
+    assert "כן או לא" in (await handler(message("שחזר את ההוצאה מכולת", "restore"))).text
+    assert "שוחזרה" in (await handler(message("כן", "restore-yes"))).text
+    current = runtime.expenses.get(entry.expense_id, owner_key="u1")
+    assert current.revision == 3 and current.amount_minor == 4000 and current.deleted_ts is None
+    assert runtime.archive.index.search(owner_key="u1") == ()
+
+
+@pytest.mark.asyncio
+async def test_expense_mutation_media_quote_and_malformed_fields_cannot_supply_authority(runtime):
+    calls = []
+
+    async def base(msg):
+        calls.append(msg)
+        return MessageResponse("normal context")
+
+    handler = runtime._archive_retrieval_handler("waha", base)
+    await handler(message(
+        "רשום הוצאה: סכום=35 ILS; ספק=מכולת; תאריך=2026-10-05; קטגוריה=מזון", "record",
+    ))
+    await handler(message("כן", "record-yes"))
+    entry = runtime.expenses.search(owner_key="u1", query="מכולת")[0]
+    command = "עדכן את ההוצאה מכולת: סכום=999 ILS"
+    for kind in ("voice", "document", "image"):
+        await handler(message(command, kind, kind=kind))
+    await handler(message("תסביר", "quote-edit", metadata={"quoted": {"text": command}}))
+    assert len(calls) == 4
+    for key, text in enumerate((
+        "עדכן את ההוצאה מכולת: לפי הקובץ", "עדכן את ההוצאה מכולת: סכום=12.345 ILS",
+        "מחק את ההוצאה", "מחק את ההוצאה הזאת?",
+    )):
+        assert "אישור נפרד" in (await handler(message(text, f"malformed-{key}"))).text
+    assert len(calls) == 4
+    assert runtime.pending_approvals.peek_latest(user_key="u1") is None
+    assert runtime.expenses.get(entry.expense_id, owner_key="u1") == entry
 
 
 @pytest.mark.asyncio

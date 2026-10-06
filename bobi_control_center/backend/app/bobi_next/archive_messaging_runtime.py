@@ -29,14 +29,24 @@ from .event_reminders import EventReminderStore
 from .expense_commands import (
     expense_allowed,
     expense_help,
+    expense_mutation_help,
+    expense_mutation_requested,
     expense_requested,
     manual_expense_help,
     manual_expense_requested,
     parse_expense_month,
+    parse_expense_mutation,
     parse_expense_record,
     parse_manual_expense,
 )
-from .expense_ledger import ALREADY_RECORDED, EXPENSE_RECORDED, ExpenseLedger
+from .expense_ledger import (
+    ALREADY_RECORDED,
+    EXPENSE_DELETED,
+    EXPENSE_RECORDED,
+    EXPENSE_RESTORED,
+    EXPENSE_UPDATED,
+    ExpenseLedger,
+)
 from .integration_runtime import RoutedArchiveStorage
 from .interaction_dispatch import InteractionHandlerResult
 from .media_analyzers import MediaAnalyzerRegistry
@@ -151,14 +161,18 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
             if message.kind == "text":
                 review = parse_receipt_review(message.text)
                 manual_expense = parse_manual_expense(message.text)
+                expense_mutation = parse_expense_mutation(message.text)
                 expense = parse_expense_record(message.text)
                 mutation = (
-                    manual_expense or expense or review or parse_archive_mutation(message.text)
+                    expense_mutation or manual_expense or expense or review
+                    or parse_archive_mutation(message.text)
                 )
                 normalized = _normalize_confirmation(message.text)
                 now = int(time.time())
                 mutation_text = None
-                if manual_expense is None and manual_expense_requested(message.text):
+                if expense_mutation is None and expense_mutation_requested(message.text):
+                    mutation_text = expense_mutation_help()
+                elif manual_expense is None and manual_expense_requested(message.text):
                     mutation_text = manual_expense_help()
                 elif expense is None and expense_requested(message.text):
                     mutation_text = expense_help()
@@ -266,9 +280,10 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
         review = parse_receipt_review(message.text) if message.kind == "text" else None
         expense = parse_expense_record(message.text) if message.kind == "text" else None
         manual_expense = parse_manual_expense(message.text) if message.kind == "text" else None
+        expense_mutation = parse_expense_mutation(message.text) if message.kind == "text" else None
         expense_month = parse_expense_month(message.text) if message.kind == "text" else None
         if all(value is None for value in (
-            details, review, expense, manual_expense, expense_month,
+            details, review, expense, manual_expense, expense_mutation, expense_month,
         )):
             return True
         if outbound.text in {
@@ -281,9 +296,15 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
             "אין הרשאה לרשום הוצאה מהקבלה.",
             "אין הרשאה לרשום הוצאה.",
             "אין הרשאה לקרוא את יומן ההוצאות.",
+            "אין הרשאה לשנות את יומן ההוצאות.",
+            "לא מצאתי הוצאה שמתאימה לבקשה הזאת.",
+            "הבקשה נבדקה במצב Shadow. יומן ההוצאות לא שונה.",
             "הבקשה נבדקה במצב Shadow. לא נרשמה הוצאה.",
             ALREADY_RECORDED,
             EXPENSE_RECORDED,
+            EXPENSE_UPDATED,
+            EXPENSE_DELETED,
+            EXPENSE_RESTORED,
         }:
             return True
         actor = message.metadata.get("sender_fingerprint")
@@ -299,6 +320,12 @@ class ArchiveMessagingRuntime(BobiNextMessagingRuntime):
         if user is None or user.user_key != message.user_key:
             return False
         policy = await self.policy_for(message.user_key)
+        if expense_mutation is not None:
+            return expense_allowed(
+                policy, user_key=message.user_key, action=expense_mutation.operation,
+            ) and expense_allowed(
+                policy, user_key=message.user_key, action="details",
+            ) and policy.can_approve
         if expense_month is not None:
             return expense_allowed(policy, user_key=message.user_key, action="summary")
         if manual_expense is not None:

@@ -14,6 +14,7 @@ from app.bobi_next.authorization import ApprovalStore, RiskLevel, UserPolicy
 from app.bobi_next.expense_commands import (
     ManualExpenseCommand,
     parse_expense_month,
+    parse_expense_mutation,
     parse_expense_record,
     parse_manual_expense,
 )
@@ -64,7 +65,10 @@ def receipt(system, *, owner="u1", title="איקאה", content=b"receipt", metad
 
 
 def request(system, text=RECORD, *, key="expense", policy=None, now=1002, dry_run=False):
-    command = parse_manual_expense(text) or parse_expense_record(text) or parse_receipt_review(text)
+    command = (
+        parse_expense_mutation(text) or parse_manual_expense(text)
+        or parse_expense_record(text) or parse_receipt_review(text)
+    )
     assert command is not None
     return system.execute_command(
         command, request_id=key, user_key="u1", provider="waha", chat_id="chat",
@@ -546,7 +550,8 @@ def test_two_manual_sqlite_executors_replay_one_atomic_request(system):
 def _legacy_expense_database(path, entry, *, corrupt=False):
     # Exact v1 shape, including its NOT NULL digest and uniqueness constraint.
     fields = asdict(entry)
-    fields.pop("source_kind")
+    for name in ("source_kind", "revision", "deleted_ts", "updated_ts"):
+        fields.pop(name)
     if corrupt:
         fields["source_sha256"] = "damaged"
     with sqlite3.connect(path) as db:

@@ -654,7 +654,7 @@ async def test_cloud_whatsapp_requires_current_explicit_authority_and_permission
 
 
 @pytest.mark.asyncio
-async def test_manual_expense_whatsapp_restart_reply_loss_and_cached_prompt_revocation(
+async def test_manual_expense_lifecycle_whatsapp_restart_reply_loss_and_cached_prompt_revocation(
     archive_endpoint, tmp_path, monkeypatch,
 ):
     _configure_archive(tmp_path / "bobi-next-setup.db", archive_endpoint)
@@ -693,7 +693,39 @@ async def test_manual_expense_whatsapp_restart_reply_loss_and_cached_prompt_revo
             assert "35.01 ILS (1 הוצאה)" in waha.replies[-1]["text"]
             assert flow.runtime.archive.index.search(owner_key="owner") == ()
 
-            assert flow.ingest(flow.event("manual-private-prompt", text.replace("35.01", "99.99"))).accepted
+            await flow.send("manual-edit", "עדכן את ההוצאה מכולת: סכום=40 ILS", quoted=True)
+            assert "40.00 ILS" in waha.replies[-1]["text"]
+            await flow.close()
+            flow.open()
+            edit_event = flow.event("manual-edit-confirm", "כן")
+            assert flow.ingest(edit_event).accepted
+            waha.fail_reply_once = True
+            assert (await flow.process()).state == "retry"
+            edited = flow.runtime.expenses.get(entry.expense_id, owner_key="owner")
+            assert edited.amount_minor == 4000 and edited.revision == 1
+            request_id = "archive-mutate:waha:manual-edit"
+            assert flow.runtime.expenses.mutation_receipt(request_id, owner_key="owner").before == entry
+            await flow.close()
+            flow.open()
+            assert (await flow.process()).state == "completed"
+            assert flow.ingest(edit_event).duplicate
+            assert flow.runtime.expenses.get(entry.expense_id, owner_key="owner") == edited
+            await flow.send("manual-delete", "מחק את ההוצאה מכולת")
+            await flow.send("manual-delete-confirm", "כן")
+            assert "סל המחזור" in waha.replies[-1]["text"]
+            assert "אין הוצאות" in flow.runtime.expenses.month_reply(owner_key="owner", month="2026-10")
+            await flow.send("manual-restore", "שחזר את ההוצאה מכולת")
+            await flow.close()
+            flow.open()
+            await flow.send("manual-restore-confirm", "כן")
+            restored = flow.runtime.expenses.get(entry.expense_id, owner_key="owner")
+            assert restored.amount_minor == 4000 and restored.revision == 3
+            assert restored.deleted_ts is None and restored.source_sha256 is None
+            await flow.send("manual-restored-summary", "הצג הוצאות לחודש 2026-10")
+            assert "40.00 ILS (1 הוצאה)" in waha.replies[-1]["text"]
+
+            private_edit = "עדכן את ההוצאה מכולת: סכום=99.99 ILS"
+            assert flow.ingest(flow.event("manual-private-prompt", private_edit)).accepted
             waha.fail_reply_once = True
             assert (await flow.process()).state == "retry"
             queued = flow.boundary.messages.get_inbound("waha", "manual-private-prompt")
@@ -702,7 +734,7 @@ async def test_manual_expense_whatsapp_restart_reply_loss_and_cached_prompt_revo
             sends = sum(request.url.path == "/api/sendText" for request in waha.requests)
             current_policy = flow.setup.get_user("owner").policy
             flow.setup.update_user_policy("owner", replace(
-                current_policy, denied_capabilities=frozenset({"expenses.write"}),
+                current_policy, denied_capabilities=frozenset({"expenses.read"}),
             ))
             await flow.close()
             flow.open()
@@ -710,7 +742,8 @@ async def test_manual_expense_whatsapp_restart_reply_loss_and_cached_prompt_revo
             assert blocked.state == "failed" and blocked.last_error.endswith("reply_authorization_denied")
             assert sum(request.url.path == "/api/sendText" for request in waha.requests) == sends
             assert flow.boundary.messages.outbound_for(blocked).text == cached.text
-            assert "35.01 ILS (1 הוצאה)" in flow.runtime.expenses.month_reply(owner_key="owner", month="2026-10")
+            assert flow.runtime.expenses.get(entry.expense_id, owner_key="owner") == restored
+            assert "40.00 ILS (1 הוצאה)" in flow.runtime.expenses.month_reply(owner_key="owner", month="2026-10")
             assert not waha.files and understanding.texts == []
             assert not [request for request in waha.requests if request.method == "GET"]
         finally:

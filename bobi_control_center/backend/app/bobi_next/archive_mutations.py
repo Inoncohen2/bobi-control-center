@@ -24,8 +24,10 @@ from .authorization import (
     state_fingerprint,
 )
 from .expense_commands import (
+    ExpenseMutationCommand,
     ManualExpenseCommand,
     expense_allowed,
+    parse_expense_mutation,
     parse_expense_record,
     parse_manual_expense,
     validate_expense_category,
@@ -33,10 +35,17 @@ from .expense_commands import (
 )
 from .expense_ledger import (
     ALREADY_RECORDED,
+    EXPENSE_DELETED,
     EXPENSE_RECORDED,
+    EXPENSE_RESTORED,
+    EXPENSE_UPDATED,
     ExpenseLedger,
+    ExpenseMutationReceipt,
     ExpenseReceipt,
+    edited_expense_fields,
+    expense_record_fields,
     expense_source_fields,
+    expense_state_guard,
     manual_expense_id,
 )
 from .models import ActionPlan
@@ -66,7 +75,13 @@ def _chat_hash(chat_id: str) -> str:
     return hashlib.sha256(chat_id.encode()).hexdigest()
 
 
-def _receipt_reply(receipt: ArchiveMutationReceipt | ExpenseReceipt) -> str:
+def _receipt_reply(
+    receipt: ArchiveMutationReceipt | ExpenseReceipt | ExpenseMutationReceipt,
+) -> str:
+    if isinstance(receipt, ExpenseMutationReceipt):
+        return {"edit": EXPENSE_UPDATED, "delete": EXPENSE_DELETED, "restore": EXPENSE_RESTORED}[
+            receipt.operation
+        ]
     if isinstance(receipt, ExpenseReceipt):
         return ALREADY_RECORDED if receipt.duplicate else EXPENSE_RECORDED
     if receipt.operation == "move":
@@ -99,15 +114,22 @@ class ArchiveMutationService:
 
     def _receipt(
         self, request_id: str, *, owner_key: str,
-    ) -> ArchiveMutationReceipt | ExpenseReceipt | None:
+    ) -> ArchiveMutationReceipt | ExpenseReceipt | ExpenseMutationReceipt | None:
         return self.archive.mutation_receipt(request_id, owner_key=owner_key) or (
-            self.expenses.receipt(request_id, owner_key=owner_key) if self.expenses else None
+            (self.expenses.receipt(request_id, owner_key=owner_key)
+             or self.expenses.mutation_receipt(request_id, owner_key=owner_key))
+            if self.expenses else None
         )
 
     @staticmethod
     def _command_allowed(
-        command: ArchiveMutationCommand | ManualExpenseCommand, policy: UserPolicy, user_key: str,
+        command: ArchiveMutationCommand | ManualExpenseCommand | ExpenseMutationCommand,
+        policy: UserPolicy, user_key: str,
     ) -> bool:
+        if isinstance(command, ExpenseMutationCommand):
+            return expense_allowed(
+                policy, user_key=user_key, action=command.operation,
+            ) and expense_allowed(policy, user_key=user_key, action="details")
         if isinstance(command, ManualExpenseCommand):
             return expense_allowed(policy, user_key=user_key, action="record")
         if command.operation == "record_expense":
@@ -120,7 +142,7 @@ class ArchiveMutationService:
 
     def execute_command(
         self,
-        command: ArchiveMutationCommand | ManualExpenseCommand,
+        command: ArchiveMutationCommand | ManualExpenseCommand | ExpenseMutationCommand,
         *,
         request_id: str,
         user_key: str,
@@ -132,11 +154,17 @@ class ArchiveMutationService:
         dry_run: bool = False,
     ) -> str:
         if not self._command_allowed(command, policy, user_key):
+            if isinstance(command, ExpenseMutationCommand):
+                return "אין הרשאה לשנות את יומן ההוצאות."
             if isinstance(command, ManualExpenseCommand):
                 return "אין הרשאה לרשום הוצאה."
             if command.operation == "record_expense":
                 return "אין הרשאה לרשום הוצאה מהקבלה."
             return "אין הרשאה לשנות את המסמך בארכיון."
+        if isinstance(command, ExpenseMutationCommand) and (
+            parse_expense_mutation(input_text) != command
+        ):
+            return "נדרשת הוראה מפורשת בהודעה הנוכחית. יומן ההוצאות לא שונה."
         if isinstance(command, ManualExpenseCommand) and (
             parse_manual_expense(input_text) != command
         ):
@@ -146,6 +174,8 @@ class ArchiveMutationService:
         if command.operation == "review" and parse_receipt_review(input_text) != command:
             return "נדרשים ערכים מפורשים בהודעה הנוכחית. פרטי המסמך לא שונו."
         if dry_run:
+            if isinstance(command, ExpenseMutationCommand):
+                return "הבקשה נבדקה במצב Shadow. יומן ההוצאות לא שונה."
             return "הבקשה נבדקה במצב Shadow. לא נרשמה הוצאה." if (
                 command.operation in {"record_expense", "record_manual_expense"}
             ) else "הבקשה נבדקה במצב Shadow. הארכיון לא שונה."
@@ -230,7 +260,7 @@ class ArchiveMutationService:
 
     def _prepare_command(
         self,
-        command: ArchiveMutationCommand | ManualExpenseCommand,
+        command: ArchiveMutationCommand | ManualExpenseCommand | ExpenseMutationCommand,
         *,
         request_id: str,
         user_key: str,
@@ -244,6 +274,45 @@ class ArchiveMutationService:
             if existing.user_key != user_key:
                 raise ValueError("archive_approval_owner_mismatch")
             return _prompt(existing), "archive_approval_required"
+        if isinstance(command, ExpenseMutationCommand):
+            if self.expenses is None:
+                raise ValueError("expense_ledger_unavailable")
+            records = self.expenses.search(
+                owner_key=user_key, query=command.query, deleted=command.operation == "restore",
+            )
+            if not records:
+                return "לא מצאתי הוצאה שמתאימה לבקשה הזאת.", "blocked"
+            if len(records) != 1:
+                descriptions = " | ".join(
+                    f"{display_financial_text(record.merchant)} {record.document_date}"
+                    for record in records[:5]
+                )
+                return f"מצאתי כמה הוצאות מתאימות: {descriptions}. כתבו פרט נוסף.", "ambiguous"
+            record = records[0]
+            fields = (
+                edited_expense_fields(record, command.financial_fields)
+                if command.operation == "edit" else expense_record_fields(record)
+            )
+            category = command.category or record.category
+            plan = ActionPlan(
+                request_id=request_id, device_id=record.expense_id,
+                entity_id=f"expense:{record.expense_id}", domain="expenses",
+                action=command.operation, capability="expenses.write",
+                data={
+                    "expense_id": record.expense_id, "owner_key": user_key,
+                    "expense_fields": command.financial_fields, "category": command.category,
+                    "provider": provider, "chat_hash": _chat_hash(chat_id),
+                },
+                expected=expense_state_guard(record), requires_confirmation=True,
+            )
+            verb = {"edit": "לשנות", "delete": "להעביר לסל המחזור", "restore": "לשחזר"}[
+                command.operation
+            ]
+            summary = (
+                f'{verb} את ההוצאה של "{display_financial_text(record.merchant)}"?\n'
+                + format_financial_fields(fields) + f"\nקטגוריה: {category}"
+            )
+            return self._prepare_plan(plan, summary=summary, policy=policy, now_ts=now_ts)
         if isinstance(command, ManualExpenseCommand):
             if self.expenses is None:
                 raise ValueError("expense_ledger_unavailable")
@@ -383,9 +452,31 @@ class ArchiveMutationService:
 
     def _execute(
         self, plan: ActionPlan, *, user_key: str, now_ts: int,
-    ) -> ArchiveMutationReceipt | ExpenseReceipt:
+    ) -> ArchiveMutationReceipt | ExpenseReceipt | ExpenseMutationReceipt:
         object_id = str(plan.data.get("object_id", ""))
         if plan.domain == "expenses":
+            if plan.action in {"edit", "delete", "restore"}:
+                expense_id = str(plan.data.get("expense_id", ""))
+                if (
+                    self.expenses is None or plan.capability != "expenses.write"
+                    or not plan.requires_confirmation or plan.data.get("owner_key") != user_key
+                    or not expense_id or plan.device_id != expense_id
+                    or plan.entity_id != f"expense:{expense_id}"
+                    or set(plan.data) - {
+                        "expense_id", "owner_key", "expense_fields", "category",
+                        "provider", "chat_hash",
+                    }
+                    or not isinstance(plan.data.get("expense_fields"), dict)
+                    or not isinstance(plan.data.get("category"), str)
+                ):
+                    raise ValueError("expense_plan_invalid")
+                return self.expenses.apply_mutation_once(
+                    request_id=plan.request_id, owner_key=user_key,
+                    plan_hash=plan_fingerprint(plan),
+                    expense_id=expense_id, operation=plan.action, expected_guard=plan.expected,
+                    fields=plan.data["expense_fields"], category=plan.data["category"],
+                    now_ts=now_ts,
+                )
             if plan.data.get("source_kind") == "manual":
                 expense_id = manual_expense_id(owner_key=user_key, request_id=plan.request_id)
                 if (
@@ -502,6 +593,13 @@ class ArchiveMutationService:
         )
 
     def _state_guard(self, plan: ActionPlan, *, user_key: str) -> dict:
+        if plan.domain == "expenses" and plan.action in {"edit", "delete", "restore"}:
+            record = (
+                self.expenses.get(plan.device_id, owner_key=user_key) if self.expenses else None
+            )
+            if record is None:
+                raise ValueError("expense_state_changed")
+            return expense_state_guard(record)
         if plan.domain == "expenses" and plan.data.get("source_kind") == "manual":
             if self.expenses is None:
                 raise ValueError("expense_ledger_unavailable")
@@ -552,6 +650,8 @@ class ArchiveMutationService:
             return "האישור פג, בוטל או כבר טופל. לא בוצעה פעולה נוספת."
         if choice == "reject":
             self.pending.reject(approval_request_id, owner_token=owner_token, now_ts=now_ts)
+            if plan.domain == "expenses" and plan.action != "record":
+                return "בוטל. יומן ההוצאות לא שונה."
             return "בוטל. לא נרשמה הוצאה." if (
                 plan.domain == "expenses"
             ) else "בוטל. הארכיון לא שונה."
@@ -566,10 +666,13 @@ class ArchiveMutationService:
                 )
                 if (
                     policy.user_key != user_key or not policy.can_approve or not decision.allowed
-                    or (plan.domain == "expenses" and plan.data.get("source_kind") != "manual"
+                    or (plan.domain == "expenses" and plan.action == "record"
+                        and plan.data.get("source_kind") != "manual"
                         and not archive_read_allowed(
                         policy, user_key=user_key, action="details",
                     ))
+                    or (plan.domain == "expenses" and plan.action != "record"
+                        and not expense_allowed(policy, user_key=user_key, action="details"))
                 ):
                     raise ValueError("archive_approval_policy_denied")
                 guard = self._state_guard(plan, user_key=user_key)
@@ -603,6 +706,8 @@ class ArchiveMutationService:
                 error=str(exc),
                 now_ts=now_ts,
             )
+            if plan.domain == "expenses" and plan.action != "record":
+                return "מצב ההוצאה או ההרשאות השתנו. יומן ההוצאות לא שונה."
             return "מצב הקבלה או ההרשאות השתנו. לא נרשמה הוצאה נוספת." if (
                 plan.domain == "expenses"
             ) else "מצב המסמך או ההרשאות השתנו. לא בוצע שינוי נוסף בארכיון."

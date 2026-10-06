@@ -12,7 +12,7 @@ import json
 import re
 import sqlite3
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from .expense_commands import validate_expense_category, validate_expense_fields
@@ -25,12 +25,16 @@ from .receipt_review import (
 
 ALREADY_RECORDED = "הקבלה כבר רשומה כהוצאה. לא נרשמה הוצאה נוספת."
 EXPENSE_RECORDED = "✅ ההוצאה נרשמה ואומתה."
+EXPENSE_UPDATED = "✅ השינוי בהוצאה נשמר ואומת."
+EXPENSE_DELETED = "✅ ההוצאה הועברה לסל המחזור. אפשר לשחזר אותה."
+EXPENSE_RESTORED = "✅ ההוצאה שוחזרה ליומן ואומתה."
 _REQUIRED = frozenset({"merchant", "document_date", "total_minor", "currency"})
 _RECORD_COLUMNS = (
     "expense_id,owner_key,source_object_id,source_sha256,source_revision,"
     "source_review_request_id,merchant,document_number,document_date,"
     "amount_minor,currency,category,created_ts"
 )
+_CURRENT_COLUMNS = _RECORD_COLUMNS + ",source_kind,revision,deleted_ts,updated_ts"
 
 
 def manual_expense_id(*, owner_key: str, request_id: str) -> str:
@@ -65,6 +69,9 @@ class ExpenseRecord:
     category: str
     created_ts: int
     source_kind: str = "receipt"
+    revision: int = 0
+    deleted_ts: int | None = None
+    updated_ts: int = 0
 
 
 @dataclass(slots=True, frozen=True)
@@ -76,6 +83,45 @@ class ExpenseReceipt:
     duplicate: bool = False
 
 
+@dataclass(slots=True, frozen=True)
+class ExpenseMutationReceipt:
+    request_id: str
+    owner_key: str
+    plan_hash: str
+    operation: str
+    before: ExpenseRecord
+    record: ExpenseRecord
+
+
+def expense_record_fields(record: ExpenseRecord) -> dict[str, str | int]:
+    fields = {
+        "merchant": record.merchant, "document_date": record.document_date,
+        "total_minor": record.amount_minor, "currency": record.currency,
+    }
+    if record.document_number:
+        fields["document_number"] = record.document_number
+    return validate_expense_fields(fields)
+
+
+def expense_state_guard(record: ExpenseRecord) -> dict:
+    snapshot = json.dumps(asdict(record), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return {
+        "expense_id": record.expense_id, "owner_key": record.owner_key,
+        "revision": record.revision,
+        "status": "deleted" if record.deleted_ts is not None else "active",
+        "record_hash": hashlib.sha256(snapshot.encode()).hexdigest(),
+    }
+
+
+def edited_expense_fields(record: ExpenseRecord, patch: object) -> dict[str, str | int]:
+    explicit = {} if patch is None or (isinstance(patch, dict) and not patch) else (
+        validate_review_fields(patch)
+    )
+    if set(explicit) - (_REQUIRED | {"document_number"}):
+        raise ValueError("expense_fields_invalid")
+    return validate_expense_fields({**expense_record_fields(record), **explicit})
+
+
 class ExpenseLedger:
     """Uses the archive database so a concurrent edit cannot race the source check."""
 
@@ -83,6 +129,8 @@ class ExpenseLedger:
         self._db = sqlite3.connect(archive_path)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL")
+        self._db.create_function("bobi_casefold", 1, lambda value: str(value or "").casefold(),
+                                 deterministic=True)
         try:
             self._migrate()
         except BaseException:
@@ -140,6 +188,16 @@ class ExpenseLedger:
                 if before != after or changed is not None:
                     raise RuntimeError("expense_migration_not_verified")
                 self._db.execute("DROP TABLE expense_records_legacy")
+            current_columns = {
+                row["name"] for row in self._db.execute("PRAGMA table_info(expense_records)")
+            }
+            for name, definition in (
+                ("revision", "INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0)"),
+                ("deleted_ts", "INTEGER"),
+                ("updated_ts", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if name not in current_columns:
+                    self._db.execute(f"ALTER TABLE expense_records ADD COLUMN {name} {definition}")
             self._db.execute(
                 "CREATE INDEX IF NOT EXISTS ix_expense_owner_date "
                 "ON expense_records(owner_key, document_date, created_ts)"
@@ -150,6 +208,11 @@ class ExpenseLedger:
                 plan_hash TEXT NOT NULL,
                 record_json TEXT NOT NULL,
                 duplicate INTEGER NOT NULL
+            )""")
+            self._db.execute("""CREATE TABLE IF NOT EXISTS expense_mutation_receipts (
+                request_id TEXT PRIMARY KEY,owner_key TEXT NOT NULL,plan_hash TEXT NOT NULL,
+                operation TEXT NOT NULL CHECK(operation IN ('edit','delete','restore')),
+                before_json TEXT NOT NULL,record_json TEXT NOT NULL
             )""")
             self._db.commit()
         except BaseException:
@@ -181,10 +244,30 @@ class ExpenseLedger:
             "status": "exists" if self.get(expense_id, owner_key=owner_key) else "absent",
         }
 
+    def search(
+        self, *, owner_key: str, query: str, deleted: bool = False,
+    ) -> tuple[ExpenseRecord, ...]:
+        tokens = query.casefold().split()
+        if not owner_key or not tokens or len(query) > 300:
+            return ()
+        haystack = (
+            "bobi_casefold(merchant || ' ' || document_number || ' ' || "
+            "document_date || ' ' || category)"
+        )
+        clauses = " AND ".join(f"instr({haystack},?)>0" for _ in tokens)
+        status = "IS NOT NULL" if deleted else "IS NULL"
+        rows = self._db.execute(
+            "SELECT * FROM expense_records WHERE owner_key=? "
+            f"AND deleted_ts {status} AND {clauses} "
+            "ORDER BY document_date DESC,created_ts DESC,expense_id LIMIT 6",
+            (owner_key, *tokens),
+        ).fetchall()
+        return tuple(self._record(row) for row in rows)
+
     def _insert_verified(self, record: ExpenseRecord) -> None:
         self._db.execute(
-            f"INSERT INTO expense_records({_RECORD_COLUMNS},source_kind) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(asdict(record).values()),
+            f"INSERT INTO expense_records({_CURRENT_COLUMNS}) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(asdict(record).values()),
         )
         if self.get(record.expense_id, owner_key=record.owner_key) != record:
             raise RuntimeError("expense_not_verified")
@@ -217,6 +300,89 @@ class ExpenseLedger:
             ExpenseRecord(**json.loads(row["record_json"])),
             bool(row["duplicate"]),
         )
+
+    def mutation_receipt(self, request_id: str, *, owner_key: str) -> ExpenseMutationReceipt | None:
+        row = self._db.execute(
+            "SELECT * FROM expense_mutation_receipts WHERE request_id=?", (request_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        if row["owner_key"] != owner_key:
+            raise ValueError("expense_request_owner_mismatch")
+        return ExpenseMutationReceipt(
+            request_id, owner_key, row["plan_hash"], row["operation"],
+            ExpenseRecord(**json.loads(row["before_json"])),
+            ExpenseRecord(**json.loads(row["record_json"])),
+        )
+
+    def apply_mutation_once(
+        self, *, request_id: str, owner_key: str, plan_hash: str, expense_id: str,
+        operation: str, expected_guard: dict, fields: object = None, category: str = "",
+        now_ts: int,
+    ) -> ExpenseMutationReceipt:
+        if (
+            not request_id or not owner_key or not plan_hash or not expense_id
+            or operation not in {"edit", "delete", "restore"}
+        ):
+            raise ValueError("expense_mutation_invalid")
+        if operation != "edit" and (fields not in (None, {}) or category):
+            raise ValueError("expense_mutation_fields_forbidden")
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            if self.receipt(request_id, owner_key=owner_key) is not None:
+                raise ValueError("expense_request_operation_changed")
+            prior = self.mutation_receipt(request_id, owner_key=owner_key)
+            if prior is not None:
+                if prior.plan_hash != plan_hash or prior.operation != operation:
+                    raise ValueError("expense_request_plan_changed")
+                self._db.commit()
+                return prior
+            before = self.get(expense_id, owner_key=owner_key)
+            if before is None or expense_state_guard(before) != expected_guard or (
+                (before.deleted_ts is not None) != (operation == "restore")
+            ):
+                raise ValueError("expense_state_changed")
+            if operation == "edit":
+                merged = edited_expense_fields(before, fields)
+                after = replace(
+                    before, merchant=str(merged["merchant"]),
+                    document_date=str(merged["document_date"]),
+                    document_number=str(merged.get("document_number", "")),
+                    amount_minor=merged["total_minor"], currency=str(merged["currency"]),
+                    category=validate_expense_category(category) if category else before.category,
+                )
+                if after == before:
+                    raise ValueError("expense_no_change")
+            else:
+                after = replace(before, deleted_ts=now_ts if operation == "delete" else None)
+            after = replace(after, revision=before.revision + 1, updated_ts=now_ts)
+            changed = self._db.execute(
+                "UPDATE expense_records SET merchant=?,document_number=?,document_date=?,"
+                "amount_minor=?,currency=?,category=?,revision=?,deleted_ts=?,updated_ts=? "
+                "WHERE expense_id=? AND owner_key=? AND revision=?",
+                (after.merchant, after.document_number, after.document_date, after.amount_minor,
+                 after.currency, after.category, after.revision, after.deleted_ts, after.updated_ts,
+                 expense_id, owner_key, before.revision),
+            )
+            if changed.rowcount != 1 or self.get(expense_id, owner_key=owner_key) != after:
+                raise RuntimeError("expense_mutation_not_verified")
+            self._db.execute(
+                "INSERT INTO expense_mutation_receipts VALUES(?,?,?,?,?,?)",
+                (request_id, owner_key, plan_hash, operation,
+                 json.dumps(asdict(before), ensure_ascii=False),
+                 json.dumps(asdict(after), ensure_ascii=False)),
+            )
+            receipt = self.mutation_receipt(request_id, owner_key=owner_key)
+            expected = ExpenseMutationReceipt(
+                request_id, owner_key, plan_hash, operation, before, after,
+            )
+            if receipt != expected:
+                raise RuntimeError("expense_mutation_receipt_not_verified")
+            self._db.commit()
+            return receipt
+        except BaseException:
+            self._db.rollback()
+            raise
 
     def check_source(
         self, *, owner_key: str, object_id: str, sha256: str, revision: int,
@@ -267,6 +433,8 @@ class ExpenseLedger:
         category = validate_expense_category(category)
         self._db.execute("BEGIN IMMEDIATE")
         try:
+            if self.mutation_receipt(request_id, owner_key=owner_key) is not None:
+                raise ValueError("expense_request_operation_changed")
             prior = self.receipt(request_id, owner_key=owner_key)
             if prior is not None:
                 if prior.plan_hash != plan_hash:
@@ -308,6 +476,8 @@ class ExpenseLedger:
         category = validate_expense_category(category)
         self._db.execute("BEGIN IMMEDIATE")
         try:
+            if self.mutation_receipt(request_id, owner_key=owner_key) is not None:
+                raise ValueError("expense_request_operation_changed")
             prior = self.receipt(request_id, owner_key=owner_key)
             if prior is not None:
                 if prior.plan_hash != plan_hash:
@@ -340,12 +510,13 @@ class ExpenseLedger:
             self._db.execute("BEGIN")
             totals = self._db.execute(
                 "SELECT currency,SUM(amount_minor) total,COUNT(*) count FROM expense_records "
-                "WHERE owner_key=? AND document_date BETWEEN ? AND ? "
+                "WHERE owner_key=? AND deleted_ts IS NULL AND document_date BETWEEN ? AND ? "
                 "GROUP BY currency ORDER BY currency",
                 period,
             ).fetchall()
             rows = self._db.execute(
-                "SELECT * FROM expense_records WHERE owner_key=? AND document_date BETWEEN ? AND ? "
+                "SELECT * FROM expense_records WHERE owner_key=? AND deleted_ts IS NULL "
+                "AND document_date BETWEEN ? AND ? "
                 "ORDER BY document_date DESC,created_ts DESC,expense_id LIMIT 20",
                 period,
             ).fetchall()
