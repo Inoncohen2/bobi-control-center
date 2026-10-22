@@ -20,7 +20,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import router as bobi_router
 from app.api.deps import build_adapter, build_management
-from app.api.manage import router as manage_router\nfrom app.api.vault import router as vault_router
+from app.api.manage import router as manage_router
+from app.api.vault import router as vault_router
 from app.auth import ExternalAuth, is_external_request, register_external_auth_middleware
 from app.auth import router as auth_router
 from app.config import Settings, get_settings
@@ -89,7 +90,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     _register_security_headers(app)
     app.include_router(auth_router)
     app.include_router(bobi_router)
-    app.include_router(manage_router)\n    app.include_router(vault_router)
+    app.include_router(manage_router)
+    app.include_router(vault_router)
 
     @app.get("/health", tags=["system"], summary="Health check")
     async def health() -> dict[str, object]:
