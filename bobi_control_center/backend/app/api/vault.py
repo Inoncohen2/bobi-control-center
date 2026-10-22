@@ -70,6 +70,7 @@ async def list_entries(request: Request) -> dict[str, object]:
 @router.post("/entries", status_code=status.HTTP_201_CREATED)
 async def create_entry(body: VaultEntryInput, request: Request) -> dict[str, object]:
     _require_admin(request)
+    _require_same_origin_for_external_write(request)
     try:
         _vault(request).put(
             body.name, body.value.get_secret_value(), service=body.service, note=body.note
