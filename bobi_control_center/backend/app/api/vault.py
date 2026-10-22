@@ -85,3 +85,18 @@ async def create_entry(body: VaultEntryInput, request: Request) -> dict[str, obj
     except VaultError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"created": True, "name": body.name, "service": body.service, "note": body.note}
+
+@router.delete("/entries/{name}")
+async def delete_entry(name: str, request: Request) -> dict[str, object]:
+    _require_admin(request)
+    _require_same_origin_for_external_write(request)
+    # Deletion is destructive, so only an owner session may do it.
+    if actor_for(request).role != Role.OWNER:
+        raise HTTPException(status_code=403, detail="Owner role required for deletion.")
+    try:
+        deleted = _vault(request).delete(name)
+    except (ValueError, VaultError) as exc:
+        raise HTTPException(status_code=503, detail="Vault operation failed safely.") from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Entry not found.")
+    return {"deleted": True, "name": name}
