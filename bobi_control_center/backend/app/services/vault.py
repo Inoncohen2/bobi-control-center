@@ -1,11 +1,12 @@
 """Encrypted, fail-closed local secret store for Bobi Guardian.
 
-The ciphertext and encryption key are separate files with owner-only
-permissions. This is encryption at rest, not protection from a compromised HA
-host or a compromised running process.
+The encryption key must be provisioned separately as BOBI_VAULT_KEY. It is
+never generated automatically, stored beside the ciphertext, returned by an
+API, or logged. A missing key leaves the vault locked.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -21,11 +22,11 @@ _LOCK = threading.RLock()
 
 
 class VaultError(RuntimeError):
-    """Safe-to-display vault error; messages must never contain secret values."""
+    """Safe-to-display vault error without secret values."""
 
 
 class VaultNotConfigured(VaultError):
-    """The key is unavailable or invalid."""
+    """The external encryption key is unavailable or invalid."""
 
 
 class VaultCorrupt(VaultError):
@@ -35,50 +36,21 @@ class VaultCorrupt(VaultError):
 class EncryptedVault:
     """Authenticated encrypted storage; listing never returns secret values."""
 
-    def __init__(
-        self,
-        path: str | Path,
-        *,
-        key: str | bytes | None = None,
-        key_path: str | Path | None = None,
-    ) -> None:
+    def __init__(self, path: str | Path, *, key: str | bytes | None = None) -> None:
         self.path = Path(path)
-        self.key_path = Path(key_path) if key_path else self.path.with_name(".bobi-vault.key")
         configured = key if key is not None else os.environ.get("BOBI_VAULT_KEY")
-        if configured:
-            if isinstance(configured, str):
-                configured = configured.encode("ascii", errors="ignore")
-        else:
-            configured = self._load_or_create_key()
+        if isinstance(configured, str):
+            configured = configured.encode("ascii", errors="ignore")
+        if not configured:
+            raise VaultNotConfigured(
+                "Vault is locked: BOBI_VAULT_KEY has not been provisioned."
+            )
         try:
             self._fernet = Fernet(configured)
         except (TypeError, ValueError) as exc:
-            raise VaultNotConfigured("Vault is locked: encryption key is invalid.") from exc
-
-    def _load_or_create_key(self) -> bytes:
-        with _LOCK:
-            if self.key_path.exists():
-                try:
-                    return self.key_path.read_bytes().strip()
-                except OSError as exc:
-                    raise VaultNotConfigured("Vault is locked: key file cannot be read.") from exc
-            if self.path.exists():
-                # Never silently generate a replacement key for existing data.
-                raise VaultNotConfigured("Vault is locked: key file is missing; existing data was preserved.")
-            self.key_path.parent.mkdir(parents=True, exist_ok=True)
-            key = Fernet.generate_key()
-            try:
-                fd = os.open(self.key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            except FileExistsError:
-                return self.key_path.read_bytes().strip()
-            except OSError as exc:
-                raise VaultNotConfigured("Vault is locked: key file could not be created.") from exc
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(key + b"\\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.chmod(self.key_path, 0o600)
-            return key
+            raise VaultNotConfigured(
+                "Vault is locked: the configured encryption key is invalid."
+            ) from exc
 
     @staticmethod
     def _validate_name(name: str) -> str:
@@ -92,7 +64,9 @@ class EncryptedVault:
         if not self.path.exists():
             return {}
         try:
-            payload = json.loads(self._fernet.decrypt(self.path.read_bytes()).decode("utf-8"))
+            payload = json.loads(
+                self._fernet.decrypt(self.path.read_bytes()).decode("utf-8")
+            )
             if not isinstance(payload, dict) or payload.get("format") != 1:
                 raise ValueError("unexpected format")
             entries = payload.get("entries")
@@ -100,22 +74,40 @@ class EncryptedVault:
                 raise ValueError("unexpected entries")
             for name, item in entries.items():
                 self._validate_name(name)
-                if not isinstance(item, dict) or not isinstance(item.get("value"), str):
+                if (
+                    not isinstance(item, dict)
+                    or not isinstance(item.get("value"), str)
+                    or not isinstance(item.get("service"), str)
+                    or not isinstance(item.get("note"), str)
+                ):
                     raise ValueError("unexpected entry")
-                if not isinstance(item.get("service"), str) or not isinstance(item.get("note"), str):
-                    raise ValueError("unexpected metadata")
             return entries
-        except (OSError, InvalidToken, UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError) as exc:
-            raise VaultCorrupt("Vault cannot be authenticated or decoded; no changes were made.") from exc
+        except (
+            OSError,
+            InvalidToken,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            ValueError,
+            TypeError,
+        ) as exc:
+            raise VaultCorrupt(
+                "Vault cannot be authenticated or decoded; no changes were made."
+            ) from exc
 
     def _write_all(self, entries: dict[str, dict[str, Any]]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temp_name = tempfile.mkstemp(prefix=".bobi-vault-", suffix=".tmp", dir=str(self.path.parent))
+        fd, temp_name = tempfile.mkstemp(
+            prefix=".bobi-vault-", suffix=".tmp", dir=str(self.path.parent)
+        )
         temp_path = Path(temp_name)
         try:
             os.fchmod(fd, 0o600)
-            raw = json.dumps({"format": 1, "entries": entries}, ensure_ascii=False,
-                             separators=(",", ":"), sort_keys=True).encode("utf-8")
+            raw = json.dumps(
+                {"format": 1, "entries": entries},
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
             ciphertext = self._fernet.encrypt(raw)
             with os.fdopen(fd, "wb") as handle:
                 handle.write(ciphertext)
@@ -132,11 +124,10 @@ class EncryptedVault:
             except OSError:
                 pass
         except Exception:
-            try:
+            with contextlib.suppress(OSError):
                 os.close(fd)
-            except OSError:
-                pass
-            temp_path.unlink(missing_ok=True)
+            with contextlib.suppress(OSError):
+                temp_path.unlink(missing_ok=True)
             raise
 
     def put(self, name: str, value: str, *, service: str, note: str = "") -> None:
@@ -151,7 +142,11 @@ class EncryptedVault:
             entries = self._read_all()
             if name in entries:
                 raise FileExistsError("Secret already exists; overwrite is not allowed.")
-            entries[name] = {"value": value, "service": service.strip(), "note": note.strip()}
+            entries[name] = {
+                "value": value,
+                "service": service.strip(),
+                "note": note.strip(),
+            }
             self._write_all(entries)
 
     def get(self, name: str) -> str | None:
@@ -174,5 +169,7 @@ class EncryptedVault:
     def list_metadata(self) -> list[dict[str, str]]:
         with _LOCK:
             entries = self._read_all()
-            return [{"name": name, "service": item["service"], "note": item["note"]}
-                    for name, item in sorted(entries.items())]
+            return [
+                {"name": name, "service": item["service"], "note": item["note"]}
+                for name, item in sorted(entries.items())
+            ]
