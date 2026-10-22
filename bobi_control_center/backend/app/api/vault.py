@@ -8,7 +8,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
-from app.auth import actor_for
+from app.auth import actor_for, is_external_request
 from app.services.roles import Role, rank
 from app.services.vault import EncryptedVault, VaultError
 
