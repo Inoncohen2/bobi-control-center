@@ -37,6 +37,16 @@ def _require_admin(request: Request) -> None:
         )
 
 
+def _require_same_origin_for_external_write(request: Request) -> None:
+    # SameSite cookies are defence in depth; reject cross-origin credential writes
+    # explicitly on the public Cloudflare-facing hostname.
+    settings = request.app.state.settings
+    if is_external_request(request, settings):
+        expected = f"https://{settings.normalized_external_hostname}"
+        if request.headers.get("origin") != expected:
+            raise HTTPException(status_code=403, detail="Cross-origin request rejected.")
+
+
 @router.get("/status")
 async def vault_status(request: Request) -> dict[str, object]:
     _require_admin(request)
