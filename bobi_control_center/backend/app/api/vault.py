@@ -5,14 +5,12 @@ by this protected backend route and are never written to logs.
 """
 from __future__ import annotations
 
-from typing import Annotated
-
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from app.auth import actor_for
 from app.services.roles import Role, rank
-from app.services.vault import EncryptedVault, VaultCorrupt, VaultError
+from app.services.vault import EncryptedVault, VaultError
 
 router = APIRouter(prefix="/api/bobi/vault", tags=["vault"])
 
@@ -33,7 +31,10 @@ def _vault(request: Request) -> EncryptedVault:
 def _require_admin(request: Request) -> None:
     actor = actor_for(request)
     if rank(actor.role) < rank(Role.ADMIN):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required.")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin role required.",
+        )
 
 
 @router.get("/status")
@@ -64,7 +65,10 @@ async def create_entry(body: VaultEntryInput, request: Request) -> dict[str, obj
             body.name, body.value.get_secret_value(), service=body.service, note=body.note
         )
     except FileExistsError as exc:
-        raise HTTPException(status_code=409, detail="Entry already exists; overwrite is disabled.") from exc
+        raise HTTPException(
+            status_code=409,
+            detail="Entry already exists; overwrite is disabled.",
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except VaultError as exc:
